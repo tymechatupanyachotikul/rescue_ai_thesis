@@ -3,10 +3,10 @@ import os, numpy as np
 import re
 from torchdiffeq import odeint
 from data.mnist import RotatingMNIST
-from model.misc.plot_utils import plot_mnist, plot_sin_gt, plot_2d_gt, plot_bb, plot_bb_V
+from model.misc.plot_utils import plot_mnist, plot_sin_gt, plot_2d_gt, plot_bb, plot_bb_V, plot_ecg
 from data.bb import BouncingBallsSim
 from data.mocap import read_amc
-
+import math
 
 def _adjust_name(data_path, substr, insertion):
 	idx = data_path.index(substr)
@@ -216,3 +216,46 @@ def gen_mocap_shift_data(data_path, params, flag, task='mocap_shift'):
 		torch.save(Xtr[-5:],os.path.join(DATA_ROOT,'mocap_shift-vl-data.pkl'))
 	elif flag=='test':
 		torch.save(Xts,os.path.join(DATA_ROOT,'mocap_shift-te-data.pkl'))
+
+def gen_ecg_data(data_path, params, flag, task='ecg'): 
+
+	N_train = params[task]['train']['N']
+	N_valid = params[task]['valid']['N']
+	N_valid = params[task]['test']['N']
+
+	T = params[task][flag]['T']
+	num_leads = 12 
+
+	data_paths = [os.path.join('./data/ecg/raw', f) for f in os.listdir('./data/ecg/raw') if f.endswith('.out')]
+	data_paths.sort(key=os.path.getctime)
+	n_data = len(data_paths)
+
+	Xt = []
+	if flag == 'train':
+		data_paths = data_paths[0: math.ceil(n_data * N_train)]
+	elif flag == 'valid':
+		data_paths = data_paths[math.ceil(n_data * N_train): math.ceil(n_data * (N_train + N_valid))]
+	else:
+		data_paths = data_paths[math.ceil(n_data * (N_train + N_valid)): -1]
+	
+	for file_path in data_paths:
+		with open(file_path, 'rb') as f:
+			raw_data = np.fromfile(f, dtype='float32')
+		num_samples = len(raw_data) // num_leads
+		Xt.append(torch.from_numpy(raw_data[:num_samples * num_leads].reshape(-1, num_leads)).float()[:T, :])
+	
+	Xt = torch.stack(Xt)
+	
+	filename = 'data/ecg/example_ecg'
+	plot_ecg(Xt,fname=filename + flag)
+
+	torch.save(Xt, data_path)
+
+import yaml 
+
+with open("data/config.yml", 'r') as stream:
+	try:
+		params = yaml.safe_load(stream)
+	except yaml.YAMLError as exc:
+		print(exc)
+gen_ecg_data('./data/ecg/ecg_train.pkl', params, 'train')

@@ -17,7 +17,7 @@ def build_model(args, device, dtype):
     @return: an object of MoNODE class
     """
     #define training set-up
-    aug = (args.task=='sin' or args.task=='lv' or args.task=='bb' or 'mocap' in args.task) and args.modulator_dim>0
+    aug = (args.task=='sin' or args.task=='lv' or args.task=='bb' or 'mocap' in args.task or 'ecg' in args.task) and args.modulator_dim>0
     Nobj = args.Nobj
 
     if args.model == 'hbnode':

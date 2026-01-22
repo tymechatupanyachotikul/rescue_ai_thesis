@@ -10,7 +10,7 @@ from model.misc.torch_utils import seed_everything, count_params
 from data.data_utils import load_data
 
 SOLVERS   = ["euler", "bdf", "rk4", "midpoint", "adams", "explicit_adams", "fixed_adams", "dopri5"]
-TASKS     = ['rot_mnist', 'rot_mnist_ou', 'sin', 'bb', 'lv', 'mocap', 'mocap_shift']
+TASKS     = ['rot_mnist', 'rot_mnist_ou', 'sin', 'bb', 'lv', 'mocap', 'mocap_shift', 'ecg']
 MODELS     = ['node', 'sonode', 'hbnode']
 GRADIENT_ESTIMATION = ['no_adjoint', 'adjoint', 'ac_adjoint']
 parser = argparse.ArgumentParser('MoNODE')

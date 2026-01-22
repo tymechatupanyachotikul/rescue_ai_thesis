@@ -11,13 +11,15 @@ class INV_ENC(nn.Module):
             self.inv_encoder = InvariantEncoderCNN(task=task, out_distr='dirac', enc_out_dim=modulator_dim+content_dim, n_filt=cnn_filt, T_inv=T_inv).to(device)
         elif task=='bb':
             self.inv_encoder = InvariantEncoderCNNMLP(vae_enc, T_inv, H=64, out_dim=modulator_dim+content_dim)
-        elif task=='sin' or task=='lv' or 'mocap' in task:
+        elif task=='sin' or task=='lv' or 'mocap' or 'ecg' in task:
             if task=='sin':
                 data_dim = 1
             elif task=='lv':
                 data_dim = 2
             elif 'mocap' in task:
                 data_dim = 50
+            elif 'ecg' in task: 
+                data_dim = 12
             self.inv_encoder = InvariantEncoderRNN(data_dim, T_inv=T_inv, rnn_hidden=rnn_hidden, enc_out_dim=modulator_dim+content_dim, out_distr='dirac').to(device)
 
     def kl(self):

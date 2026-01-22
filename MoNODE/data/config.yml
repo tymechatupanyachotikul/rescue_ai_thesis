@@ -81,3 +81,14 @@ mocap_shift:
     N: 8
     T: 150
   dt: 0.05
+
+ecg:
+  train:
+    N: 0.9
+    T: 7000
+  valid:
+    N: 0.05
+    T: 7000
+  test:
+    N: 0.05
+    T: 7000

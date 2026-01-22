@@ -130,7 +130,7 @@ class VAE(nn.Module):
                 self.encoder_v = EncoderCNNMLP(out_distr='normal', enc_out_dim=ode_latent_dim, n_filt=cnn_filt_enc, T_in=T_in).to(device)
                 self.prior = Normal(torch.zeros(ode_latent_dim*order).to(device), torch.ones(ode_latent_dim*order).to(device))
 
-        elif task in ['sin', 'lv', 'mocap', 'mocap_shift']:
+        elif task in ['sin', 'lv', 'mocap', 'mocap_shift', 'ecg']:
             lhood_distribution = 'normal'
 
             if task=='sin':
@@ -139,6 +139,8 @@ class VAE(nn.Module):
                 data_dim = 2
             elif 'mocap' in task:
                 data_dim = 50
+            elif 'ecg' in task:
+                data_dim = 12 
             if rnn_hidden==-1:
                 self.encoder = IdentityEncoder()
                 self.decoder = IdentityDecoder(data_dim)
@@ -359,7 +361,7 @@ class Decoder(nn.Module):
             self.net = build_mov_mnist_cnn_dec(n_filt, dec_inp_dim)
         elif task=='bb':
             self.net = build_rot_mnist_cnn_dec(n_filt, dec_inp_dim)
-        elif task=='sin' or task=='spiral' or task=='lv' or 'mocap' in task:
+        elif task=='sin' or task=='spiral' or task=='lv' or 'mocap' in task or 'ecg' in task:
             self.net = MLP(dec_inp_dim, dec_out_dim, L=2, H=H, act=act)
             self.out_logsig = torch.nn.Parameter(torch.zeros(dec_out_dim)*0.0)
             self.sp = nn.Softplus()

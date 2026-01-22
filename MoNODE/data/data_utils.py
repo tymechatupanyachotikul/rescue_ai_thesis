@@ -3,7 +3,7 @@ import yaml
 import json
 import torch
 from   torch.utils import data
-from data.data_gen import gen_sin_data, gen_lv_data, gen_rmnist_data, gen_bb_data, gen_mocap_data, gen_mocap_shift_data
+from data.data_gen import gen_sin_data, gen_lv_data, gen_rmnist_data, gen_bb_data, gen_mocap_data, gen_mocap_shift_data, gen_ecg_data
 
 
 from model.misc import io_utils
@@ -14,7 +14,7 @@ def _adjust_name(data_path, substr, insertion):
 
 
 def load_data(args, device, dtype):
-	if args.task in ['rot_mnist', 'rot_mnist_ou', 'mov_mnist', 'sin', 'lv', 'spiral', 'bb', 'mocap', 'mocap_shift'] :
+	if args.task in ['rot_mnist', 'rot_mnist_ou', 'mov_mnist', 'sin', 'lv', 'spiral', 'bb', 'mocap', 'mocap_shift', 'ecg'] :
 		(trainset, valset, testset), params = __load_data(args, device, dtype, args.task)
 	else:
 		return ValueError(r'Invalid task {arg.task}')
@@ -78,6 +78,8 @@ def __load_data(args, device, dtype, dataset=None):
 			data_loader_fnc = gen_mocap_data
 		elif dataset == 'mocap_shift':
 			data_loader_fnc = gen_mocap_shift_data
+		elif dataset == 'ecg':
+			data_loader_fnc = gen_ecg_data
 
 		data_loader_fnc(data_path_tr, params, flag='train')
 		data_loader_fnc(data_path_vl, params, flag='valid')
