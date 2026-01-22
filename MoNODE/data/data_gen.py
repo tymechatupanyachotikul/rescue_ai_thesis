@@ -250,12 +250,3 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 	plot_ecg(Xt,fname=filename + flag)
 
 	torch.save(Xt, data_path)
-
-import yaml 
-
-with open("data/config.yml", 'r') as stream:
-	try:
-		params = yaml.safe_load(stream)
-	except yaml.YAMLError as exc:
-		print(exc)
-gen_ecg_data('./data/ecg/ecg_train.pkl', params, 'train')
