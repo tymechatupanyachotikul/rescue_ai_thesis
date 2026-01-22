@@ -151,7 +151,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
         for itr,local_batch in enumerate(trainset):
             tr_minibatch = local_batch.to(model.device) # N,T,...
-            if args.task=='sin' or args.task=='spiral' or args.task=='lv' or 'mocap' in args.task: #slowly increase sequence length
+            if args.task=='sin' or args.task=='spiral' or args.task=='lv' or 'mocap' in args.task or args.task=='ecg': #slowly increase sequence length
                 [N,T] = tr_minibatch.shape[:2]
 
                 N_  = int(N*(T//T_))
@@ -178,6 +178,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             global_itr +=1
 
             time_val = datetime.now()-start_time
+            logger.info('Batch:{:4d}/{:4d}  | tr_loss:{:8.2f} | tr_mse={}'.format(itr + 1, len(trainset), loss.item(), tr_mse.item())) 
             
         with torch.no_grad():
             
