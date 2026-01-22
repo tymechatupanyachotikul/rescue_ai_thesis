@@ -55,6 +55,8 @@ class Plotter:
             self.plot_fit_fnc = plot_2d
         if 'mocap' in self.task_name:
             self.plot_fit_fnc = plot_mocap
+        if self.task_name=='ecg':
+            self.plot_fit_fnc = plot_ecg_out
         self.plot_latent_fnc = plot_latent_traj
 
 
@@ -211,6 +213,63 @@ def plot_ecg(X, show=False, fname='ecg_example.png'):
     for i, name in enumerate(lead_names):
         ax = axes[i]
         ax.plot(time, Xnp[:, i], color='black', linewidth=0.7)
+        
+        ax.set_ylabel(name, rotation=0, labelpad=20, 
+                      verticalalignment='center', fontweight='bold', fontsize=12)
+        
+        ax.grid(which='major', color='pink', linestyle='-', alpha=0.6)
+        ax.grid(which='minor', color='pink', linestyle=':', alpha=0.3)
+        ax.minorticks_on()
+        
+        if i < 11:
+            ax.tick_params(axis='x', which='both', bottom=False, labelbottom=False)
+            
+        ax.set_yticks([])
+        
+    plt.xlabel("Time (seconds)", fontsize=12)
+    plt.subplots_adjust(hspace=0.05)
+
+    if show:
+        plt.show()
+    else:
+        plt.savefig(fname)
+        plt.close()
+
+def plot_ecg_out(X, Xrec, show=False, fname='ecg_real_vs_reconstruct.png'):
+    ''' 
+        For ecg
+        X    - [N,T] 
+    '''
+
+    Xnp = X.detach().cpu().numpy()[0, :, :]
+    Xrecnp = Xrec.detach().cpu().numpy()[0, :, :]
+
+    lead_names = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
+    
+    fig, axes = plt.subplots(12, 2, figsize=(15, 20), sharex=True)
+    fig.suptitle('ECG example', fontsize=20, fontweight='bold')
+    
+    time = np.arange(Xnp.shape[0]) / 500
+
+    for i, name in enumerate(lead_names):
+        ax = axes[i, 0]
+        ax.plot(time, Xnp[:, i], color='black', linewidth=0.7, label='Real')
+        
+        ax.set_ylabel(name, rotation=0, labelpad=20, 
+                      verticalalignment='center', fontweight='bold', fontsize=12)
+        
+        ax.grid(which='major', color='pink', linestyle='-', alpha=0.6)
+        ax.grid(which='minor', color='pink', linestyle=':', alpha=0.3)
+        ax.minorticks_on()
+        
+        if i < 11:
+            ax.tick_params(axis='x', which='both', bottom=False, labelbottom=False)
+            
+        ax.set_yticks([])
+    
+    for i, name in enumerate(lead_names):
+        ax = axes[i, 1]
+        ax.plot(time, Xrecnp[:, i], color='black', linewidth=0.7, label='Reconstructed')
         
         ax.set_ylabel(name, rotation=0, labelpad=20, 
                       verticalalignment='center', fontweight='bold', fontsize=12)
