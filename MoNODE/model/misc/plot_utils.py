@@ -249,11 +249,9 @@ def plot_ecg_out(X, Xrec, show=False, fname='ecg_real_vs_reconstruct.png'):
     fig, axes = plt.subplots(12, 2, figsize=(15, 20), sharex=True)
     fig.suptitle('ECG example', fontsize=20, fontweight='bold')
     
-    time = np.arange(Xnp.shape[0]) / 500
-
     for i, name in enumerate(lead_names):
         ax = axes[i, 0]
-        ax.plot(time, Xnp[:, i], color='black', linewidth=0.7, label='Real')
+        ax.plot(np.arange(Xnp.shape[0]) / 500, Xnp[:, i], color='black', linewidth=0.7, label='Real')
         
         ax.set_ylabel(name, rotation=0, labelpad=20, 
                       verticalalignment='center', fontweight='bold', fontsize=12)
@@ -269,7 +267,7 @@ def plot_ecg_out(X, Xrec, show=False, fname='ecg_real_vs_reconstruct.png'):
     
     for i, name in enumerate(lead_names):
         ax = axes[i, 1]
-        ax.plot(time, Xrecnp[:, i], color='black', linewidth=0.7, label='Reconstructed')
+        ax.plot(np.arange(Xrecnp.shape[0]) / 500, Xrecnp[:, i], color='black', linewidth=0.7, label='Reconstructed')
         
         ax.set_ylabel(name, rotation=0, labelpad=20, 
                       verticalalignment='center', fontweight='bold', fontsize=12)
