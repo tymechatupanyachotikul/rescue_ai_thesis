@@ -250,7 +250,7 @@ def plot_ecg_out(X, Xrec, show=False, fname='ecg_real_vs_reconstruct.png'):
     fig.suptitle('ECG example', fontsize=20, fontweight='bold')
     
     time = np.arange(Xnp.shape[0]) / 500
-    time_recon = np.arange(min(Xrecnp.shape[0] / 500, len(time)))
+    time_recon = np.arange(min(Xrecnp.shape[0], len(time)))
     for i, name in enumerate(lead_names):
         ax = axes[i]
         ax.plot(time, Xnp[:, i], color='blue', linewidth=0.7, label='Real', alpha=0.7)
