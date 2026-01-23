@@ -162,8 +162,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 tr_minibatch = tr_minibatch.repeat([N_,1,1])
                 tr_minibatch = torch.stack([tr_minibatch[n,t0:t0+T_] for n,t0 in enumerate(t0s)]) # N*ns,T//2,d
                 
-            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _ = \
-                compute_loss(model, tr_minibatch, L, num_observations = params['train']['N'])
+            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _ = compute_loss(model, tr_minibatch, L, num_observations = params['train']['N'])
 
             optimizer.zero_grad()
             loss.backward() 
@@ -178,7 +177,6 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             global_itr +=1
 
             time_val = datetime.now()-start_time
-            logger.info('Batch:{:4d}/{:4d}  | tr_loss:{:8.2f} | tr_mse={}'.format(itr + 1, len(trainset), loss.item(), tr_mse.item())) 
             
         with torch.no_grad():
             

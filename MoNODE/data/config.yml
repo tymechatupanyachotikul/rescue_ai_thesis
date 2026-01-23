@@ -85,10 +85,10 @@ mocap_shift:
 ecg:
   train:
     N: 0.9
-    T: 7000
+    T: 500
   valid:
     N: 0.05
-    T: 7000
+    T: 500
   test:
     N: 0.05
-    T: 7000
+    T: 500

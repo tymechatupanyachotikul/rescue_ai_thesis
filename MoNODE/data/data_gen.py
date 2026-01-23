@@ -7,6 +7,8 @@ from model.misc.plot_utils import plot_mnist, plot_sin_gt, plot_2d_gt, plot_bb, 
 from data.bb import BouncingBallsSim
 from data.mocap import read_amc
 import math
+from itertools import product 
+import pandas as pd 
 
 def _adjust_name(data_path, substr, insertion):
 	idx = data_path.index(substr)
@@ -224,7 +226,6 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 	N_valid = params[task]['test']['N']
 
 	T = params[task][flag]['T']
-	num_leads = 12 
 
 	data_paths = [os.path.join('./data/ecg/raw', f) for f in os.listdir('./data/ecg/raw') if f.endswith('.out')]
 	data_paths.sort(key=os.path.getctime)
@@ -239,10 +240,9 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 		data_paths = data_paths[math.ceil(n_data * (N_train + N_valid)): -1]
 	
 	for file_path in data_paths:
-		with open(file_path, 'rb') as f:
-			raw_data = np.fromfile(f, dtype='float32')
-		num_samples = len(raw_data) // num_leads
-		Xt.append(torch.from_numpy(raw_data[:num_samples * num_leads].reshape(-1, num_leads)).float()[:T, :])
+		df = pd.read_csv(file_path, skipinitialspace=True, index_col=False)
+		ecg = df.to_numpy() / 1024
+		Xt.append(torch.from_numpy(ecg[:T, :]))
 	
 	Xt = torch.stack(Xt)
 	
