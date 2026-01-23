@@ -151,7 +151,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
         for itr,local_batch in enumerate(trainset):
             tr_minibatch = local_batch.to(model.device) # N,T,...
-            if args.task=='sin' or args.task=='spiral' or args.task=='lv' or 'mocap' in args.task or args.task=='ecg': #slowly increase sequence length
+            if args.task=='sin' or args.task=='spiral' or args.task=='lv' or 'mocap' in args.task: #slowly increase sequence length
                 [N,T] = tr_minibatch.shape[:2]
 
                 N_  = int(N*(T//T_))
