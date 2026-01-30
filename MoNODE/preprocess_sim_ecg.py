@@ -51,14 +51,14 @@ def process_split(cur_dir, split, cur_save_dir, ecg_type, target_hz, time):
         for ecg_file in os.listdir(cur_run_dir):
             if ecg_file.endswith(f'{ecg_type}.csv'):
                 _id = ecg_file.split('_')[0]
-                filename = f'{_id}_preprocessed.npy'
+                filename = f'{_id}_{run_dir}_preprocessed.npy'
                 save_ecg(os.path.join(cur_run_dir, ecg_file), os.path.join(cur_save_dir, filename), target_hz=target_hz, time=time)
 
                 param_dir = cur_run_dir.replace('Noise', 'ParameterFiles')
                 param_a_file = os.path.join(param_dir, f'{_id}_AtrialParameters.txt')
                 param_v_file = os.path.join(param_dir, f'{_id}_VentricularParameters.txt')
 
-                params_filename = f'{_id}_params.json'
+                params_filename = f'{_id}_{run_dir}_params.json'
                 save_params(param_v_file, param_a_file, os.path.join(cur_save_dir, params_filename))
 
                 num_samples += 1 
