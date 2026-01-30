@@ -79,7 +79,10 @@ def main(args):
 
     print('Starting preprocessing')
     target_dir = os.path.join(root_dir, dataset_dir)
+    print(f'Target dir : {target_dir}')
+
     for dir in os.listdir(target_dir):
+        print(dir)
         if os.path.isdir(dir):
             cur_dir = os.path.join(target_dir, dir)
             cur_save_dir = os.path.join(save_dir, dir)
