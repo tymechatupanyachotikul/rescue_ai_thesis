@@ -26,16 +26,23 @@ def save_params(v_param_path, a_param_path, save_target):
         'ventricular': {}, 
         'atrial': {}
     }
+    
     with open(v_param_path, "r") as f:
         for line in f:
-            k, v = line.strip().split("=")
-            params['ventricular'][k.strip()] = v.strip()
+            try:
+                k, v = line.strip().split("=")
+                params['ventricular'][k.strip()] = v.strip()
+            except Exception as e:
+                print(f'Could not extract {line.strip()}')
 
     with open(a_param_path, "r") as f:
         for line in f:
-            k, v = line.strip().split("=")
-            params['atrial'][k.strip()] = v.strip()
-    
+            try:
+                k, v = line.strip().split("=")
+                params['atrial'][k.strip()] = v.strip()
+            except Exception as e:
+                print(f'Could not extract {line.strip()}')
+                
     with open(save_target, 'w') as f:
         json.dump(params, f)
 
