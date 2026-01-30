@@ -82,9 +82,8 @@ def main(args):
     print(f'Target dir : {target_dir}')
 
     for dir in os.listdir(target_dir):
-        print(dir)
-        if os.path.isdir(dir):
-            cur_dir = os.path.join(target_dir, dir)
+        cur_dir = os.path.join(target_dir, dir)
+        if os.path.isdir(cur_dir):
             cur_save_dir = os.path.join(save_dir, dir)
             
             print(f'----- Processing {dir} -----')
