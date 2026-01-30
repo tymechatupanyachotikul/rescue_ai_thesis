@@ -47,14 +47,14 @@ def process_split(cur_dir, split, cur_save_dir, ecg_type, target_hz, time):
     num_samples = 0
 
     for run_dir in os.listdir(cur_dir):
-        cur_dir = os.path.join(cur_dir, run_dir)
-        for ecg_file in os.listdir(cur_dir):
+        cur_run_dir = os.path.join(cur_dir, run_dir)
+        for ecg_file in os.listdir(cur_run_dir):
             if ecg_file.endswith(f'{ecg_type}.csv'):
                 _id = ecg_file.split('_')[0]
                 filename = f'{_id}_preprocessed.npy'
-                save_ecg(os.path.join(cur_dir, ecg_file), os.path.join(cur_save_dir, filename), target_hz=target_hz, time=time)
+                save_ecg(os.path.join(cur_run_dir, ecg_file), os.path.join(cur_save_dir, filename), target_hz=target_hz, time=time)
 
-                param_dir = cur_dir.replace('Noise', 'ParameterFiles')
+                param_dir = cur_run_dir.replace('Noise', 'ParameterFiles')
                 param_a_file = os.path.join(param_dir, f'{_id}_AtrialParameters.txt')
                 param_v_file = os.path.join(param_dir, f'{_id}_VentricularParameters.txt')
 
@@ -93,9 +93,9 @@ def main(args):
                 for mi_dir in os.listdir(cur_dir):
                     if mi_dir != 'examples':
                         cur_save_dir = os.path.join(save_dir, mi_dir)
-                        cur_dir = os.path.join(cur_dir, mi_dir)
+                        t_dir = os.path.join(cur_dir, mi_dir)
 
-                        process_split(cur_dir, split, cur_save_dir, ecg_type, target_hz, time)
+                        process_split(t_dir, split, cur_save_dir, ecg_type, target_hz, time)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess MedalCare-XL Dataset")
