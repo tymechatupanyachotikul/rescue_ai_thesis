@@ -51,6 +51,10 @@ def __load_data(args, device, dtype, dataset=None):
 		data_path_tr = _adjust_name(data_path_tr, '.pkl', str(params[dataset]['nballs']))
 		data_path_vl = _adjust_name(data_path_vl, '.pkl', str(params[dataset]['nballs']))
 		data_path_te = _adjust_name(data_path_te, '.pkl', str(params[dataset]['nballs']))
+	elif dataset == 'ecg':
+		data_path_tr = _adjust_name(data_path_tr, '.pkl', str(params[dataset]['type']) + str(params[dataset]['f']) + str(params[dataset]['dataset']) + str(params[dataset]['train']['T']))
+		data_path_vl = _adjust_name(data_path_vl, '.pkl', str(params[dataset]['type']) + str(params[dataset]['f']) + str(params[dataset]['dataset']) + str(params[dataset]['train']['T']))
+		data_path_te = _adjust_name(data_path_te, '.pkl', str(params[dataset]['type']) + str(params[dataset]['f']) + str(params[dataset]['dataset']) + str(params[dataset]['train']['T']))
 
 	#load or generate data
 	try:
@@ -58,9 +62,10 @@ def __load_data(args, device, dtype, dataset=None):
 		Xvl = torch.load(data_path_vl)
 		Xte = torch.load(data_path_te)
 		#if loaded data does not match the parameter settings assert and re generate the data 
-		assert Xtr.shape[0] == params[dataset]['train']['N'] and Xtr.shape[1] == params[dataset]['train']['T'] 
-		assert Xvl.shape[0] == params[dataset]['valid']['N'] and Xvl.shape[1] == params[dataset]['valid']['T']
-		assert Xte.shape[0] == params[dataset]['test']['N'] and Xte.shape[1] == params[dataset]['test']['T']
+		if dataset != 'ecg':
+			assert Xtr.shape[0] == params[dataset]['train']['N'] and Xtr.shape[1] == params[dataset]['train']['T'] 
+			assert Xvl.shape[0] == params[dataset]['valid']['N'] and Xvl.shape[1] == params[dataset]['valid']['T']
+			assert Xte.shape[0] == params[dataset]['test']['N'] and Xte.shape[1] == params[dataset]['test']['T']
 			
 	except:
 		with open(folder_path+'/gen_info.txt', 'w') as f:
