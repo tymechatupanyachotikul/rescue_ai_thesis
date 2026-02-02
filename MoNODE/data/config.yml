@@ -84,11 +84,12 @@ mocap_shift:
 
 ecg:
   train:
-    N: 0.9
-    T: 500
+    N: 5600
   valid:
-    N: 0.05
-    T: 500
+    N: 490
   test:
-    N: 0.05
-    T: 500
+    N: 490
+  T: 1250
+  f: 250
+  dataset: MedalCare-XL
+  type: raw

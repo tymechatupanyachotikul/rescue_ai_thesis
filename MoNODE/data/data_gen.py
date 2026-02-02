@@ -6,9 +6,12 @@ from data.mnist import RotatingMNIST
 from model.misc.plot_utils import plot_mnist, plot_sin_gt, plot_2d_gt, plot_bb, plot_bb_V, plot_ecg
 from data.bb import BouncingBallsSim
 from data.mocap import read_amc
+from data.preprocess_sim_ecg import main as preprocess_ecg
 import math
 from itertools import product 
 import pandas as pd 
+from collections import defaultdict 
+from argparse import Namespace
 
 def _adjust_name(data_path, substr, insertion):
 	idx = data_path.index(substr)
@@ -221,28 +224,54 @@ def gen_mocap_shift_data(data_path, params, flag, task='mocap_shift'):
 
 def gen_ecg_data(data_path, params, flag, task='ecg'): 
 
-	N_train = params[task]['train']['N']
-	N_valid = params[task]['valid']['N']
-	N_valid = params[task]['test']['N']
+	N = params[task][flag]['N']
+	f = params['f']
+	T = params[task]['T'] // f
+	type = params['type']
 
-	T = params[task][flag]['T']
+	dataset = params['dataset']
 
-	data_paths = [os.path.join('./data/ecg/raw', f) for f in os.listdir('./data/ecg/raw') if f.endswith('.out')]
-	data_paths.sort(key=os.path.getctime)
-	n_data = len(data_paths)
+	dir_path = f'./data/ecg/{dataset}/preprocessed/T{T}_f{f}_{type}'
+	n_per_class = math.ceil(N / 7)
+	data_paths = defaultdict(lambda: defaultdict(list))
+
+	subclasses = ['LAD_0.3', 'LAD_1.0', 'LCX_0.3_ant', 'LCX_0.3_post', 'LCX_1.0_ant', 'LCX_1.0_post', 'RCA_0.3', 'RCA_1.0']
+	if not os.path.isdir(dir_path):
+		preprocess_ecg(Namespace(**{
+			'root_dir': f'/projects/prjs1890/{dataset}',
+			'split': flag,
+			'ecg_type': type,
+			'target_hz': f,
+			'time': T
+		}))
+
+	for dir in os.listdir(dir_path):
+		cur_dir = os.path.join(dir_path, dir)
+		for file_path in os.listdir(cur_dir):
+			if file_path.endswith('npy'):
+				run_id = file_path.split('_')[1]
+				data_paths[dir][run_id].append(os.path.join(cur_dir, file_path))
+
+	dataset_path = defaultdict(list)
+
+	for cls, run in data_paths.items():
+		n_runs = len(run)
+		if cls in subclasses:
+			n_per_run = math.ceil(n_per_class / (len(subclasses) * n_runs))
+		else:
+			n_per_run = math.ceil(n_per_class / n_runs)
+
+		for path in run.values():
+			dataset_path[cls].extend(path[:n_per_run])
+
+	data_paths = []
+	for cls, _data in dataset_path.items():
+		data_paths.extend(_data)
+		print(f'Class : {cls} - {len(_data)} samples for {flag} set')
 
 	Xt = []
-	if flag == 'train':
-		data_paths = data_paths[0: math.ceil(n_data * N_train)]
-	elif flag == 'valid':
-		data_paths = data_paths[math.ceil(n_data * N_train): math.ceil(n_data * (N_train + N_valid))]
-	else:
-		data_paths = data_paths[math.ceil(n_data * (N_train + N_valid)): -1]
-	
 	for file_path in data_paths:
-		df = pd.read_csv(file_path, skipinitialspace=True, index_col=False)
-		ecg = df.to_numpy() / 1024
-		Xt.append(torch.from_numpy(ecg[:T, :]))
+		Xt.append(torch.from_numpy(np.load(file_path)))
 	
 	Xt = torch.stack(Xt)
 	
