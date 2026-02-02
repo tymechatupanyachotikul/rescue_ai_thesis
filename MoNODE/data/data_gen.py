@@ -225,9 +225,9 @@ def gen_mocap_shift_data(data_path, params, flag, task='mocap_shift'):
 def gen_ecg_data(data_path, params, flag, task='ecg'): 
 
 	N = params[task][flag]['N']
-	f = params['f']
+	f = params[task]['f']
 	T = params[task]['T'] // f
-	type = params['type']
+	type = params[task]['type']
 
 	dataset = params['dataset']
 
