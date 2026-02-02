@@ -108,7 +108,7 @@ if __name__ == "__main__":
     
     parser.add_argument("--root_dir", type=str, default="/projects/prjs1890/MedalCare-XL")
     
-    parser.add_argument("--split", type=str, default="train", choices=["train", "test", "validation"])
+    parser.add_argument("--split", type=str, default="train", choices=["train", "test", "valid"])
     parser.add_argument("--ecg_type", type=str, default="raw", help="e.g. raw, clean")
     parser.add_argument("--target_hz", type=int, default=250)
     parser.add_argument("--time", type=int, default=10, help="Seconds of ECG to keep")

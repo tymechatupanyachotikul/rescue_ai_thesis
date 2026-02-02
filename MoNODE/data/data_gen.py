@@ -226,10 +226,10 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 
 	N = params[task][flag]['N']
 	f = params[task]['f']
-	T = params[task]['T'] // f
+	T = params[task][flag]['T'] // f
 	type = params[task]['type']
 
-	dataset = params['dataset']
+	dataset = params[task]['dataset']
 
 	dir_path = f'./data/ecg/{dataset}/preprocessed/T{T}_f{f}_{type}'
 	n_per_class = math.ceil(N / 7)
@@ -245,11 +245,12 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 			'time': T
 		}))
 
+	dir_path = os.path.join(dir_path, flag)
 	for dir in os.listdir(dir_path):
 		cur_dir = os.path.join(dir_path, dir)
 		for file_path in os.listdir(cur_dir):
 			if file_path.endswith('npy'):
-				run_id = file_path.split('_')[1]
+				run_id = file_path.split('_')[2]
 				data_paths[dir][run_id].append(os.path.join(cur_dir, file_path))
 
 	dataset_path = defaultdict(list)
@@ -271,7 +272,7 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 
 	Xt = []
 	for file_path in data_paths:
-		Xt.append(torch.from_numpy(np.load(file_path)))
+		Xt.append(torch.from_numpy(np.load(file_path).T))
 	
 	Xt = torch.stack(Xt)
 	
