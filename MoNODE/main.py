@@ -8,6 +8,7 @@ from model.model_misc import train_model
 from model.misc import io_utils
 from model.misc.torch_utils import seed_everything, count_params
 from data.data_utils import load_data
+import wandb
 
 SOLVERS   = ["euler", "bdf", "rk4", "midpoint", "adams", "explicit_adams", "fixed_adams", "dopri5"]
 TASKS     = ['rot_mnist', 'rot_mnist_ou', 'sin', 'bb', 'lv', 'mocap', 'mocap_shift', 'ecg']
@@ -114,7 +115,11 @@ parser.add_argument('--save', type=str, default='results/',
 
 if __name__ == '__main__':
     args = parser.parse_args()
-
+    run = wandb.init(
+        entity="tymechatu-university-of-amsterdam",
+        project="rescue_ai",
+        config=vars(args),
+    )
     ######### setup output directory and logger ###########
     args.save = os.path.join(os.path.abspath(os.path.dirname(__file__)), \
         args.save+args.task+'/'+args.model+'/'+datetime.now().strftime('%d_%m_%Y-%H:%M-')+str(args.exp_id), '')
@@ -167,6 +172,7 @@ if __name__ == '__main__':
         model.load_state_dict(torch.load(fname,map_location=torch.device(device)))
         logger.info('********** Resume training for model {} ********** '.format(fname))
 
-    train_model(args, model, plotter, trainset, validset, testset, logger, params[args.task])
+    train_model(args, model, plotter, trainset, validset, testset, logger, params[args.task], run)
+    run.finish()
 
 

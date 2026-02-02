@@ -8,8 +8,10 @@ import argparse
 
 def save_ecg(file_path, save_path, target_hz=500, default_hz=500, time=10):
     df = pd.read_csv(file_path, header=None)
-    x = df.to_numpy()[:, :time * default_hz]
+    x = df.to_numpy()
     x = signal.resample_poly(x, up=target_hz, down=default_hz, axis=1)
+    x = x[:, :time * target_hz]
+    
 
     mu = np.mean(x, axis=1, keepdims=True)
     sigma = np.std(x, axis=1, keepdims=True)

@@ -231,7 +231,7 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 
 	dataset = params[task]['dataset']
 
-	dir_path = f'./data/ecg/{dataset}/preprocessed/T{T}_f{f}_{type}'
+	dir_path = f'./data/ecg/{dataset}/preprocessed/T{T}_f{f}_{type}/{flag}'
 	n_per_class = math.ceil(N / 7)
 	data_paths = defaultdict(lambda: defaultdict(list))
 
@@ -245,7 +245,6 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 			'time': T
 		}))
 
-	dir_path = os.path.join(dir_path, flag)
 	for dir in os.listdir(dir_path):
 		cur_dir = os.path.join(dir_path, dir)
 		for file_path in os.listdir(cur_dir):

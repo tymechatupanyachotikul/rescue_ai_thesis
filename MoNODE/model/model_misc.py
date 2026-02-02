@@ -105,7 +105,7 @@ def freeze_pars(par_list):
             raise ValueError('This is not a parameter!?')
 
 
-def train_model(args, model, plotter, trainset, validset, testset, logger, params, freeze_dyn=False):
+def train_model(args, model, plotter, trainset, validset, testset, logger, params, run, freeze_dyn=False):
 
     loss_meter  = log_utils.CachedRunningAverageMeter(0.97)
     tr_mse_meter   = log_utils.CachedRunningAverageMeter(0.97)
@@ -177,7 +177,12 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             global_itr +=1
 
             time_val = datetime.now()-start_time
-            
+            run.log({
+                'loss': loss.item(),
+                'tr_mse': tr_mse.item(),
+                'nll': nlhood.item(),
+                'kl_z0': kl_z0.item()
+            })
         with torch.no_grad():
             
             dict_valid_mses = {}
@@ -195,6 +200,11 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
             logger.info('Epoch:{:4d}/{:4d} | tr_loss:{:8.2f}({:8.2f}) | valid_mse T={} :{:5.3f} | valid_mse T={} :{:5.3f} '.\
                     format(ep, args.Nepoch, loss_meter.val, loss_meter.avg, T_rec, valid_mse_rec, T_for, valid_mse_for)) 
+            run.log({
+                'tr_loss': loss_meter.val,
+                'valid_T_rec': valid_mse_rec,
+                'valid_T_for': valid_mse_for
+            })
                 
             # update valid loggers
             vl_mse_rec.update(valid_mse_rec,ep)
@@ -225,6 +235,9 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 logger.info('Epoch:{:4d}/{:4d}'.format(ep, args.Nepoch))
                 for key, val in dict_test_mses.items():
                     logger.info('T={} test_mse {:5.3f}({:5.3f})'.format(key, np.mean(dict_test_mses[key]), np.std(dict_test_mses[key])))
+                    run.log({
+                        'test_mse': np.mean(dict_test_mses[key])
+                    })
 
             if ep % args.plot_every==0 or (ep+1) == args.Nepoch:
                 Xrec_tr, ztL_tr, _, _, C_tr, _, _ = model(tr_minibatch, L=args.plotL, T_custom=args.forecast_tr*tr_minibatch.shape[1])
