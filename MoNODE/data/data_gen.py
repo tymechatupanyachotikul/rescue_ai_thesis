@@ -228,7 +228,6 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 	f = params[task]['f']
 	T = params[task][flag]['T'] // f
 	type = params[task]['type']
-
 	dataset = params[task]['dataset']
 
 	dir_path = f'./data/ecg/{dataset}/preprocessed/T{T}_f{f}_{type}/{flag}'

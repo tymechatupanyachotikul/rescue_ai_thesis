@@ -99,6 +99,27 @@ def __load_data(args, device, dtype, dataset=None):
 		Xvl = torch.Tensor(Xvl).unsqueeze(2)
 		Xte = torch.Tensor(Xte).unsqueeze(2)
 
+	if dataset == 'ecg':
+		exclude_leads = params[dataset]['exclude_leads']
+		lead_idx = {
+			'I': 0, 
+			'II': 1,
+			'III': 2, 
+			'aVR': 3, 
+			'aVL': 4,
+			'aVF': 5,
+			'V1': 6,
+			'V2': 7,
+			'V3': 8, 
+			'V4': 9, 
+			'V5': 10, 
+			'V6': 11
+		}
+
+		include_idx = [idx for lead, idx in lead_idx.items() if lead not in exclude_leads]
+		Xtr = Xtr[: , :, include_idx]
+		Xvl = Xvl[:, :, include_idx]
+		Xte = Xte[: , :, include_idx]
 	Xtr = Xtr.to(device).to(dtype)
 	Xvl = Xvl.to(device).to(dtype)
 	Xte = Xte.to(device).to(dtype)

@@ -110,7 +110,7 @@ def build_mov_mnist_cnn_dec(n_filt, n_in):
 class VAE(nn.Module):
 
     def __init__(self, task, cnn_filt_enc=8, cnn_filt_de=8, dec_H=100, rnn_hidden=10, dec_act='relu', 
-                 ode_latent_dim=8, content_dim=0, T_in=10, device='cpu', order=1, enc_H=50):
+                 ode_latent_dim=8, content_dim=0, T_in=10, device='cpu', order=1, enc_H=50, inp_dim=None):
         super(VAE, self).__init__()
 
         ### build encoder
@@ -133,7 +133,9 @@ class VAE(nn.Module):
         elif task in ['sin', 'lv', 'mocap', 'mocap_shift', 'ecg']:
             lhood_distribution = 'normal'
 
-            if task=='sin':
+            if inp_dim:
+                data_dim = inp_dim
+            elif task=='sin':
                 data_dim = 1
             elif task=='lv':
                 data_dim = 2

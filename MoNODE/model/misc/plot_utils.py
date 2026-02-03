@@ -14,10 +14,10 @@ palette_tab = list(mcolors.TABLEAU_COLORS.keys())
 
 def plot_results(plotter, \
                  tr_rec, trainset, vl_rec, validset, trace_params, \
-                 ztl_tr=None, ztl_vl=None, C_tr=None, C_vl=None):
+                 ztl_tr=None, ztl_vl=None, C_tr=None, C_vl=None, **kwargs):
 
-    plotter.plot_fit(trainset, tr_rec, 'tr', trace_params['iteration'])
-    plotter.plot_fit(validset,  vl_rec, 'valid', trace_params['iteration'])
+    plotter.plot_fit(trainset, tr_rec, 'tr', trace_params['iteration'], **kwargs)
+    plotter.plot_fit(validset,  vl_rec, 'valid', trace_params['iteration'], **kwargs)
 
     if ztl_tr is not None:
         plotter.plot_latent(ztl_tr, 'tr', trace_params['iteration'])
@@ -60,10 +60,10 @@ class Plotter:
         self.plot_latent_fnc = plot_latent_traj
 
 
-    def plot_fit(self, X, Xrec, fname='', ep=0):
+    def plot_fit(self, X, Xrec, fname='', ep=0, **kwargs):
         fname = self.task_name + '_fit_' + fname + '_' + str(ep) + '.png'
         fname = os.path.join(self.path_fit, fname)
-        self.plot_fit_fnc(X, Xrec, fname=fname)
+        self.plot_fit_fnc(X, Xrec, fname=fname, **kwargs)
 
     def plot_latent(self, z, fname='', ep=0):
         fname = self.task_name + '_latents_' + fname + '_' + str(ep) + '.png'
@@ -235,7 +235,7 @@ def plot_ecg(X, show=False, fname='ecg_example.png'):
         plt.savefig(fname)
         plt.close()
 
-def plot_ecg_out(X, Xrec, show=False, fname='ecg_real_vs_reconstruct.png'):
+def plot_ecg_out(X, Xrec, show=False, fname='ecg_real_vs_reconstruct.png', exclude_leads=[], f=500):
     ''' 
         For ecg
         X    - [N,T] 
@@ -245,13 +245,13 @@ def plot_ecg_out(X, Xrec, show=False, fname='ecg_real_vs_reconstruct.png'):
     Xrecnp = Xrec.detach().cpu().numpy()[0,0, :, :]
 
     lead_names = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
+    include_lead = [lead for lead in lead_names if lead not in exclude_leads]
     
-    fig, axes = plt.subplots(12, 1, figsize=(15, 20), sharex=True)
-    fig.suptitle('ECG example', fontsize=20, fontweight='bold')
+    fig, axes = plt.subplots(len(include_lead), 1, figsize=(9, 12), sharex=True)
     
-    time = np.arange(Xnp.shape[0]) / 500
-    time_recon = np.arange(min(Xrecnp.shape[0], len(time))) / 500
-    for i, name in enumerate(lead_names):
+    time = np.arange(Xnp.shape[0]) / f
+    time_recon = np.arange(min(Xrecnp.shape[0], len(time))) / f
+    for i, name in enumerate(include_lead):
         ax = axes[i]
         ax.plot(time, Xnp[:, i], color='blue', linewidth=0.7, label='Real', alpha=0.7)
         ax.plot(time_recon, Xrecnp[:len(time_recon), i], color='red', linewidth=0.7, label='Reconstructed', alpha=0.7)

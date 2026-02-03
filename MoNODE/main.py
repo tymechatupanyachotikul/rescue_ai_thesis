@@ -156,7 +156,11 @@ if __name__ == '__main__':
     logger.info('data params: {}'.format(params[args.task]))
 
     ########### model ###########
-    model = build_model(args, device, dtype)
+    if args.task == 'ecg':
+        config = {
+            'inp_dim': 12 - len(params[args.task]['exclude_leads'])
+        }
+    model = build_model(args, device, dtype, **config)
     model.to(device)
     model.to(dtype)
 

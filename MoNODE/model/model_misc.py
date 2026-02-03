@@ -242,17 +242,22 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             if ep % args.plot_every==0 or (ep+1) == args.Nepoch:
                 Xrec_tr, ztL_tr, _, _, C_tr, _, _ = model(tr_minibatch, L=args.plotL, T_custom=args.forecast_tr*tr_minibatch.shape[1])
                 Xrec_vl, ztL_vl, _, _, C_vl, _, _ = model(valid_batch,  L=args.plotL, T_custom=args.forecast_vl*valid_batch.shape[1])
-                
+                plot_config = {}
+                if args.task == 'ecg':
+                    plot_config = {
+                        'exclude_leads': params['exclude_leads'],
+                        'f': params['f']
+                    }
                 if args.model == 'node' or args.model == 'hbnode':
                     plot_results(plotter, \
                                 Xrec_tr, tr_minibatch, Xrec_vl, valid_batch, \
                                 {"plot":{'Loss(-elbo)': loss_meter, 'Nll' : nll_meter, 'KL-z0': kl_z0_meter, "train-MSE": tr_mse_meter}, "valid-MSE-rec": vl_mse_rec, "valid-MSE-for": vl_mse_for, "iteration": ep, "time": time_meter}, \
-                                ztL_tr,  ztL_vl,  C_tr, C_vl,)
+                                ztL_tr,  ztL_vl,  C_tr, C_vl, **plot_config)
                 
                 elif args.model == 'sonode':
                     plot_results(plotter, \
                                 Xrec_tr, tr_minibatch, Xrec_vl, valid_batch,\
-                                {"plot":{"Loss" : loss_meter, "valid-MSE-rec": vl_mse_rec, "valid-MSE-for":vl_mse_for}, "time" : time_meter, "iteration": ep})
+                                {"plot":{"Loss" : loss_meter, "valid-MSE-rec": vl_mse_rec, "valid-MSE-for":vl_mse_for}, "time" : time_meter, "iteration": ep}, **plot_config)
 
 
     logger.info('Epoch:{:4d}/{:4d} | time: {} | train_elbo: {:8.2f} | train_mse: {:5.3f} | valid_mse_rec: {:5.3f}) | valid_mse_for: {:5.3f})  | best_valid_mse: {:5.3f})'.\

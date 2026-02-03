@@ -85,13 +85,14 @@ mocap_shift:
 ecg:
   train:
     N: 5600
-    T: 1250
+    T: 500
   valid:
     N: 490
-    T: 1250
+    T: 500
   test:
     N: 490
-    T: 1250
+    T: 500
   f: 250
   dataset: MedalCare-XL
   type: raw
+  exclude_leads: ['II', 'III', 'aVR', 'aVL']

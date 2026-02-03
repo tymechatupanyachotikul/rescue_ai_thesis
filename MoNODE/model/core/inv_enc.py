@@ -3,7 +3,7 @@ import torch.nn as nn
 from model.core.vae import EncoderCNN, EncoderRNN
 
 class INV_ENC(nn.Module):
-    def __init__(self, task, vae_enc=None, cnn_filt=8, modulator_dim=0, content_dim=0, rnn_hidden=10, T_inv=10, device='cpu'):
+    def __init__(self, task, vae_enc=None, cnn_filt=8, modulator_dim=0, content_dim=0, rnn_hidden=10, T_inv=10, device='cpu', inp_dim=None):
         super(INV_ENC, self).__init__()
         self.modulator_dim = modulator_dim
         self.content_dim = content_dim
@@ -12,7 +12,9 @@ class INV_ENC(nn.Module):
         elif task=='bb':
             self.inv_encoder = InvariantEncoderCNNMLP(vae_enc, T_inv, H=64, out_dim=modulator_dim+content_dim)
         elif task=='sin' or task=='lv' or 'mocap' or 'ecg' in task:
-            if task=='sin':
+            if inp_dim:
+                data_dim = inp_dim
+            elif task=='sin':
                 data_dim = 1
             elif task=='lv':
                 data_dim = 2

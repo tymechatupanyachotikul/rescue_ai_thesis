@@ -6,7 +6,7 @@ from model.core.model import MoNODE
 from model.core.hbnode import HBNODE_BASE
 
 
-def build_model(args, device, dtype):
+def build_model(args, device, dtype, **kwargs):
     """
     Builds a model object of monode.MoNODE based on training sequence
 
@@ -50,7 +50,7 @@ def build_model(args, device, dtype):
     if args.model == 'node' or args.model == 'hbnode':
         vae = VAE(task=args.task, cnn_filt_enc=args.cnn_filt_enc, cnn_filt_de = args.cnn_filt_de, ode_latent_dim=args.ode_latent_dim//args.order, 
             dec_act=args.dec_act, rnn_hidden=args.rnn_hidden, dec_H=args.dec_H, enc_H = args.enc_H,
-            content_dim=args.content_dim, T_in=args.T_in, order=args.order, device=device).to(dtype)
+            content_dim=args.content_dim, T_in=args.T_in, order=args.order, device=device, **kwargs).to(dtype)
     elif args.model == 'sonode':
         if args.sonode_v == 'MLP':
             vae = SONODE_init_velocity(dim=args.ode_latent_dim//2, nhidden=args.dec_H, Tin=args.T_in) #improved SONODE
@@ -63,10 +63,10 @@ def build_model(args, device, dtype):
     if args.modulator_dim>0 or args.content_dim>0:
         if args.task == 'bb':
             inv_enc = INV_ENC(task=args.task, modulator_dim=args.modulator_dim, content_dim = args.content_dim,
-                cnn_filt=args.cnn_filt_inv, rnn_hidden=10, T_inv=args.T_inv, vae_enc=vae.encoder, device=device).to(dtype)
+                cnn_filt=args.cnn_filt_inv, rnn_hidden=10, T_inv=args.T_inv, vae_enc=vae.encoder, device=device, **kwargs).to(dtype)
         else:
             inv_enc = INV_ENC(task=args.task, modulator_dim=args.modulator_dim, content_dim = args.content_dim,
-                cnn_filt=args.cnn_filt_inv, rnn_hidden=10, T_inv=args.T_inv, vae_enc=None, device=device).to(dtype)
+                cnn_filt=args.cnn_filt_inv, rnn_hidden=10, T_inv=args.T_inv, vae_enc=None, device=device, **kwargs).to(dtype)
     else:
         inv_enc = None
 
