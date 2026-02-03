@@ -176,7 +176,8 @@ if __name__ == '__main__':
 
     if args.continue_training:
         fname = os.path.join(os.path.abspath(os.path.dirname(__file__)), args.continue_dir, 'model.pth')
-        model.load_state_dict(torch.load(fname,map_location=torch.device(device)))
+        ckpt = torch.load(fname, map_location=torch.device(device))
+        model.load_state_dict(ckpt["state_dict"])
         logger.info('********** Resume training for model {} ********** '.format(fname))
 
     train_model(args, model, plotter, trainset, validset, testset, logger, params[args.task], run)
