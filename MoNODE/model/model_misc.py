@@ -144,7 +144,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
         if args.model == 'sonode':
             L=1
         else:
-            L = 1 if ep<args.Nepoch//2 else 5 
+            L = 1 if ep<args.Nepoch//2 else 2
 
         if (ep != 0) and (ep % ep_inc_c == 0):
             T_ += ep_inc_v
@@ -245,7 +245,8 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 if args.task == 'ecg':
                     plot_config = {
                         'exclude_leads': params['exclude_leads'],
-                        'f': params['f']
+                        'f': params['f'],
+                        'run': run,
                     }
                 if args.model == 'node' or args.model == 'hbnode':
                     plot_results(plotter, \
