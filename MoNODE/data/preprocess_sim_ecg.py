@@ -80,7 +80,11 @@ def main(args):
     target_hz = args.target_hz 
     time = args.time 
 
-    save_dir = os.path.join(root_dir, f'preprocessed/T{time}_f{target_hz}_{ecg_type}/{split}')
+    dir_path = (
+    	f"preprocessed/"
+    	f"T{f'{time:.2f}'.replace('.', '_')}_f{target_hz}_{ecg_type}/{split}"
+	)
+    save_dir = os.path.join(root_dir, dir_path)
     os.makedirs(os.path.dirname(save_dir), exist_ok=True)
 
     dataset_dir = 'WP2_largeDataset_Noise'
