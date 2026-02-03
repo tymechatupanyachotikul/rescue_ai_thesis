@@ -15,6 +15,7 @@ TASKS     = ['rot_mnist', 'rot_mnist_ou', 'sin', 'bb', 'lv', 'mocap', 'mocap_shi
 MODELS     = ['node', 'sonode', 'hbnode']
 GRADIENT_ESTIMATION = ['no_adjoint', 'adjoint', 'ac_adjoint']
 parser = argparse.ArgumentParser('MoNODE')
+np.seterr(all='raise')
 
 #data
 parser.add_argument('--task', type=str, default='mov_mnist', choices=TASKS,
