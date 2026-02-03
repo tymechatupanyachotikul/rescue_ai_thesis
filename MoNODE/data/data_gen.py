@@ -230,12 +230,16 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 	type = params[task]['type']
 	dataset = params[task]['dataset']
 
-	dir_path = f'./data/ecg/{dataset}/preprocessed/T{T:.2f}_f{f}_{type}/{flag}'
+	dir_path = (
+    	f"./data/ecg/{dataset}/preprocessed/"
+    	f"T{f'{T:.2f}'.replace('.', '_')}_f{f}_{type}/{flag}"
+	)
 	n_per_class = math.ceil(N / 7)
 	data_paths = defaultdict(lambda: defaultdict(list))
 
 	subclasses = ['LAD_0.3', 'LAD_1.0', 'LCX_0.3_ant', 'LCX_0.3_post', 'LCX_1.0_ant', 'LCX_1.0_post', 'RCA_0.3', 'RCA_1.0']
 	if not os.path.isdir(dir_path):
+		print(f'{dir_path} not found (cur dir is {os.getcwd()})')
 		preprocess_ecg(Namespace(**{
 			'root_dir': f'/projects/prjs1890/{dataset}',
 			'split': flag,
