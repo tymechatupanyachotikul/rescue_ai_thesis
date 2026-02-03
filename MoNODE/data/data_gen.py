@@ -226,11 +226,11 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 
 	N = params[task][flag]['N']
 	f = params[task]['f']
-	T = params[task][flag]['T'] // f
+	T = params[task][flag]['T'] / f
 	type = params[task]['type']
 	dataset = params[task]['dataset']
 
-	dir_path = f'./data/ecg/{dataset}/preprocessed/T{T}_f{f}_{type}/{flag}'
+	dir_path = f'./data/ecg/{dataset}/preprocessed/T{T:.2f}_f{f}_{type}/{flag}'
 	n_per_class = math.ceil(N / 7)
 	data_paths = defaultdict(lambda: defaultdict(list))
 
