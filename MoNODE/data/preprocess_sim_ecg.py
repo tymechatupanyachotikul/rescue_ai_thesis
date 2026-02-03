@@ -9,8 +9,12 @@ import argparse
 def save_ecg(file_path, save_path, target_hz=500, default_hz=500, time=10):
     df = pd.read_csv(file_path, header=None)
     x = df.to_numpy()
+    print(f'ecg shape : {x.shape}')
     x = signal.resample_poly(x, up=target_hz, down=default_hz, axis=1)
+    print(f'ecg shape after resampling: {x.shape}')
+    print(f'number of time steps : {time} x {target_hz} = {time * target_hz}')
     x = x[:, :time * target_hz]
+    print(f'shape after slicing {x.shape}')
     
 
     mu = np.mean(x, axis=1, keepdims=True)
