@@ -5,7 +5,7 @@ from torch.distributions import kl_divergence as kl
 
 from model.misc import log_utils 
 from model.misc.plot_utils import plot_results
-
+import wandb
 
 def elbo(model, X, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L):
     ''' Input:
@@ -166,6 +166,8 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
             optimizer.zero_grad()
             loss.backward() 
+            log_gradients(model, run)
+
             optimizer.step()
 
             #store values 
@@ -267,7 +269,28 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
         logger.info('T={} test_mse {:5.3f}({:5.3f})'.format(key, np.mean(dict_test_mses[key]), np.std(dict_test_mses[key])))
 
     
+def log_gradients(model, run):
 
-    
+    total_norm_gru = 0
+    for p in model.vae.encoder.parameters():
+        if p.grad is not None:
+            total_norm_gru += p.grad.data.norm(2).item()
+
+    total_norm_ode = 0
+    for p in model.flow.odefunc.parameters():
+        if p.grad is not None:
+            total_norm_ode += p.grad.data.norm(2).item()
+
+    total_norm_dec = 0
+    for p in model.vae.decoder.parameters():
+        if p.grad is not None:
+            total_norm_dec += p.grad.data.norm(2).item()
+
+    run.log({
+        "grads/gru_norm": total_norm_gru,
+        "grads/ode_norm": total_norm_ode,
+        "grads/dec_norm": total_norm_dec,
+        "grads/ratio_gru_to_dec": total_norm_gru / (total_norm_dec + 1e-8) 
+    })
 
 

@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import os
 from pathlib import Path
+import wandb 
 
 import matplotlib.colors as mcolors
 from model.misc import io_utils
@@ -24,9 +25,11 @@ def plot_results(plotter, \
 
     if ztl_tr is not None:
         plotter.plot_latent(ztl_tr, 'tr', trace_params['iteration'])
+        #delta_z_tr = ztl_tr[0, 0, :, 1:] - ztl_tr[0, 0, :, :-1]
     if ztl_vl is not None:
         plotter.plot_latent(ztl_vl, 'valid', trace_params['iteration'])
-
+        #delta_z_vl = ztl_vl[0, 0, :, 1:] - ztl_vl[0, 0, :, :-1]
+    
     if C_tr is not None:
         plotter.plot_C(C_tr, 'tr')
     if C_vl is not None:
@@ -274,7 +277,7 @@ def plot_ecg_out(X, Xrec, show=False, fname='ecg_real_vs_reconstruct.png', exclu
     plt.xlabel("Time (seconds)", fontsize=12)
     plt.subplots_adjust(hspace=0.05)
     if run:
-        run.log({f"{flag}/reconstructed": run.Image(fig)})
+        run.log({f"{flag}/reconstructed": wandb.Image(fig)})
 
     if show:
         plt.show()
