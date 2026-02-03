@@ -112,6 +112,8 @@ parser.add_argument('--exp_id', type=int, default=0,
 #log 
 parser.add_argument('--save', type=str, default='results/',
                     help="Directory name for saving all the model outputs")
+parser.add_argument('--continue_dir', type=str, default='results/',
+                    help="Directory name for continue training")
 
 
 if __name__ == '__main__':
@@ -173,7 +175,7 @@ if __name__ == '__main__':
     logger.info(model)
 
     if args.continue_training:
-        fname = os.path.join(os.path.abspath(os.path.dirname(__file__)), args.save, 'model.pth')
+        fname = os.path.join(os.path.abspath(os.path.dirname(__file__)), args.continue_dir, 'model.pth')
         model.load_state_dict(torch.load(fname,map_location=torch.device(device)))
         logger.info('********** Resume training for model {} ********** '.format(fname))
 
