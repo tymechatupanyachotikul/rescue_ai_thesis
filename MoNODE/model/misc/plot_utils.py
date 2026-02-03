@@ -16,8 +16,11 @@ def plot_results(plotter, \
                  tr_rec, trainset, vl_rec, validset, trace_params, \
                  ztl_tr=None, ztl_vl=None, C_tr=None, C_vl=None, **kwargs):
 
-    plotter.plot_fit(trainset, tr_rec, 'tr', trace_params['iteration'], **kwargs)
-    plotter.plot_fit(validset,  vl_rec, 'valid', trace_params['iteration'], **kwargs)
+    train_kwargs = {**kwargs, 'flag': 'train'}
+    valid_kwargs = {**kwargs, 'flag': 'val'}
+
+    plotter.plot_fit(trainset, tr_rec, 'tr', trace_params['iteration'], **train_kwargs)
+    plotter.plot_fit(validset,  vl_rec, 'valid', trace_params['iteration'], **valid_kwargs)
 
     if ztl_tr is not None:
         plotter.plot_latent(ztl_tr, 'tr', trace_params['iteration'])
@@ -235,7 +238,7 @@ def plot_ecg(X, show=False, fname='ecg_example.png'):
         plt.savefig(fname)
         plt.close()
 
-def plot_ecg_out(X, Xrec, show=False, fname='ecg_real_vs_reconstruct.png', exclude_leads=[], f=500):
+def plot_ecg_out(X, Xrec, show=False, fname='ecg_real_vs_reconstruct.png', exclude_leads=[], f=500, run=None, flag='train'):
     ''' 
         For ecg
         X    - [N,T] 
@@ -270,6 +273,8 @@ def plot_ecg_out(X, Xrec, show=False, fname='ecg_real_vs_reconstruct.png', exclu
         
     plt.xlabel("Time (seconds)", fontsize=12)
     plt.subplots_adjust(hspace=0.05)
+    if run:
+        run.log({f"{flag}/reconstructed": run.Image(fig)})
 
     if show:
         plt.show()
