@@ -178,10 +178,10 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
             time_val = datetime.now()-start_time
             run.log({
-                'loss': loss.item(),
-                'tr_mse': tr_mse.item(),
-                'nll': nlhood.item(),
-                'kl_z0': kl_z0.item()
+                'train/tr_loss': loss.item(),
+                'train/mse': tr_mse.item(),
+                'train/nll': nlhood.item(),
+                'train/kl_z0': kl_z0.item()
             })
         with torch.no_grad():
             
@@ -201,9 +201,8 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             logger.info('Epoch:{:4d}/{:4d} | tr_loss:{:8.2f}({:8.2f}) | valid_mse T={} :{:5.3f} | valid_mse T={} :{:5.3f} '.\
                     format(ep, args.Nepoch, loss_meter.val, loss_meter.avg, T_rec, valid_mse_rec, T_for, valid_mse_for)) 
             run.log({
-                'tr_loss': loss_meter.val,
-                'valid_T_rec': valid_mse_rec,
-                'valid_T_for': valid_mse_for
+                'val/tr_loss': loss_meter.val,
+                'val/T_rec': valid_mse_rec
             })
                 
             # update valid loggers
@@ -236,7 +235,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 for key, val in dict_test_mses.items():
                     logger.info('T={} test_mse {:5.3f}({:5.3f})'.format(key, np.mean(dict_test_mses[key]), np.std(dict_test_mses[key])))
                     run.log({
-                        'test_mse': np.mean(dict_test_mses[key])
+                        'test/mse': np.mean(dict_test_mses[key])
                     })
 
             if ep % args.plot_every==0 or (ep+1) == args.Nepoch:
