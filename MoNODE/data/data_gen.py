@@ -265,7 +265,10 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 			n_per_run = math.ceil(n_per_class / n_runs)
 
 		for path in run.values():
-			dataset_path[cls].extend(path[:n_per_run])
+			if N == -1:
+				dataset_path[cls].extend(path)
+			else:
+				dataset_path[cls].extend(path[:n_per_run])
 
 	data_paths = []
 	for cls, _data in dataset_path.items():
