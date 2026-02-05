@@ -4,7 +4,7 @@ import json
 import torch
 from   torch.utils import data
 from data.data_gen import gen_sin_data, gen_lv_data, gen_rmnist_data, gen_bb_data, gen_mocap_data, gen_mocap_shift_data, gen_ecg_data
-
+import pickle
 
 from model.misc import io_utils
 
@@ -44,8 +44,6 @@ def __load_data(args, device, dtype, dataset=None):
 	data_path_vl = os.path.join(folder_path,f'{dataset}-vl-data.pkl')
 	data_path_te = os.path.join(folder_path,f'{dataset}-te-data.pkl')
 
-	
-
 	#adjust name if specifc configuration
 	if dataset == 'bb':
 		data_path_tr = _adjust_name(data_path_tr, '.pkl', str(params[dataset]['nballs']))
@@ -61,11 +59,21 @@ def __load_data(args, device, dtype, dataset=None):
 		Xtr = torch.load(data_path_tr)
 		Xvl = torch.load(data_path_vl)
 		Xte = torch.load(data_path_te)
+		Ytr = None
+		Yvl = None
+		Yte = None
 		#if loaded data does not match the parameter settings assert and re generate the data 
 		if dataset != 'ecg':
 			assert Xtr.shape[0] == params[dataset]['train']['N'] and Xtr.shape[1] == params[dataset]['train']['T'] 
 			assert Xvl.shape[0] == params[dataset]['valid']['N'] and Xvl.shape[1] == params[dataset]['valid']['T']
 			assert Xte.shape[0] == params[dataset]['test']['N'] and Xte.shape[1] == params[dataset]['test']['T']
+		else:
+			with open(f"y_{data_path_tr}", "rb") as f:
+				Ytr = pickle.load(f)
+			with open(f"y_{data_path_vl}", "rb") as f:
+				Yvl = pickle.load(f)
+			with open(f"y_{data_path_te}", "rb") as f:
+				Yte = pickle.load(f)
 			
 	except:
 		with open(folder_path+'/gen_info.txt', 'w') as f:
@@ -117,9 +125,10 @@ def __load_data(args, device, dtype, dataset=None):
 		}
 
 		include_idx = [idx for lead, idx in lead_idx.items() if lead not in exclude_leads]
-		Xtr = Xtr[: , :, include_idx]
+		Xtr = Xtr[:, :, include_idx]
 		Xvl = Xvl[:, :, include_idx]
-		Xte = Xte[: , :, include_idx]
+		Xte = Xte[:, :, include_idx]
+
 	Xtr = Xtr.to(device).to(dtype)
 	Xvl = Xvl.to(device).to(dtype)
 	Xte = Xte.to(device).to(dtype)
@@ -128,35 +137,38 @@ def __load_data(args, device, dtype, dataset=None):
 	print('Val   data: ', Xvl.shape)
 	print('Test  data: ', Xte.shape)
 
-	return __build_dataset(args.num_workers, args.batch_size, Xtr, Xvl, Xte), params
+	return __build_dataset(args.num_workers, args.batch_size, Xtr, Xvl, Xte, Ytr, Yvl, Yte), params
 
 
 class Dataset(data.Dataset):
-	def __init__(self, Xtr):
+	def __init__(self, Xtr, Ytr=None):
 		self.Xtr = Xtr # N,T,_
+		self.Ytr = Ytr
 	def __len__(self):
 		return len(self.Xtr)
 	def __getitem__(self, idx):
+		X = self.Xtr[idx]
+		y = self.Ytr[idx] if self.Ytr is not None else 0
 		return self.Xtr[idx]
 	@property
 	def shape(self):
 		return self.Xtr.shape
 
 
-def __build_dataset(num_workers, batch_size, Xtr, Xvl, Xte, shuffle=True):
+def __build_dataset(num_workers, batch_size, Xtr, Xvl, Xte, Ytr=None, Yvl=None, Yte=None, shuffle=True):
 	# Data generators
 	if num_workers>0:
 		from multiprocessing import Process, freeze_support
 		torch.multiprocessing.set_start_method('spawn', force="True")
 
 	tr_params = {'batch_size': min(batch_size,Xtr.shape[0]), 'shuffle': shuffle, 'num_workers': num_workers, 'drop_last': True}
-	trainset  = Dataset(Xtr)
+	trainset  = Dataset(Xtr, Ytr)
 	trainset  = data.DataLoader(trainset, **tr_params)
 	vl_params = {'batch_size': min(batch_size,Xvl.shape[0]), 'shuffle': shuffle, 'num_workers': num_workers, 'drop_last': True}
-	validset  = Dataset(Xvl)
+	validset  = Dataset(Xvl, Yvl)
 	validset  = data.DataLoader(validset, **vl_params)
 	te_params = {'batch_size': min(batch_size,Xte.shape[0]), 'shuffle': shuffle, 'num_workers': num_workers, 'drop_last': True}
-	testset   = Dataset(Xte)
+	testset   = Dataset(Xte, Yte)
 	testset   = data.DataLoader(testset, **te_params)
 	return trainset, validset, testset
 

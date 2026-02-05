@@ -12,6 +12,7 @@ from itertools import product
 import pandas as pd 
 from collections import defaultdict 
 from argparse import Namespace
+import pickle 
 
 def _adjust_name(data_path, substr, insertion):
 	idx = data_path.index(substr)
@@ -271,8 +272,10 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 				dataset_path[cls].extend(path[:n_per_run])
 
 	data_paths = []
+	y = []
 	for cls, _data in dataset_path.items():
 		data_paths.extend(_data)
+		y.extend([cls]*len(_data))
 		print(f'Class : {cls} - {len(_data)} samples for {flag} set')
 
 	Xt = []
@@ -285,3 +288,5 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 	plot_ecg(Xt,fname=filename + flag)
 
 	torch.save(Xt, data_path)
+	with open(f'y_{data_path}', 'wb'):
+		pickle.dump(y, f)
