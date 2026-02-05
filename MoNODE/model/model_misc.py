@@ -231,8 +231,6 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 'train/nll': nlhood.item(),
                 'train/kl_z0': kl_z0.item()
             })
-
-            break
         
         table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in loss_per_class.items()],
                                 columns=["class", "mse"])
@@ -266,8 +264,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
                 dict_valid_misc['mse_t'].append(dict_misc['mse_t'])
                 dict_valid_misc['mse_l'].append(dict_misc['mse_l'])
-
-                break
+                
 
             T_rec = list(dict_valid_mses.keys())[0]
             T_for  = list(dict_valid_mses.keys())[-1]
