@@ -367,10 +367,10 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                     run.log({
                         'test/mse': np.mean(dict_test_mses[key])
                     })
-                mse_t = list(torch.stack(dict_valid_misc['mse_t']).mean(dim=0).detach().cpu().numpy().astype(float))
-                sse_t = list(torch.stack(dict_valid_misc['mse_t']).std(dim=0).detach().cpu().numpy().astype(float))
-                mse_l = list(torch.stack(dict_valid_misc['mse_l']).mean(dim=0).detach().cpu().numpy().astype(float))
-                sse_l = list(torch.stack(dict_valid_misc['mse_l']).std(dim=0).detach().cpu().numpy().astype(float))
+                mse_t = list(torch.stack(dict_test_misc['mse_t']).mean(dim=0).detach().cpu().numpy().astype(float))
+                sse_t = list(torch.stack(dict_test_misc['mse_t']).std(dim=0).detach().cpu().numpy().astype(float))
+                mse_l = list(torch.stack(dict_test_misc['mse_l']).mean(dim=0).detach().cpu().numpy().astype(float))
+                sse_l = list(torch.stack(dict_test_misc['mse_l']).std(dim=0).detach().cpu().numpy().astype(float))
 
                 t = np.arange(len(mse_t))
                 table = wandb.Table(data=[[ti, m, m-s, m+s] for ti, m, s in zip(t, mse_t, sse_t)],
@@ -378,7 +378,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
                 run.log({
                 "test/mse_t": wandb.plot_table(
-                        vega_spec_name="tymechatu-university-of-amsterdam/std_band_custom", # Use 'entity/template-name'
+                        vega_spec_name="tymechatu-university-of-amsterdam/std_band_custom",
                         data_table=table,
                         fields={
                             "x": "timestep",
