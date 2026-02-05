@@ -223,7 +223,7 @@ def gen_mocap_shift_data(data_path, params, flag, task='mocap_shift'):
 	elif flag=='test':
 		torch.save(Xts,os.path.join(DATA_ROOT,'mocap_shift-te-data.pkl'))
 
-def gen_ecg_data(data_path, params, flag, task='ecg'): 
+def gen_ecg_data(data_path, data_path_y, params, flag, task='ecg'): 
 
 	N = params[task][flag]['N']
 	f = params[task]['f']
@@ -288,5 +288,5 @@ def gen_ecg_data(data_path, params, flag, task='ecg'):
 	plot_ecg(Xt,fname=filename + flag)
 
 	torch.save(Xt, data_path)
-	with open(f'y_{data_path}', 'wb'):
+	with open(data_path_y, 'wb'):
 		pickle.dump(y, f)
