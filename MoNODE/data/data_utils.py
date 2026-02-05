@@ -44,6 +44,10 @@ def __load_data(args, device, dtype, dataset=None):
 	data_path_vl = os.path.join(folder_path,f'{dataset}-vl-data.pkl')
 	data_path_te = os.path.join(folder_path,f'{dataset}-te-data.pkl')
 
+	data_path_ytr = os.path.join(folder_path,f'{dataset}-ytr-data.pkl')
+	data_path_yvl = os.path.join(folder_path,f'{dataset}-yvl-data.pkl')
+	data_path_yte = os.path.join(folder_path,f'{dataset}-yte-data.pkl')
+
 	#adjust name if specifc configuration
 	if dataset == 'bb':
 		data_path_tr = _adjust_name(data_path_tr, '.pkl', str(params[dataset]['nballs']))
@@ -68,11 +72,11 @@ def __load_data(args, device, dtype, dataset=None):
 			assert Xvl.shape[0] == params[dataset]['valid']['N'] and Xvl.shape[1] == params[dataset]['valid']['T']
 			assert Xte.shape[0] == params[dataset]['test']['N'] and Xte.shape[1] == params[dataset]['test']['T']
 		else:
-			with open(f"y_{data_path_tr}", "rb") as f:
+			with open(data_path_ytr, "rb") as f:
 				Ytr = pickle.load(f)
-			with open(f"y_{data_path_vl}", "rb") as f:
+			with open(data_path_yvl, "rb") as f:
 				Yvl = pickle.load(f)
-			with open(f"y_{data_path_te}", "rb") as f:
+			with open(data_path_yte, "rb") as f:
 				Yte = pickle.load(f)
 			
 	except:
@@ -94,9 +98,9 @@ def __load_data(args, device, dtype, dataset=None):
 		elif dataset == 'ecg':
 			data_loader_fnc = gen_ecg_data
 
-		data_loader_fnc(data_path_tr, params, flag='train')
-		data_loader_fnc(data_path_vl, params, flag='valid')
-		data_loader_fnc(data_path_te, params, flag='test')
+		data_loader_fnc(data_path_tr, data_path_ytr, params, flag='train')
+		data_loader_fnc(data_path_vl, data_path_yvl, params, flag='valid')
+		data_loader_fnc(data_path_te, data_path_yte, params, flag='test')
 
 		Xtr = torch.load(data_path_tr)
 		Xvl = torch.load(data_path_vl)
