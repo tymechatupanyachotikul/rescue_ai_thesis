@@ -153,7 +153,7 @@ class Dataset(data.Dataset):
 	def __getitem__(self, idx):
 		X = self.Xtr[idx]
 		y = self.Ytr[idx] if self.Ytr is not None else 0
-		return self.Xtr[idx]
+		return self.Xtr[idx], y
 	@property
 	def shape(self):
 		return self.Xtr.shape

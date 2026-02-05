@@ -6,6 +6,7 @@ from torch.distributions import kl_divergence as kl
 from model.misc import log_utils 
 from model.misc.plot_utils import plot_results
 import wandb
+from collections import defaultdict
 
 def elbo(model, X, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L):
     ''' Input:
@@ -44,7 +45,7 @@ def contrastive_loss(C):
     pos = Z[idxset0,idxset1].sum()
     return -pos
 
-def compute_mse(model, data, T_train, L=1, task=None):
+def compute_mse(model, data, y_data, T_train, L=1, task=None):
 
     T_start = 0
     T_max = 0
@@ -74,10 +75,16 @@ def compute_mse(model, data, T_train, L=1, task=None):
                 dict_misc['mse_t'] = mse_T
                 dict_misc['mse_l'] = mse_l
 
-    return dict_mse, dict_misc
+                loss_per_class = {} 
+                for cls in list(set(y_data)):
+                    idx = [i for i, val in enumerate(y_data) if val == cls]
+                    loss_per_class[cls] = torch.mean((Xrec[:, idx, :, :] - data[idx, :, :])**2).item()
 
 
-def compute_loss(model, data, L, num_observations):
+    return dict_mse, dict_misc, loss_per_class
+
+
+def compute_loss(model, data, y, L, num_observations):
     """
     Compute loss for optimization
     @param model: mo/node  
@@ -89,6 +96,11 @@ def compute_loss(model, data, L, num_observations):
 
     #run model    
     Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), C, c, m = model(data, L, T_custom=T)
+
+    loss_per_class = {} 
+    for cls in list(set(y)):
+        idx = [i for i, val in enumerate(y) if val == cls]
+        loss_per_class[cls] = torch.mean((Xrec[:, idx, :, :] - data[idx, :, :])**2).item()
 
     #compute loss
     if model.model =='sonode':
@@ -103,7 +115,7 @@ def compute_loss(model, data, L, num_observations):
         kl_z0 = kl_z0 * num_observations
         loss  = - lhood + kl_z0
         mse   = torch.mean((Xrec-data)**2)
-        return loss, -lhood, kl_z0, Xrec, ztL, mse, c, m
+        return loss, -lhood, kl_z0, Xrec, ztL, mse, c, m, loss_per_class
     
 
 def freeze_pars(par_list):
@@ -178,8 +190,8 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
         if (ep != 0) and (ep % ep_inc_c == 0):
             T_ += ep_inc_v
-
-        for itr,local_batch in enumerate(trainset):
+        loss_per_class = defaultdict(list)
+        for itr, (local_batch, local_y) in enumerate(trainset):
             tr_minibatch = local_batch.to(model.device) # N,T,...
             if args.task=='sin' or args.task=='spiral' or args.task=='lv' or 'mocap' in args.task: #slowly increase sequence length
                 [N,T] = tr_minibatch.shape[:2]
@@ -192,7 +204,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 tr_minibatch = tr_minibatch.repeat([N_,1,1])
                 tr_minibatch = torch.stack([tr_minibatch[n,t0:t0+T_] for n,t0 in enumerate(t0s)]) # N*ns,T//2,d
                 
-            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _ = compute_loss(model, tr_minibatch, L, num_observations = trainset.dataset.shape[0])
+            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _, _loss_per_class= compute_loss(model, tr_minibatch, local_y, L, num_observations = trainset.dataset.shape[0])
 
             optimizer.zero_grad()
             loss.backward() 
@@ -208,6 +220,9 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 kl_z0_meter.update(kl_z0.item(), global_itr)
             global_itr +=1
 
+            for _cls, cls_mse in _loss_per_class.items():
+                loss_per_class[_cls].append(cls_mse)
+
             time_val = datetime.now()-start_time
             run.log({
                 'train/tr_loss': loss.item(),
@@ -216,6 +231,21 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 'train/nll': nlhood.item(),
                 'train/kl_z0': kl_z0.item()
             })
+
+            break
+        
+        table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in loss_per_class.items()],
+                                columns=["class", "mse"])
+
+        run.log({
+            "train/mse_per_class": wandb.plot.bar(
+                table, 
+                "class", 
+                "mse", 
+                title="MSE per class"
+            )
+        })
+
         with torch.no_grad():
             
             dict_valid_mses = {}
@@ -223,15 +253,21 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 'mse_t': [],
                 'mse_l': []
             }
-            for valid_batch in validset:
+            val_loss_per_class = defaultdict(list)
+            for valid_batch, valid_y in validset:
                 valid_batch = valid_batch.to(model.device)
-                dict_mse, dict_misc = compute_mse(model, valid_batch, T_train)
+                dict_mse, dict_misc, _loss_per_class = compute_mse(model, valid_batch, valid_y, T_train)
                 for key,val in dict_mse.items():
                     if key not in dict_valid_mses:
                         dict_valid_mses[key] = []
                     dict_valid_mses[key].append(val.item())
+                for cls, cls_mse in _loss_per_class.items():
+                    val_loss_per_class[cls].append(cls_mse)
+
                 dict_valid_misc['mse_t'].append(dict_misc['mse_t'])
                 dict_valid_misc['mse_l'].append(dict_misc['mse_l'])
+
+                break
 
             T_rec = list(dict_valid_mses.keys())[0]
             T_for  = list(dict_valid_mses.keys())[-1]
@@ -272,6 +308,18 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                     title="MSE per Lead"
                 )
             })
+            
+            table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in val_loss_per_class.items()],
+                                columns=["class", "mse"])
+
+            run.log({
+                "val/mse_per_class": wandb.plot.bar(
+                    table, 
+                    "class", 
+                    "mse", 
+                    title="MSE per class"
+                )
+            })
 
             logger.info('Epoch:{:4d}/{:4d} | tr_loss:{:8.2f}({:8.2f}) | valid_mse T={} :{:5.3f} | valid_mse T={} :{:5.3f} '.\
                     format(ep, args.Nepoch, loss_meter.val, loss_meter.avg, T_rec, valid_mse_rec, T_for, valid_mse_for)) 
@@ -300,14 +348,18 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                     'mse_t': [],
                     'mse_l': []
                 }
+                test_loss_per_class = defaultdict(list)
                 # test_mse = {}
-                for test_batch in testset:
+                for test_batch, test_y in testset:
                     test_batch = test_batch.to(model.device)
-                    dict_mse, dict_misc = compute_mse(model, test_batch, T_train, L=1, task=args.task)
+                    dict_mse, dict_misc, _loss_per_class = compute_mse(model, test_batch, test_y, T_train, L=1, task=args.task)
                     for key,val in dict_mse.items():
                         if key not in dict_test_mses:
                             dict_test_mses[key] = []
                         dict_test_mses[key].append(val.item())
+                    for cls, cls_mse in _loss_per_class.items():
+                        test_loss_per_class[cls].append(cls_mse)
+
                     dict_test_misc['mse_t'].append(dict_misc['mse_t'])
                     dict_test_misc['mse_l'].append(dict_misc['mse_l'])
 
@@ -349,6 +401,18 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                         "lead", 
                         "mean", 
                         title="MSE per Lead"
+                    )
+                })
+
+                table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in test_loss_per_class.items()],
+                                columns=["class", "mse"])
+
+                run.log({
+                    "test/mse_per_class": wandb.plot.bar(
+                        table, 
+                        "class", 
+                        "mse", 
+                        title="MSE per class"
                     )
                 })
 
