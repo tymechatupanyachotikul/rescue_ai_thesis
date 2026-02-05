@@ -288,5 +288,5 @@ def gen_ecg_data(data_path, data_path_y, params, flag, task='ecg'):
 	plot_ecg(Xt,fname=filename + flag)
 
 	torch.save(Xt, data_path)
-	with open(data_path_y, 'wb'):
+	with open(data_path_y, 'wb') as f:
 		pickle.dump(y, f)
