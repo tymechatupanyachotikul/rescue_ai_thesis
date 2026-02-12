@@ -110,7 +110,7 @@ def build_mov_mnist_cnn_dec(n_filt, n_in):
 class VAE(nn.Module):
 
     def __init__(self, task, cnn_filt_enc=8, cnn_filt_de=8, dec_H=100, rnn_hidden=10, dec_act='relu', 
-                 ode_latent_dim=8, content_dim=0, T_in=10, device='cpu', order=1, enc_H=50, inp_dim=None):
+                 ode_latent_dim=8, content_dim=0, T_in=10, device='cpu', order=1, enc_H=50, inp_dim=None, w_dt=0):
         super(VAE, self).__init__()
 
         ### build encoder
@@ -150,7 +150,7 @@ class VAE(nn.Module):
                     self.encoder_v = IdentityEncoder()
             else:
                 self.encoder = EncoderRNN(data_dim, rnn_hidden=rnn_hidden, enc_out_dim=ode_latent_dim, out_distr='normal', H=enc_H).to(device)
-                self.decoder = Decoder(task, ode_latent_dim+content_dim, H=dec_H, distribution=lhood_distribution, dec_out_dim=data_dim, act=dec_act).to(device)
+                self.decoder = Decoder(task, ode_latent_dim+content_dim, H=dec_H, distribution=lhood_distribution, dec_out_dim=data_dim, act=dec_act, w_dt=w_dt).to(device)
                 if order==2:
                     self.encoder_v = EncoderRNN(data_dim, rnn_hidden=rnn_hidden, enc_out_dim=ode_latent_dim, out_distr='normal', H=enc_H).to(device)
                     self.prior = Normal(torch.zeros(ode_latent_dim*order).to(device), torch.ones(ode_latent_dim*order).to(device))
@@ -354,7 +354,7 @@ class IdentityDecoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, task, dec_inp_dim, n_filt=8, H=100, distribution='bernoulli', dec_out_dim=None, act='relu'):
+    def __init__(self, task, dec_inp_dim, n_filt=8, H=100, distribution='bernoulli', dec_out_dim=None, act='relu', w_dt=0):
         super(Decoder, self).__init__()
         self.distribution = distribution
         if task=='rot_mnist' or task=='rot_mnist_ou':
@@ -365,6 +365,7 @@ class Decoder(nn.Module):
             self.net = build_rot_mnist_cnn_dec(n_filt, dec_inp_dim)
         elif task=='sin' or task=='spiral' or task=='lv' or 'mocap' in task or 'ecg' in task:
             self.net = MLP(dec_inp_dim, dec_out_dim, L=2, H=H, act=act)
+            self.w_dt = w_dt
             self.out_logsig = torch.nn.Parameter(torch.zeros(dec_out_dim)*0.0)
             self.sp = nn.Softplus()
         else:
@@ -387,6 +388,7 @@ class Decoder(nn.Module):
         XL = X.repeat([L]+[1]*X.ndim) # L,N,T,nc,d,d or L,N,T,d
         assert XL.numel()==Xhat.numel()
         Xhat = Xhat.reshape(XL.shape)
+        log_p_dt = None
         if self.distribution == 'bernoulli':
             try:
                 log_p = torch.log(Xhat)*XL + torch.log(1-Xhat)*(1-XL) # L,N,T,nc,d,d
@@ -395,7 +397,14 @@ class Decoder(nn.Module):
         elif self.distribution == 'normal':
             std = self.sp(self.out_logsig)
             log_p = torch.distributions.Normal(XL,std).log_prob(Xhat)
+
+            if self.w_dt > 0:
+                XL_dt   = torch.diff(XL, dim=2, prepend=XL[:, :, :1])
+                Xhat_dt = torch.diff(Xhat, dim=2, prepend=Xhat[:, :, :1])
+
+                log_p_dt = torch.distributions.Normal(XL_dt, std).log_prob(Xhat_dt) * self.w_dt
+                
         else:
             raise ValueError('Currently only bernoulli dist implemented')
 
-        return log_p
+        return log_p, log_p_dt
