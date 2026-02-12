@@ -397,15 +397,15 @@ class Decoder(nn.Module):
                 log_p = torch.log(EPSILON+Xhat)*XL + torch.log(EPSILON+1-Xhat)*(1-XL) # L,N,T,nc,d,d
         elif self.distribution == 'normal':
             std = self.sp(self.out_logsig)
-            #std_dt = self.sp(self.out_logsig_dt)
+            std_dt = self.sp(self.out_logsig_dt)
             log_p = torch.distributions.Normal(XL,std).log_prob(Xhat)
 
             if self.w_dt > 0:
                 XL_dt   = torch.diff(XL, dim=2, prepend=XL[:, :, :1])
                 Xhat_dt = torch.diff(Xhat, dim=2, prepend=Xhat[:, :, :1])
 
-                #std_dt = torch.clamp(std_dt, min=0.05)
-                log_p_dt = torch.distributions.Normal(XL_dt, torch.ones_like(std)).log_prob(Xhat_dt) * self.w_dt
+                std_dt = torch.clamp(std_dt, min=0.2)
+                log_p_dt = torch.distributions.Normal(XL_dt, std_dt).log_prob(Xhat_dt) * self.w_dt
                 
         else:
             raise ValueError('Currently only bernoulli dist implemented')
