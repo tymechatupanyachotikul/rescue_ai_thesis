@@ -404,6 +404,7 @@ class Decoder(nn.Module):
                 XL_dt   = torch.diff(XL, dim=2, prepend=XL[:, :, :1])
                 Xhat_dt = torch.diff(Xhat, dim=2, prepend=Xhat[:, :, :1])
 
+                std_dt = torch.clamp(std_dt, min=0.05)
                 log_p_dt = torch.distributions.Normal(XL_dt, std_dt).log_prob(Xhat_dt) * self.w_dt
                 
         else:
