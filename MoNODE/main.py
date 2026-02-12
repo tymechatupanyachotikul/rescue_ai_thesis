@@ -96,6 +96,8 @@ parser.add_argument('--lr', type=float, default=0.002,
                     help="Learning rate for model training")
 parser.add_argument('--sobolev_weight', type=float, default=0,
                     help="Weight of derivative loss likelihood")
+parser.add_argument('--l_w', type=float, default=0,
+                    help="Weight of likelihood scaled on derivative")
 parser.add_argument('--seed', type=int, default=121,
                     help="Global seed for the training run")
 parser.add_argument('--continue_training', type=eval, default=False,
@@ -164,7 +166,8 @@ if __name__ == '__main__':
     if args.task == 'ecg':
         config = {
             'inp_dim': 12 - len(params[args.task]['exclude_leads']),
-            'w_dt': args.sobolev_weight
+            'w_dt': args.sobolev_weight,
+            'l_w': args.l_w,
         }
     model = build_model(args, device, dtype, **config)
     model.to(device)

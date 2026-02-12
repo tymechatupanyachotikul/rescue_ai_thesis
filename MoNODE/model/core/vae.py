@@ -110,7 +110,7 @@ def build_mov_mnist_cnn_dec(n_filt, n_in):
 class VAE(nn.Module):
 
     def __init__(self, task, cnn_filt_enc=8, cnn_filt_de=8, dec_H=100, rnn_hidden=10, dec_act='relu', 
-                 ode_latent_dim=8, content_dim=0, T_in=10, device='cpu', order=1, enc_H=50, inp_dim=None, w_dt=0):
+                 ode_latent_dim=8, content_dim=0, T_in=10, device='cpu', order=1, enc_H=50, inp_dim=None, w_dt=0, l_w=0):
         super(VAE, self).__init__()
 
         ### build encoder
@@ -150,7 +150,7 @@ class VAE(nn.Module):
                     self.encoder_v = IdentityEncoder()
             else:
                 self.encoder = EncoderRNN(data_dim, rnn_hidden=rnn_hidden, enc_out_dim=ode_latent_dim, out_distr='normal', H=enc_H).to(device)
-                self.decoder = Decoder(task, ode_latent_dim+content_dim, H=dec_H, distribution=lhood_distribution, dec_out_dim=data_dim, act=dec_act, w_dt=w_dt).to(device)
+                self.decoder = Decoder(task, ode_latent_dim+content_dim, H=dec_H, distribution=lhood_distribution, dec_out_dim=data_dim, act=dec_act, w_dt=w_dt, l_w=l_w).to(device)
                 if order==2:
                     self.encoder_v = EncoderRNN(data_dim, rnn_hidden=rnn_hidden, enc_out_dim=ode_latent_dim, out_distr='normal', H=enc_H).to(device)
                     self.prior = Normal(torch.zeros(ode_latent_dim*order).to(device), torch.ones(ode_latent_dim*order).to(device))
@@ -354,7 +354,7 @@ class IdentityDecoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, task, dec_inp_dim, n_filt=8, H=100, distribution='bernoulli', dec_out_dim=None, act='relu', w_dt=0):
+    def __init__(self, task, dec_inp_dim, n_filt=8, H=100, distribution='bernoulli', dec_out_dim=None, act='relu', w_dt=0, l_w=0):
         super(Decoder, self).__init__()
         self.distribution = distribution
         if task=='rot_mnist' or task=='rot_mnist_ou':
@@ -366,6 +366,7 @@ class Decoder(nn.Module):
         elif task=='sin' or task=='spiral' or task=='lv' or 'mocap' in task or 'ecg' in task:
             self.net = MLP(dec_inp_dim, dec_out_dim, L=2, H=H, act=act)
             self.w_dt = w_dt
+            self.l_w = l_w
             self.out_logsig = torch.nn.Parameter(torch.zeros(dec_out_dim)*0.0)
             self.out_logsig_dt = torch.nn.Parameter(torch.zeros(dec_out_dim)*0.0)
             self.sp = nn.Softplus()
@@ -400,7 +401,7 @@ class Decoder(nn.Module):
             std_dt = self.sp(self.out_logsig_dt)
             log_p = torch.distributions.Normal(XL,std).log_prob(Xhat)
             XL_dt   = torch.diff(XL, dim=2, prepend=XL[:, :, :1])
-            w = 1.0 + 5 * torch.abs(XL_dt)
+            w = 1.0 + self.l_w * torch.abs(XL_dt)
             log_p = log_p * w
 
             if self.w_dt > 0:
