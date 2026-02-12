@@ -367,6 +367,7 @@ class Decoder(nn.Module):
             self.net = MLP(dec_inp_dim, dec_out_dim, L=2, H=H, act=act)
             self.w_dt = w_dt
             self.out_logsig = torch.nn.Parameter(torch.zeros(dec_out_dim)*0.0)
+            self.out_logsig_dt = torch.nn.Parameter(torch.zeros(dec_out_dim)*0.0)
             self.sp = nn.Softplus()
         else:
             raise ValueError('Unknown task {task}')
@@ -396,13 +397,14 @@ class Decoder(nn.Module):
                 log_p = torch.log(EPSILON+Xhat)*XL + torch.log(EPSILON+1-Xhat)*(1-XL) # L,N,T,nc,d,d
         elif self.distribution == 'normal':
             std = self.sp(self.out_logsig)
+            std_dt = self.sp(self.out_logsig_dt)
             log_p = torch.distributions.Normal(XL,std).log_prob(Xhat)
 
             if self.w_dt > 0:
                 XL_dt   = torch.diff(XL, dim=2, prepend=XL[:, :, :1])
                 Xhat_dt = torch.diff(Xhat, dim=2, prepend=Xhat[:, :, :1])
 
-                log_p_dt = torch.distributions.Normal(XL_dt, std).log_prob(Xhat_dt) * self.w_dt
+                log_p_dt = torch.distributions.Normal(XL_dt, std_dt).log_prob(Xhat_dt) * self.w_dt
                 
         else:
             raise ValueError('Currently only bernoulli dist implemented')
