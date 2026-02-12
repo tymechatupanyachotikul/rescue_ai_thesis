@@ -400,9 +400,9 @@ class Decoder(nn.Module):
             std_dt = self.sp(self.out_logsig_dt)
             log_p = torch.distributions.Normal(XL,std).log_prob(Xhat)
             XL_dt   = torch.diff(XL, dim=2, prepend=XL[:, :, :1])
-            w = 1.0 + 10.0 * torch.abs(XL_dt)
+            w = 1.0 + 5 * torch.abs(XL_dt)
             log_p = log_p * w
-            
+
             if self.w_dt > 0:
                 Xhat_dt = torch.diff(Xhat, dim=2, prepend=Xhat[:, :, :1])
 
