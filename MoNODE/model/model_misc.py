@@ -26,7 +26,7 @@ def elbo(model, X, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L):
     lhood, lhood_v = model.vae.decoder.log_prob(X,Xrec,L) #L,N,T,d,nc,nc
     idx   = list(np.arange(X.ndim+1)) # 0,1,2,...
     lhood = lhood.sum(idx[2:]).mean(0) #N
-    lhood_v = lhood_v.sum(idx[2:]).mean(0) if lhood_v is not None else np.zeros_like(lhood)
+    lhood_v = lhood_v.sum(idx[2:]).mean(0) if lhood_v is not None else torch.zeros_like(lhood)
 
     return lhood.mean(), lhood_v.mean(), kl_z0.mean() 
 
