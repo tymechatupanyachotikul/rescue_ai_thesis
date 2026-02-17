@@ -118,15 +118,9 @@ class LVEF_12lead_reg_Dataset(Dataset):
         hash_file_name = str(self.labels_df.iloc[idx, 1])
         labels = self.labels_df.iloc[idx, -2]
         labels = torch.tensor([labels], dtype=torch.float32)  # Wrap the label in a list to create an extra dimension
-        data = [wfdb.rdsamp(self.ecg_path + hash_file_name)]
-        data = np.array([signal for signal, meta in data])
-        data = np.nan_to_num(data, nan=0)
-        data = data.squeeze(0)
-        data = np.transpose(data, (1, 0))
-        data = data[self.lead_indices, :]
-        data = filter_bandpass(data, 500) 
-        signal = self.z_score_normalization(data)
-        signal = torch.FloatTensor(signal)
+        
+        signal = torch.load(self.ecg_path + hash_file_name + '.pt', weights_only=True)
+        signal = signal[self.lead_indices, :]
 
         return signal, labels     
 
