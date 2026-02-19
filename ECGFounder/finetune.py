@@ -16,11 +16,19 @@ from sklearn.model_selection import train_test_split
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from dataset import LVEF_12lead_cls_Dataset, LVEF_12lead_reg_Dataset, LVEF_1lead_cls_Dataset, LVEF_1lead_reg_Dataset
+import argparse 
+import wandb
 
 def main(args):
-    num_lead = 12 # 12-lead ECG or 1-lead ECG 
 
-    gpu_id = 4
+    run = wandb.init(
+        entity="tymechatu-university-of-amsterdam",
+        project="rescue_ai_ecg_founder",
+        config=vars(args),
+    )
+
+    num_lead = args.num_lead # 12-lead ECG or 1-lead ECG 
+    gpu_id = args.gpu_id
     batch_size = args.batch_size
     lr = args.lr
     weight_decay = args.weight_decay
@@ -30,6 +38,7 @@ def main(args):
     ecg_path = args.data_root
     tasks = ['class']
     saved_dir = args.save_dir
+    linear_prob = args.linear_prob
     num_workers = args.num_workers
 
     device = torch.device('cuda:{}'.format(gpu_id) if torch.cuda.is_available() else 'cpu')
@@ -39,16 +48,16 @@ def main(args):
     if num_lead == 12:
         ECGdataset = LVEF_12lead_reg_Dataset()
         pth = './checkpoint/12_lead_ECGFounder.pth'
-        model = ft_12lead_ECGFounder(device, pth, n_classes,linear_prob=False)
+        model = ft_12lead_ECGFounder(device, pth, n_classes,linear_prob=linear_prob)
     elif num_lead == 1:
         ECGdataset = LVEF_1lead_reg_Dataset()
         pth = './checkpoint/1_lead_ECGFounder.pth'
-        model = ft_1lead_ECGFounder(device, pth, n_classes,linear_prob=False)
+        model = ft_1lead_ECGFounder(device, pth, n_classes,linear_prob=linear_prob)
 
     df_label = pd.read_csv(df_label_path)
     # Splitting the dataset into train, validation, and test sets
 
-    train_df, test_df = train_test_split(df_label, test_size=0.2, shuffle=False)
+    train_df, test_df = train_test_split(df_label, test_size=0.2, shuffle=True)
     val_df, test_df = train_test_split(test_df, test_size=0.5, shuffle=False)
 
     train_dataset = ECGdataset(ecg_path= ecg_path,labels_df=train_df)
@@ -57,13 +66,13 @@ def main(args):
 
     # Example DataLoader usage
     trainloader = DataLoader(train_dataset, batch_size=batch_size,num_workers=num_workers, shuffle=True)
-    valloader = DataLoader(test_dataset, batch_size=batch_size,num_workers=num_workers, shuffle=False)
+    valloader = DataLoader(val_dataset, batch_size=batch_size,num_workers=num_workers, shuffle=False)
     testloader = DataLoader(test_dataset, batch_size=batch_size,num_workers=num_workers, shuffle=False)
 
     criterion = nn.MSELoss()
 
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.1, mode='max', verbose=True)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.1, mode='min', verbose=True)
 
     ### train model
     best_mae = 100.
@@ -84,6 +93,9 @@ def main(args):
             optimizer.step()
             step += 1
 
+            run.log({
+                'train/tr_loss': loss.item(),
+            })
             if step % eval_steps == 0:
 
                 # val
@@ -101,11 +113,13 @@ def main(args):
                 all_gt = np.concatenate(all_gt)
                 all_gt = np.array(all_gt)
                 val_mae = np.mean(np.abs(all_pred_prob - all_gt))
-                rmse = np.sqrt(np.mean((all_pred_prob - all_gt) ** 2))
+                val_rmse = np.sqrt(np.mean((all_pred_prob - all_gt) ** 2))
 
                 print(f'MAE: {val_mae}')
-                print(f'RMSE: {rmse}')
-
+                print(f'RMSE: {val_rmse}')
+                run.log({
+                    'val/RMSE': val_rmse.item(),
+                })
                 # test
                 model.eval()
                 prog_iter_test = tqdm(testloader, desc="Testing", leave=False)
@@ -122,7 +136,7 @@ def main(args):
                 all_gt = np.concatenate(all_gt)
                 all_gt = np.array(all_gt)
                 mae = np.mean(np.abs(all_pred_prob - all_gt))
-                rmse = np.sqrt(np.mean((all_pred_prob - all_gt) ** 2))
+                test_rmse = np.sqrt(np.mean((all_pred_prob - all_gt) ** 2))
 
                 ### save model and res
                 is_best = bool(val_mae < best_mae)
@@ -141,13 +155,54 @@ def main(args):
 
                 columns = ['mae', 'rmse']
                 
-                all_res.append([mae, rmse])
+                all_res.append([mae, test_rmse])
                 df = pd.DataFrame(all_res, columns=columns)
 
                 df.to_csv(os.path.join(saved_dir, f'res_reg.csv'), index=False, float_format='%.5f')
-                
-                scheduler.step(rmse)
+                run.log({
+                    'test/test_rmse': test_rmse.item(),
+                })
+                scheduler.step(val_rmse)
                 ### early stop
                 current_lr = optimizer.param_groups[0]['lr']
                     
                 model.train() # set back to train
+
+def get_args():
+    parser = argparse.ArgumentParser(description="ECG LVEF Finetune Model Training")
+
+    # --- Hardware & System Arguments ---
+    parser.add_argument('--gpu_id', type=int, default=0, 
+                        help='Which GPU ID to use (default: 0)')
+    parser.add_argument('--num_workers', type=int, default=4, 
+                        help='Number of data loading workers (default: 4)')
+
+    # --- Dataset & Paths ---
+    parser.add_argument('--num_lead', type=int, default=12, choices=[1, 12],
+                        help='Number of ECG leads: 1 or 12 (default: 12)')
+    parser.add_argument('--data_root', type=str, required=True, 
+                        help='Path to the directory containing ECG data')
+    parser.add_argument('--label_path', type=str, default='./csv/LVEF.csv', required=True, 
+                        help='Path to the CSV file containing labels')
+    parser.add_argument('--save_dir', type=str, default='./checkpoints/', 
+                        help='Directory to save model checkpoints')
+
+    # --- Training Hyperparameters ---
+    parser.add_argument('--epoch', type=int, default=5, 
+                        help='Number of total epochs to run (default: 50)')
+    parser.add_argument('--batch_size', type=int, default=512, 
+                        help='Batch size for training and testing (default: 32)')
+    parser.add_argument('--lr', type=float, default=1e-4, 
+                        help='Initial learning rate (default: 0.001)')
+    parser.add_argument('--weight_decay', type=float, default=1e-5, 
+                        help='Weight decay/L2 regularization (default: 0.0001)')
+    parser.add_argument('--early_stop_lr', type=float, default=1e-5, 
+                        help='Minimum learning rate for early stopping (default: 1e-6)')
+    parser.add_argument('--linear_prob', action='store_true', help='Linear probing')
+
+    return parser.parse_args()
+
+if __name__ == "__main__":
+    args = get_args()
+
+    main(args)
