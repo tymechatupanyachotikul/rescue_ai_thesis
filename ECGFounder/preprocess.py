@@ -11,6 +11,7 @@ from functools import partial
 from tqdm import tqdm
 import os 
 import neurokit2 as nk
+import re 
 
 def get_stats(label_path):
     df = pd.read_csv(label_path)
@@ -51,7 +52,7 @@ def get_stats(label_path):
     plt.grid()
     plt.show()
 
-def preprocess_single_record(file_info):
+def preprocess_single_record(file_info, save_dir):
     filename, data_dir = file_info
     data_quality = defaultdict(int)
 
@@ -78,7 +79,14 @@ def preprocess_single_record(file_info):
         data = filter_bandpass(data, 500) 
         signal = (data - np.mean(data)) / (np.std(data) +1e-8)
 
-        torch.save(torch.FloatTensor(signal), wave_path + '.pt')
+        subject_id = re.search(r"/(p\d{8})/", wave_path).group(1)
+        recording_id = wave_path.split('/')[-1]
+
+        subject_dir = os.path.join(save_dir, subject_id)
+        if not os.path.exists(subject_dir):
+            os.makedirs(subject_dir)
+
+        torch.save(torch.FloatTensor(signal), os.path.join(save_dir, subject_id, recording_id + '.pt'))
 
         return True, (filename, quality)
     
@@ -88,12 +96,14 @@ def preprocess_single_record(file_info):
 def main(args):
     
     label_df = pd.read_csv(args.label_path)
-    files = [[(row.waveform_path, args.data_dir) for row in label_df.itertuples()][0]]
+    files = [(row.waveform_path, args.data_dir) for row in label_df.itertuples()]
     num_workers = max(1, cpu_count() - 2)
+
+    func = partial(preprocess_single_record, save_dir=args.save_dir)
 
     print(f'Starting processing with {num_workers} workers')
     with Pool(num_workers) as pool:
-        results = list(tqdm(pool.imap_unordered(preprocess_single_record, files), total=len(files)))
+        results = list(tqdm(pool.imap_unordered(func, files), total=len(files)))
     errors = [] 
     label_df['quality'] = None
     quality_map = {}
@@ -120,6 +130,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess MIMIC Dataset")
     
     parser.add_argument("--data_dir", type=str, default="../mimic")
+    parser.add_argument("--save_dir", type=str, default="../mimic_lvef")
     parser.add_argument("--label_path", type=str, default="./csv/LVEF.csv")
 
     args = parser.parse_args()
