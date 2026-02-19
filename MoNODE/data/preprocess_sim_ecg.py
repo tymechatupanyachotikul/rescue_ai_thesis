@@ -16,6 +16,11 @@ def save_ecg(file_path, save_path, target_hz=500, default_hz=500, time=10, segme
     x = df.to_numpy()
 
     if segment_qrs:
+        mu = np.mean(x, axis=1, keepdims=True)
+        sigma = np.std(x, axis=1, keepdims=True)
+
+        x = (x - mu) / (sigma + 1e-8)
+        
         window = int(round(time/2 * (target_hz/1000)))
 
         signals, info = nk.ecg_process(x[1, :], sampling_rate=1000) # use lead 2 as reference lead
@@ -26,6 +31,7 @@ def save_ecg(file_path, save_path, target_hz=500, default_hz=500, time=10, segme
             save_paths = save_path.split('/')
             save_paths[-1] = str(idx) + '_' + save_paths[-1]
             cur_save_path = '/'.join(save_paths)
+
             np.save(cur_save_path, x[:, interval[0]: interval[1]].astype(np.float32))
     else:
         x = signal.resample_poly(x, up=target_hz, down=default_hz, axis=1)
