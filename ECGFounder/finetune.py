@@ -162,6 +162,12 @@ def main(args):
                 run.log({
                     'test/test_rmse': test_rmse.item(),
                 })
+
+                results_df = pd.DataFrame({
+                    'GT': all_gt.flatten(),
+                    'Predicted': all_pred_prob.flatten(),
+                })
+                results_df.to_csv(os.path.join(saved_dir, f'pred_gt_reg.csv'), index=False)
                 scheduler.step(val_rmse)
                 ### early stop
                 current_lr = optimizer.param_groups[0]['lr']
