@@ -16,12 +16,12 @@ def save_ecg(file_path, save_path, target_hz=500, default_hz=500, time=10, segme
     x = df.to_numpy()
 
     if segment_qrs:
-        window = int(round(time/2))
+        window = int(round(time/2 * (target_hz/1000)))
 
         signals, info = nk.ecg_process(x[1, :], sampling_rate=1000) # use lead 2 as reference lead
         rpeaks = info["ECG_R_Peaks"]
 
-        intervals = [(max(0, peak - window), min(x.shape[1], peak + window)) for peak in rpeaks]
+        intervals = [(int(round(max(0, peak - window))), int(round(min(x.shape[1], peak + window)))) for peak in rpeaks]
         for idx, interval in enumerate(random.sample(intervals, 3)):
             save_paths = save_path.split('/')
             save_paths[-1] = str(idx) + '_' + save_paths[-1]
@@ -110,7 +110,7 @@ def main(args):
     save_dir = os.path.join(root_dir, dir_path)
     os.makedirs(os.path.dirname(save_dir), exist_ok=True)
 
-    dataset_dir = 'WP2_largeDataset_Noise'
+    dataset_dir = ''
 
     print('Starting preprocessing')
     target_dir = os.path.join(root_dir, dataset_dir)
