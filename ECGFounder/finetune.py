@@ -188,7 +188,7 @@ def get_args():
                         help='Number of ECG leads: 1 or 12 (default: 12)')
     parser.add_argument('--data_root', type=str, required=True, 
                         help='Path to the directory containing ECG data')
-    parser.add_argument('--label_path', type=str, default='./csv/LVEF.csv', required=True, 
+    parser.add_argument('--label_path', type=str, default='./csv/LVEF.csv', 
                         help='Path to the CSV file containing labels')
     parser.add_argument('--save_dir', type=str, default='./checkpoints/', 
                         help='Directory to save model checkpoints')
