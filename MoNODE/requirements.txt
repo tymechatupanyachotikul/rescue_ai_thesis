@@ -1,7 +1,9 @@
-torchdiffeq==0.2.3
+torch==2.1.1
+torchvision==0.25.0
 torchsummary==1.5.1
 pyyaml==6.0
 einops==0.6.0
-torchvision==0.25.0
 matplotlib==3.10.8
 torchdiffeq==1.0.1
+neurokit2
+wandb
