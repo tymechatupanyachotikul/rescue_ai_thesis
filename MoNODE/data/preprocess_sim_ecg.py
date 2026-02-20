@@ -36,6 +36,7 @@ def save_ecg(file_path, save_path, target_hz=500, default_hz=500, time=10, segme
                 np.save(cur_save_path, x[:, interval[0]: interval[1]].astype(np.float32))
         except Exception as e: 
             print(f'Failed to process {file_path} \n Error : {e}')
+            return False
     else:
         x = signal.resample_poly(x, up=target_hz, down=default_hz, axis=1)
         x = x[:, :int(time * target_hz)]
@@ -47,6 +48,8 @@ def save_ecg(file_path, save_path, target_hz=500, default_hz=500, time=10, segme
         x = (x - mu) / (sigma + 1e-8)
 
         np.save(save_path, x.astype(np.float32))
+
+    return True
 
 
 def save_params(v_param_path, a_param_path, save_target):
@@ -80,6 +83,7 @@ def process_split(cur_dir, split, cur_save_dir, ecg_type, target_hz, time, segme
     param_dir = 'WP2_largeDataset_ParameterFiles'
 
     num_samples = 0
+    total_samples = 0
 
     for run_dir in os.listdir(cur_dir):
         cur_run_dir = os.path.join(cur_dir, run_dir)
@@ -88,17 +92,19 @@ def process_split(cur_dir, split, cur_save_dir, ecg_type, target_hz, time, segme
                 if ecg_file.endswith(f'{ecg_type}.csv'):
                     _id = ecg_file.split('_')[0]
                     filename = f'{_id}_{run_dir}_preprocessed.npy'
-                    save_ecg(os.path.join(cur_run_dir, ecg_file), os.path.join(cur_save_dir, filename), target_hz=target_hz, time=time, segment_qrs=segment_qrs)
+                    complete = save_ecg(os.path.join(cur_run_dir, ecg_file), os.path.join(cur_save_dir, filename), target_hz=target_hz, time=time, segment_qrs=segment_qrs)
 
-                    param_dir = cur_run_dir.replace('Noise', 'ParameterFiles')
-                    param_a_file = os.path.join(param_dir, f'{_id}_AtrialParameters.txt')
-                    param_v_file = os.path.join(param_dir, f'{_id}_VentricularParameters.txt')
+                    if complete:
+                        param_dir = cur_run_dir.replace('Noise', 'ParameterFiles')
+                        param_a_file = os.path.join(param_dir, f'{_id}_AtrialParameters.txt')
+                        param_v_file = os.path.join(param_dir, f'{_id}_VentricularParameters.txt')
 
-                    params_filename = f'{_id}_{run_dir}_params.json'
-                    save_params(param_v_file, param_a_file, os.path.join(cur_save_dir, params_filename))
+                        params_filename = f'{_id}_{run_dir}_params.json'
+                        save_params(param_v_file, param_a_file, os.path.join(cur_save_dir, params_filename))
 
-                    num_samples += 1 
-    print(f'Found {num_samples} samples in {split} set')
+                        num_samples += 1 
+                    total_samples += 1
+    print(f'Found {num_samples}/{total_samples} samples in {split} set')
 
 
 def main(args):
