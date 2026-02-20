@@ -83,8 +83,7 @@ def preprocess_single_record(file_info, save_dir):
         recording_id = wave_path.split('/')[-1]
 
         subject_dir = os.path.join(save_dir, subject_id)
-        if not os.path.exists(subject_dir):
-            os.makedirs(subject_dir)
+        os.makedirs(subject_dir, exist_ok=True)
 
         torch.save(torch.FloatTensor(signal), os.path.join(save_dir, subject_id, recording_id + '.pt'))
 
@@ -96,7 +95,19 @@ def preprocess_single_record(file_info, save_dir):
 def main(args):
     
     label_df = pd.read_csv(args.label_path)
-    files = [(row.waveform_path, args.data_dir) for row in label_df.itertuples()]
+    files = []
+    n_files = 0
+    for row in label_df.itertuples():
+        subject_id = re.search(r"/(p\d{8})/", row.waveform_path).group(1)
+        recording_id = row.waveform_path.split('/')[-1]
+
+        if os.path.exists(os.path.join(args.save_dir, subject_id, recording_id + '.pt')):
+            continue 
+
+        files.append((row.waveform_path, args.data_dir))
+        n_files += 1 
+
+    print(f'Found {n_files} to process')
     num_workers = max(1, cpu_count() - 2)
 
     func = partial(preprocess_single_record, save_dir=args.save_dir)
