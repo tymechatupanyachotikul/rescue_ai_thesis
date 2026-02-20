@@ -23,16 +23,19 @@ def save_ecg(file_path, save_path, target_hz=500, default_hz=500, time=10, segme
         
         window = int(round(time/2 * (target_hz/1000)))
 
-        signals, info = nk.ecg_process(x[1, :], sampling_rate=1000) # use lead 2 as reference lead
-        rpeaks = info["ECG_R_Peaks"]
+        try:
+            signals, info = nk.ecg_process(x[1, :], sampling_rate=1000) # use lead 2 as reference lead
+            rpeaks = info["ECG_R_Peaks"]
 
-        intervals = [(int(round(max(0, peak - window))), int(round(min(x.shape[1], peak + window)))) for peak in rpeaks]
-        for idx, interval in enumerate(random.sample(intervals, 3)):
-            save_paths = save_path.split('/')
-            save_paths[-1] = str(idx) + '_' + save_paths[-1]
-            cur_save_path = '/'.join(save_paths)
+            intervals = [(int(round(max(0, peak - window))), int(round(min(x.shape[1], peak + window)))) for peak in rpeaks]
+            for idx, interval in enumerate(random.sample(intervals, 3)):
+                save_paths = save_path.split('/')
+                save_paths[-1] = str(idx) + '_' + save_paths[-1]
+                cur_save_path = '/'.join(save_paths)
 
-            np.save(cur_save_path, x[:, interval[0]: interval[1]].astype(np.float32))
+                np.save(cur_save_path, x[:, interval[0]: interval[1]].astype(np.float32))
+        except Exception as e: 
+            print(f'Failed to process {file_path} \n Error : {e}')
     else:
         x = signal.resample_poly(x, up=target_hz, down=default_hz, axis=1)
         x = x[:, :int(time * target_hz)]
