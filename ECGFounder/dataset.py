@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 import wfdb
+import re
+import os
 from scipy import signal
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -119,7 +121,10 @@ class LVEF_12lead_reg_Dataset(Dataset):
         labels = self.labels_df.iloc[idx, -2]
         labels = torch.tensor([labels], dtype=torch.float32)  # Wrap the label in a list to create an extra dimension
         
-        signal = torch.load(self.ecg_path + hash_file_name + '.pt', weights_only=True)
+        recording_id = hash_file_name.split('/')[-1]
+        subject_id = re.search(r"/(p\d{8})/", hash_file_name).group(1)
+        
+        signal = torch.load(os.path.join(self.ecg_path, subject_id, recording_id + '.pt'), weights_only=True)
         signal = signal[self.lead_indices, :]
 
         return signal, labels     
