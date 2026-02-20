@@ -119,6 +119,7 @@ def main(args):
                 print(f'RMSE: {val_rmse}')
                 run.log({
                     'val/RMSE': val_rmse.item(),
+                    'val/MAE': val_mae.item(),
                 })
                 # test
                 model.eval()
@@ -161,6 +162,7 @@ def main(args):
                 df.to_csv(os.path.join(saved_dir, f'res_reg.csv'), index=False, float_format='%.5f')
                 run.log({
                     'test/test_rmse': test_rmse.item(),
+                    'test/test_mae': mae.item(),
                 })
 
                 results_df = pd.DataFrame({
