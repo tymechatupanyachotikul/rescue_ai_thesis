@@ -118,7 +118,7 @@ class LVEF_12lead_reg_Dataset(Dataset):
             idx = idx.tolist()
         
         hash_file_name = str(self.labels_df.iloc[idx, 1])
-        labels = self.labels_df.iloc[idx, -2]
+        labels = self.labels_df.iloc[idx, -3]
         labels = torch.tensor([labels], dtype=torch.float32)  # Wrap the label in a list to create an extra dimension
         
         recording_id = hash_file_name.split('/')[-1]
