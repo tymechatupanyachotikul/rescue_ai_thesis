@@ -46,11 +46,11 @@ def main(args):
     n_classes = len(tasks)
 
     if num_lead == 12:
-        ECGdataset = LVEF_12lead_reg_Dataset()
+        ECGdataset = LVEF_12lead_reg_Dataset
         pth = './checkpoint/12_lead_ECGFounder.pth'
         model = ft_12lead_ECGFounder(device, pth, n_classes,linear_prob=linear_prob)
     elif num_lead == 1:
-        ECGdataset = LVEF_1lead_reg_Dataset()
+        ECGdataset = LVEF_1lead_reg_Dataset
         pth = './checkpoint/1_lead_ECGFounder.pth'
         model = ft_1lead_ECGFounder(device, pth, n_classes,linear_prob=linear_prob)
 
