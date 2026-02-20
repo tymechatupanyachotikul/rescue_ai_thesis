@@ -116,7 +116,7 @@ def main(args):
     save_dir = os.path.join(root_dir, dir_path)
     os.makedirs(os.path.dirname(save_dir), exist_ok=True)
 
-    dataset_dir = ''
+    dataset_dir = 'WP2_largeDataset_Noise'
 
     print('Starting preprocessing')
     target_dir = os.path.join(root_dir, dataset_dir)
