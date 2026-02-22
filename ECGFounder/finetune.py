@@ -84,6 +84,8 @@ def main(args):
     eval_steps = total_steps_per_epoch
 
     for epoch in range(Epochs):
+        training_loss = 0
+        train_mae = 0
         for batch in tqdm(trainloader,desc='Training'):
             input_x, input_y = tuple(t.to(device) for t in batch)
             outputs = model(input_x)
@@ -93,6 +95,8 @@ def main(args):
             optimizer.step()
             step += 1
 
+            training_loss += loss.item()
+            train_mae += np.mean(np.abs(outputs.cpu().data.numpy() - input_y.cpu().data.numpy()))
             run.log({
                 'train/tr_loss': loss.item(),
             })
@@ -175,7 +179,10 @@ def main(args):
                 current_lr = optimizer.param_groups[0]['lr']
                     
                 model.train() # set back to train
-
+        run.log({
+                'train/loss_per_epoch': training_loss / len(trainloader),
+                'train/mae_per_epoch': train_mae / len(trainloader),
+            })
 def get_args():
     parser = argparse.ArgumentParser(description="ECG LVEF Finetune Model Training")
 
