@@ -4,21 +4,21 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 import torch
 import numpy as np
 import umap
-#import seaborn as sns
-#import matplotlib.pyplot as plt
+# import seaborn as sns
+# import matplotlib.pyplot as plt
 
 def save_umap_reduction(splits, save_dir):
     embeddings = []
     labels = []
-    splits = []
+    splits_out = []
     for split in splits:
         embeddings.append(torch.load(os.path.join(save_dir, f'{split}_embeddings.pt')).cpu().numpy())
         labels.append(torch.load(os.path.join(save_dir, f'{split}_labels.pt')).cpu().numpy())
-        splits.append(np.array([split] * len(labels[-1])))
+        splits_out.append(np.array([split] * len(labels[-1])))
 
     embeddings = np.concatenate(embeddings, axis=0)
     labels = np.concatenate(labels, axis=0)
-    splits = np.concatenate(splits, axis=0)
+    splits_out = np.concatenate(splits_out, axis=0)
 
     reducer = umap.UMAP(
         n_neighbors=30,
@@ -37,7 +37,7 @@ def save_umap_reduction(splits, save_dir):
         os.path.join(save_dir, f'{"_".join(splits)}_embeddings.npz'), 
         embeddings=embedding_2d, 
         labels=labels,
-        splits=splits
+        splits=splits_out
     )
     print('Saved UMAP embeddings')
 
@@ -46,6 +46,7 @@ def save_umap_reduction(splits, save_dir):
 
 #     embedding_2d = data['embeddings']
 #     labels = data['labels']
+#     splits = data['splits']
 
 #     print(f"Loaded {embedding_2d.shape[0]} samples.")
 
@@ -77,11 +78,41 @@ def save_umap_reduction(splits, save_dir):
 
 #     plt.show()
 
+# def plot_split_umap(file_path):
+#     data = np.load(file_path)
+
+#     embedding_2d = data['embeddings']
+#     splits = data['splits']
+
+#     plt.figure(figsize=(10, 8))
+    
+#     colors = sns.color_palette("Set1", n_colors=2)
+    
+#     for i, category in enumerate(['train', 'test']):
+#         mask = (splits == category)
+#         plt.scatter(
+#             embedding_2d[mask, 0], 
+#             embedding_2d[mask, 1], 
+#             c=[colors[i]], 
+#             label=category,
+#             s=12, 
+#             alpha=0.6,
+#             edgecolors='none'
+#         )
+
+#     plt.xlabel('UMAP 1')
+#     plt.ylabel('UMAP 2')
+    
+#     plt.legend(markerscale=2, frameon=True)
+    
+#     sns.despine()
+#     plt.show()
+
 directories = ['linear_probe_ft', 'full_ft']
 for directory in directories:
     print(f'Processing directory: {directory}')
 
-    split = ['test', 'train']
+    #save_dir = f'/Users/tyme/Desktop/University/Thesis/rescue_ai/results/LVEF/embeddings/{directory}'
     save_dir = f'/home/tchatupanyacho/rescue_ai_thesis/results/LVEF/embeddings/{directory}'
-    save_umap_reduction(split, save_dir)
+    save_umap_reduction(['test', 'train'], save_dir)
             
