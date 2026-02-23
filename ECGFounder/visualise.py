@@ -5,8 +5,6 @@ import torch
 import numpy as np
 import umap
 
-
-
 def save_umap_reduction(splits, save_dir):
     embeddings = []
     labels = []
@@ -42,5 +40,5 @@ for directory in directories:
     print(f'Processing directory: {directory}')
     for split in ['test', 'train', 'val']:
         print(f'Processing split: {split}')
-        save_dir = f'/home/tchatupanyacho/rescue_ai_thesis/results/LVEF/embeddings{directory}'
+        save_dir = f'/home/tchatupanyacho/rescue_ai_thesis/results/LVEF/embeddings/{directory}'
         save_umap_reduction([split], save_dir)
