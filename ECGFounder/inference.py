@@ -47,10 +47,10 @@ def main(args):
 
     if num_lead == 12:
         ECGdataset = LVEF_12lead_reg_Dataset
-        model = ft_12lead_ECGFounder(device, checkpoint_path, n_classes,linear_prob=linear_prob)
+        model = ft_12lead_ECGFounder(device, checkpoint_path, n_classes)
     elif num_lead == 1:
         ECGdataset = LVEF_1lead_reg_Dataset
-        model = ft_1lead_ECGFounder(device, checkpoint_path, n_classes,linear_prob=linear_prob)
+        model = ft_1lead_ECGFounder(device, checkpoint_path, n_classes)
 
     model.dense = nn.Identity() # remove last layer to get embeddings
     model.eval()
@@ -80,6 +80,7 @@ def main(args):
                 y_true.append(input_y.cpu().detach())
             y_true = torch.cat(y_true, dim=0)
             split_out = torch.cat(split_out, dim=0)
+            
             torch.save(split_out, os.path.join(save_dir, f'{split}_embeddings.pt'))
             torch.save(y_true, os.path.join(save_dir, f'{split}_labels.pt'))
 
