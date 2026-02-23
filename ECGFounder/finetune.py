@@ -18,6 +18,32 @@ from torch.utils.data import Dataset, DataLoader
 from dataset import LVEF_12lead_cls_Dataset, LVEF_12lead_reg_Dataset, LVEF_1lead_cls_Dataset, LVEF_1lead_reg_Dataset
 import argparse 
 import wandb
+import random 
+from datetime import datetime 
+
+def set_seed(seed):
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+def save_split(train_df, val_df, test_df, save_dir):
+    splits = {
+        "train": train_df,
+        "test": test_df,
+        "val": val_df
+    }
+    
+    for split_name, df in splits.items():
+        splits[split_name] = df['waveform_path'].tolist()
+    
+    save_path = os.path.join(save_dir, 'data_splits.json')
+    with open(save_path, "w", encoding="utf-8") as f:
+        json.dump(splits, f, indent=4)
 
 def main(args):
 
@@ -27,6 +53,7 @@ def main(args):
         config=vars(args),
     )
 
+    set_seed(args.seed)
     num_lead = args.num_lead # 12-lead ECG or 1-lead ECG 
     gpu_id = args.gpu_id
     batch_size = args.batch_size
@@ -40,6 +67,10 @@ def main(args):
     saved_dir = args.save_dir
     linear_prob = args.linear_prob
     num_workers = args.num_workers
+
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_dir = os.path.join(saved_dir, run_id)
+    os.makedirs(save_dir, exist_ok=True)
 
     device = torch.device('cuda:{}'.format(gpu_id) if torch.cuda.is_available() else 'cpu')
 
@@ -57,8 +88,9 @@ def main(args):
     df_label = pd.read_csv(df_label_path)
     # Splitting the dataset into train, validation, and test sets
 
-    train_df, test_df = train_test_split(df_label, test_size=0.2, shuffle=True)
-    val_df, test_df = train_test_split(test_df, test_size=0.5, shuffle=False)
+    train_df, test_df = train_test_split(df_label, test_size=0.2, shuffle=True, random_state=args.seed)
+    val_df, test_df = train_test_split(test_df, test_size=0.5, shuffle=False, random_state=args.seed)
+    save_split(train_df, val_df, test_df, save_dir)
 
     train_dataset = ECGdataset(ecg_path= ecg_path,labels_df=train_df)
     val_dataset = ECGdataset(ecg_path= ecg_path,labels_df=val_df)
@@ -155,34 +187,31 @@ def main(args):
                         'optimizer': optimizer.state_dict(),
                         'scheduler': scheduler.state_dict(),
                         'mae': val_mae,
-                    }, saved_dir)
+                    }, save_dir)
+
+                    results_df = pd.DataFrame({
+                        'GT': all_gt.flatten(),
+                        'Predicted': all_pred_prob.flatten(),
+                        })
+                    results_df.to_csv(os.path.join(save_dir, f'pred_gt_reg.csv'), index=False)
+
                 current_lr = optimizer.param_groups[0]['lr']
-
-                columns = ['mae', 'rmse']
                 
-                all_res.append([mae, test_rmse])
-                df = pd.DataFrame(all_res, columns=columns)
-
-                df.to_csv(os.path.join(saved_dir, f'res_reg.csv'), index=False, float_format='%.5f')
                 run.log({
                     'test/test_rmse': test_rmse.item(),
                     'test/test_mae': mae.item(),
                 })
 
-                results_df = pd.DataFrame({
-                    'GT': all_gt.flatten(),
-                    'Predicted': all_pred_prob.flatten(),
-                })
-                results_df.to_csv(os.path.join(saved_dir, f'pred_gt_reg.csv'), index=False)
                 scheduler.step(val_rmse)
                 ### early stop
                 current_lr = optimizer.param_groups[0]['lr']
                     
                 model.train() # set back to train
         run.log({
-                'train/loss_per_epoch': training_loss / len(trainloader),
-                'train/mae_per_epoch': train_mae / len(trainloader),
-            })
+            'train/loss_per_epoch': training_loss / len(trainloader),
+            'train/mae_per_epoch': train_mae / len(trainloader),
+        })
+        
 def get_args():
     parser = argparse.ArgumentParser(description="ECG LVEF Finetune Model Training")
 
@@ -191,6 +220,8 @@ def get_args():
                         help='Which GPU ID to use (default: 0)')
     parser.add_argument('--num_workers', type=int, default=4, 
                         help='Number of data loading workers (default: 4)')
+    parser.add_argument('--seed', type=int, default=42, 
+                        help='Seed of run (default: 42)')
 
     # --- Dataset & Paths ---
     parser.add_argument('--num_lead', type=int, default=12, choices=[1, 12],

@@ -611,8 +611,7 @@ def save_checkpoint(state, path):
     torch.save(state, filename)
 
 def save_reg_checkpoint(state, path):
-    filename = 'checkpoint_{0}_{1:.4f}.pth'.format(state['step'], state['mae'])
-    filename = os.path.join(path, filename)
+    filename = os.path.join(path, 'model.pth')
     torch.save(state, filename)
 
 
