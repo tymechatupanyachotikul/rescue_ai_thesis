@@ -82,7 +82,9 @@ def analysis(args):
                             key = f'stim[{i}].{param}'
                             cls_dict[cl][idx_map[i]][param].append(float(data.get(key, 0)))
             if file_path.endswith('.npy'):
-                X_stack.append(np.load(file_path)) #lead x time 
+                x = np.load(file_path)
+                if x.shape[1] == 76:
+                    X_stack.append(x) #lead x time 
         cls_ecg[cl] = np.stack(X_stack, axis=0).mean(axis=0) # average across samples for each class
         classes.append(cl)
 
