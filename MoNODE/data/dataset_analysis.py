@@ -97,6 +97,7 @@ def analysis(args):
                 }
 
     sim_matrix = np.zeros((len(classes), len(classes)))
+    print(classes)
     for i, cl1 in enumerate(classes):
         for j, cl2 in enumerate(classes):
             if i == j:
