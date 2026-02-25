@@ -230,10 +230,14 @@ def gen_ecg_data(data_path, data_path_y, params, flag, task='ecg'):
 	T = params[task][flag]['T'] / f
 	type = params[task]['type']
 	dataset = params[task]['dataset']
+	qrs_only = params[task]['qrs_only']
 
+	if qrs_only:
+		T = 150
+		
 	dir_path = (
     	f"./data/ecg/{dataset}/preprocessed/"
-    	f"T{f'{T:.2f}'.replace('.', '_')}_f{f}_{type}/{flag}"
+    	f"T{f'{T:.2f}'.replace('.', '_')}_f{f}_{type}{'' if not qrs_only else '_QRS'}/{flag}"
 	)
 	n_per_class = math.ceil(N / 7)
 	data_paths = defaultdict(lambda: defaultdict(list))
