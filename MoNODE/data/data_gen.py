@@ -234,7 +234,7 @@ def gen_ecg_data(data_path, data_path_y, params, flag, task='ecg'):
 
 	if qrs_only:
 		T = 150
-		
+
 	dir_path = (
     	f"./data/ecg/{dataset}/preprocessed/"
     	f"T{f'{T:.2f}'.replace('.', '_')}_f{f}_{type}{'' if not qrs_only else '_QRS'}/{flag}"
@@ -283,9 +283,17 @@ def gen_ecg_data(data_path, data_path_y, params, flag, task='ecg'):
 		print(f'Class : {cls} - {len(_data)} samples for {flag} set')
 
 	Xt = []
+	num_skipped = 0
+	files_skipped = []
 	for file_path in data_paths:
-		Xt.append(torch.from_numpy(np.load(file_path).T))
+		cur_ecg = np.load(file_path).T
+		if cur_ecg.shape[0] != 76:
+			files_skipped.append(file_path)
+			num_skipped += 1
+			continue
+		Xt.append(torch.from_numpy(cur_ecg))
 	
+	print(f'Skipped {num_skipped} files for {flag} set due to wrong shape. Skipped files examples: {files_skipped[:5]}')
 	Xt = torch.stack(Xt)
 	
 	filename = 'data/ecg/example_ecg'
