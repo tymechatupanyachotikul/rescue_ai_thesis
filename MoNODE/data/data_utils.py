@@ -66,6 +66,7 @@ def __load_data(args, device, dtype, dataset=None):
 		Ytr = None
 		Yvl = None
 		Yte = None
+		print('Data loaded')
 		#if loaded data does not match the parameter settings assert and re generate the data 
 		if dataset != 'ecg':
 			assert Xtr.shape[0] == params[dataset]['train']['N'] and Xtr.shape[1] == params[dataset]['train']['T'] 
@@ -78,8 +79,9 @@ def __load_data(args, device, dtype, dataset=None):
 				Yvl = pickle.load(f)
 			with open(data_path_yte, "rb") as f:
 				Yte = pickle.load(f)
-			
+			print('GT loaded')
 	except:
+		print(f'Could not load data from {data_path_tr}, {data_path_vl}, {data_path_te} or GT from {data_path_ytr}, {data_path_yvl}, {data_path_yte}. Generating data...')
 		with open(folder_path+'/gen_info.txt', 'w') as f:
 			f.write(json.dumps(params[dataset]))
 
@@ -105,6 +107,13 @@ def __load_data(args, device, dtype, dataset=None):
 		Xtr = torch.load(data_path_tr)
 		Xvl = torch.load(data_path_vl)
 		Xte = torch.load(data_path_te)
+
+		with open(data_path_ytr, "rb") as f:
+				Ytr = pickle.load(f)
+		with open(data_path_yvl, "rb") as f:
+			Yvl = pickle.load(f)
+		with open(data_path_yte, "rb") as f:
+			Yte = pickle.load(f)
 
 	if dataset == 'bb':
 		Xtr = torch.Tensor(Xtr).unsqueeze(2)
