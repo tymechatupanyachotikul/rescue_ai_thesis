@@ -71,50 +71,52 @@ def analysis(args):
             }
         }
         X_stack = []
+        n_per_class = 0
         for file in os.listdir(cls_dir):
             file_path = os.path.join(cls_dir, file)
-            if file_path.endswith('.json'):
-                with open(file_path, 'r') as f:
-                    data = json.load(f)['ventricular']
-                    for i in range(0, 5):
-                        params = ['z', 'thr', 'phi', 'ven', 'rho_eps', 'time', 'rho']
-                        for param in params:
-                            key = f'stim[{i}].{param}'
-                            cls_dict[cl][idx_map[i]][param].append(float(data.get(key, 0)))
+            # if file_path.endswith('.json'):
+            #     with open(file_path, 'r') as f:
+            #         data = json.load(f)['ventricular']
+            #         for i in range(0, 5):
+            #             params = ['z', 'thr', 'phi', 'ven', 'rho_eps', 'time', 'rho']
+            #             for param in params:
+            #                 key = f'stim[{i}].{param}'
+            #                 cls_dict[cl][idx_map[i]][param].append(float(data.get(key, 0)))
             if file_path.endswith('.npy'):
-                x = np.load(file_path)
-                if x.shape[1] == 76:
-                    X_stack.append(x) #lead x time 
-        cls_ecg[cl] = np.stack(X_stack, axis=0).mean(axis=0) # average across samples for each class
+                # x = np.load(file_path)
+                # if x.shape[1] == 76:
+                #     X_stack.append(x) #lead x time 
+                n_per_class += 1
         classes.append(cl)
+        print(f"Class {cl}: {n_per_class} samples")
 
-    for cl, params in cls_dict.items():
-        for param, sub_params in params.items():
-            for sub_param, values in sub_params.items():
-                cls_dict[cl][param][sub_param] = {
-                    'mean': np.mean(values) if values else 0,
-                    'std': np.std(values) if values else 0
-                }
+    # for cl, params in cls_dict.items():
+    #     for param, sub_params in params.items():
+    #         for sub_param, values in sub_params.items():
+    #             cls_dict[cl][param][sub_param] = {
+    #                 'mean': np.mean(values) if values else 0,
+    #                 'std': np.std(values) if values else 0
+    #             }
 
-    sim_matrix = np.zeros((len(classes), len(classes)))
-    print(classes)
-    for i, cl1 in enumerate(classes):
-        for j, cl2 in enumerate(classes):
-            if i == j:
-                sim_matrix[i, j] = 1.0
-            else:
-                lead_sims = [] 
-                for lead in range(12):
-                    lead_sim = np.corrcoef(cls_ecg[cl1][lead], cls_ecg[cl2][lead])[0, 1]
-                    if np.isnan(lead_sim):
-                        lead_sim = 0.0
-                    lead_sims.append(lead_sim)
-                lead_correlations = np.mean(lead_sims)
-                sim_matrix[i, j] = lead_correlations
+    # sim_matrix = np.zeros((len(classes), len(classes)))
+    # print(classes)
+    # for i, cl1 in enumerate(classes):
+    #     for j, cl2 in enumerate(classes):
+    #         if i == j:
+    #             sim_matrix[i, j] = 1.0
+    #         else:
+    #             lead_sims = [] 
+    #             for lead in range(12):
+    #                 lead_sim = np.corrcoef(cls_ecg[cl1][lead], cls_ecg[cl2][lead])[0, 1]
+    #                 if np.isnan(lead_sim):
+    #                     lead_sim = 0.0
+    #                 lead_sims.append(lead_sim)
+    #             lead_correlations = np.mean(lead_sims)
+    #             sim_matrix[i, j] = lead_correlations
     
-    with open(os.path.join(out_dir, 'cls_analysis.json'), 'w') as f:
-        json.dump(cls_dict, f, indent=4)
-    np.save(os.path.join(out_dir, 'ecg_sim.npy'), sim_matrix)
+    # with open(os.path.join(out_dir, 'cls_analysis.json'), 'w') as f:
+    #     json.dump(cls_dict, f, indent=4)
+    # np.save(os.path.join(out_dir, 'ecg_sim.npy'), sim_matrix)
 
 
 if __name__ == "__main__":
