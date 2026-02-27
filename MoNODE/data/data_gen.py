@@ -285,18 +285,22 @@ def gen_ecg_data(data_path, data_path_y, params, flag, task='ecg'):
 		else:
 			n_per_run = math.ceil(n_per_class / n_runs)
 
-		for path in run.values():
+		for run_id, path in run.items():
 			random.shuffle(path)
 			if N == -1:
 				if cls in priority_classes:
 					dataset_path[cls].extend(path)
+					print(f'Class {cls} - {len(path)} samples for {run_id}')
 				else:
 					if join_atrial:
 						dataset_path[cls].extend(path[:n_sinus // n_runs]) 
+						print(f'Class {cls} - {n_sinus // n_runs} samples for {run_id} (joining atrial to sinus)')
 					else:
 						dataset_path[cls].extend(path)
+						print(f'Class {cls} - {len(path)} samples for {run_id}')
 			else:
 				dataset_path[cls].extend(path[:n_per_run])
+				print(f'Class {cls} - {n_per_run} samples for {run_id}')
 
 	data_paths = []
 	y = []
