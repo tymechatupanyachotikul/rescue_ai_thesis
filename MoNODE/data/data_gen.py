@@ -1,3 +1,4 @@
+import random
 import torch
 import os, numpy as np
 import re
@@ -231,6 +232,7 @@ def gen_ecg_data(data_path, data_path_y, params, flag, task='ecg'):
 	type = params[task]['type']
 	dataset = params[task]['dataset']
 	qrs_only = params[task]['qrs_only']
+	join_atrial = params[task]['join_atrial']
 
 	if qrs_only:
 		T = 150
@@ -253,15 +255,29 @@ def gen_ecg_data(data_path, data_path_y, params, flag, task='ecg'):
 			'time': T
 		}))
 
+	priority_classes = subclasses + ['lbbb', 'rbbb']
+	cls_dir = [_cls for _cls in os.listdir(dir_path) if _cls in priority_classes]
+	cls_dir += [_cls for _cls in os.listdir(dir_path) if _cls not in priority_classes]
+
+	total_cls = {
+		'bbb': 0,
+		'mi': 0
+	}
 	for dir in os.listdir(dir_path):
 		cur_dir = os.path.join(dir_path, dir)
 		for file_path in os.listdir(cur_dir):
 			if file_path.endswith('npy'):
+				if dir in ['lbbb', 'rbbb']:
+					total_cls['bbb'] += 1
+				elif dir in subclasses:
+					total_cls['mi'] += 1
 				run_id = file_path.split('_')[2]
+				if join_atrial and dir not in priority_classes:
+					dir = 'sinus'
 				data_paths[dir][run_id].append(os.path.join(cur_dir, file_path))
 
 	dataset_path = defaultdict(list)
-
+	n_sinus = int(math.ceil((total_cls['mi'] + total_cls['bbb']) / 2 * 1.5))
 	for cls, run in data_paths.items():
 		n_runs = len(run)
 		if cls in subclasses:
@@ -270,8 +286,15 @@ def gen_ecg_data(data_path, data_path_y, params, flag, task='ecg'):
 			n_per_run = math.ceil(n_per_class / n_runs)
 
 		for path in run.values():
+			random.shuffle(path)
 			if N == -1:
-				dataset_path[cls].extend(path)
+				if cls in priority_classes:
+					dataset_path[cls].extend(path)
+				else:
+					if join_atrial:
+						dataset_path[cls].extend(path[:n_sinus // n_runs]) 
+					else:
+						dataset_path[cls].extend(path)
 			else:
 				dataset_path[cls].extend(path[:n_per_run])
 
