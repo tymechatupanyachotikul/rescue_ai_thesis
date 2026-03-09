@@ -132,6 +132,7 @@ def main():
     n_workers = min(n_workers, len(files))   # no idle processes
     tasks     = [(f, args.out_dir) for f in files]
 
+    print(f"Processing with {n_workers} parallel workers...")
     done = skipped = failed = 0
 
     with ProcessPoolExecutor(max_workers=n_workers) as pool:
