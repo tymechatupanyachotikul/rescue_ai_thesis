@@ -28,7 +28,7 @@ def gen_ecg_data(args):
 
         classes_dict = {
             'ventricular': subclasses + ['lbbb', 'rbbb'],
-            'atrial': ['av_block', 'fam', 'iab', 'lae'],
+            'atrial': ['avblock', 'fam', 'iab', 'lae'],
             'normal': ['sinus']
         }
 
@@ -143,6 +143,22 @@ def gen_ecg_data(args):
 
                 print(f'Found {n_cls} samples for class sinus (substitute for {cls})')
 
+        if n_s_total < n_sinus:
+            for paths in data_paths['sinus'].values():
+                for path in paths:
+                    if path not in out_dataset['data_path']:
+                        out_dataset['data_path'].append(path)
+                        out_dataset['label'].append('sinus')
+
+                        filename = os.path.basename(path)
+                        out_dataset['hash'].append(
+                            hashlib.sha256(filename.encode()).hexdigest()
+                        )
+
+                        n_s_total += 1
+
+                        if n_s_total >= n_sinus:
+                            break
         print(
             f'Total {n_s_total} samples for sinus class and '
             f'{n_a_total} samples for {anatomy} classes'
@@ -156,7 +172,7 @@ def gen_ecg_data(args):
             os.path.join(out_dir, f"{dataset.lower()}_{split}_{anatomy}.csv"),
             index=False
         )
-        print(f"Saved to {out_dir}")
+        print(f"Saved to {os.path.join(out_dir, f"{dataset.lower()}_{split}_{anatomy}.csv")}")
 
 
 def build_parser():
