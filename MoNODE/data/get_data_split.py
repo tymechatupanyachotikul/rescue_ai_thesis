@@ -172,8 +172,6 @@ def gen_ecg_data(args):
             os.path.join(out_dir, f"{dataset.lower()}_{split}_{anatomy}.csv"),
             index=False
         )
-        print(f"Saved to {os.path.join(out_dir, f"{dataset.lower()}_{split}_{anatomy}.csv")}")
-
 
 def build_parser():
 
