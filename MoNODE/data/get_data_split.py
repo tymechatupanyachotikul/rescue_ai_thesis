@@ -35,7 +35,6 @@ def gen_ecg_data(args):
         total_cls = defaultdict(int)
 
         for cls_dir in os.listdir(root_dir):
-
             if cls_dir == 'mi':
 
                 for subclass_dir in os.listdir(os.path.join(root_dir, cls_dir)):
@@ -56,7 +55,9 @@ def gen_ecg_data(args):
             else:
 
                 cur_dir = os.path.join(root_dir, cls_dir, split)
-
+                if not os.path.isdir(cur_dir):
+                     continue 
+            
                 for run_dir in os.listdir(cur_dir):
                     run_path = os.path.join(cur_dir, run_dir)
 
