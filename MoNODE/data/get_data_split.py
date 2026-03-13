@@ -67,12 +67,13 @@ def gen_ecg_data(args):
                         if data_path.endswith('csv') and 'raw' in data_path:
                             total_cls[cls_dir] += 1
                             data_paths[cls_dir][run_dir].append(data_path)
-
+                            
         out_dataset = {
             'data_path': [],
             'label': [],
             'hash': []
-        }
+        } 
+        print(total_cls)
 
         n_sinus = (
             total_cls['lbbb'] + total_cls['rbbb'] + total_cls['mi']
