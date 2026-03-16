@@ -55,7 +55,8 @@ if __name__ == "__main__":
             ecg = pd.read_csv(ecg_path, header=None).to_numpy().T
             print(f'Shape of loaded ECG : {ecg.shape}')
             wfdb.wrsamp(
-                record_name=filepath, 
+                record_name=case, 
+                write_dir=directory_path,
                 fs=500, 
                 units=['mV'] * ecg.shape[1], 
                 sig_name=MEDALCARE_XL_LEADS, 
