@@ -77,11 +77,14 @@ if __name__ == "__main__":
 
     argparser = argparse.ArgumentParser(description="Load and analyze ECG cases")
     argparser.add_argument("--input_path", type=str, help="Path to the input directory", required=True)
+    argparser.add_argument("--batch_size", type=int, help="Number of cases to process in each batch", default=5)
     args = argparser.parse_args()
 
+    batch_size = args.batch_size
+    df = pd.read_csv(args.input_path, nrows=5)
 
-    df = pd.read_csv(args.input_path, nrows=1)
-    for row in df.itertuples(index=False):
+    cur_batch = []
+    for cur_idx, row in enumerate(df.itertuples(index=False)):
         ecg_path = str(row.data_path)
         print(f'Processing {ecg_path}')
 
@@ -105,5 +108,11 @@ if __name__ == "__main__":
             )    
 
         record, original_record = load_case(directory_path, case, row)
-        analyse_single_case(record)
-        plot_segment(record, original_record, case)
+        cur_batch.append((record, original_record, case))
+        if len(cur_batch) == batch_size or cur_idx == len(df)-1:
+            records = [_rec for _rec, _, _ in cur_batch]
+            analyse_single_case(records)
+            for idx, _rec in enumerate(records):
+                plot_segment(_rec, cur_batch[idx][1], cur_batch[idx][2])
+
+            cur_batch = []
