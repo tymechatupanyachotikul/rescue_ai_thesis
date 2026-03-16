@@ -1,4 +1,5 @@
 import json
+import time
 import pandas as pd 
 import os
 import glob
@@ -6,6 +7,7 @@ import wfdb
 from tqdm import tqdm
 import ast
 import argparse
+import numpy as np 
 
 from aladin import ALADIN
 from aladin.core import Record
@@ -24,15 +26,52 @@ def load_case(dir, case, metadata):
     record.groundtruth = metadata.label
     record.hash = metadata.hash
 
-    return record
+    return record, rec
 
 def analyse_single_case(record):
 
     aladin = ALADIN(modelpaths=["ClassificationTrainer__nnUNetWithClassificationPlans__1d_decoding"],
-                    debug={"segmenter": True, "afibdetector": False, "reflection": False, "total": True})
-    aladin.extract_median_beat(record)
-    aladin.analyse(record)
+                    debug={"segmenter": True, "afibdetector": False, "reflection": False, "total": False})
+    st = time.time()
+    aladin.segmenter.segment(record)
+    print("Segmenter", time.time()-st)
+    st = time.time()
+    aladin.reflection.reflect(record)
+    print("Reflection", time.time()-st)
 
+def plot_segment(record, original_record):
+
+    ecg = original_record.p_signal[:, 1]
+    fig, ax = plt.subplots(1, 1, figsize=(len(ecg)/(record.fs), 4), dpi=200)
+    ax.plot(np.arange(0, len(ecg)), ecg, color='black', label="ECG Signal")
+
+    pcolor = '#e74c3c'
+
+    ymax = np.max(ecg)
+    ymin = np.min(ecg)
+
+    for beat in record.qrs:
+        qrscolor = '#f1c40f' if beat.abnormal else '#2ecc71'
+
+        start = int(beat.onset)
+        if beat.t is not None:
+            end = int(beat.t.offset)
+        else:
+            continue
+        ax.axvspan(start, end, ymax = ymax, ymin = ymin, color=qrscolor, alpha=0.5)
+
+    for wave in record.p:
+        ax.axvspan(wave.onset, wave.offset, ymax = ymax, ymin = ymin, color=pcolor, alpha=0.5)
+
+    ax.set_ylabel("Amplitude (mV)")
+    ax.set_xlabel("Time (s)")
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+
+    plt.tight_layout()
+    plt.savefig(f'{record.case}_segments.png')
+    plt.close()
 
 if __name__ == "__main__":
 
@@ -41,7 +80,6 @@ if __name__ == "__main__":
     args = argparser.parse_args()
 
 
-    # 1 : Convert file to .dat and .hea format
     df = pd.read_csv(args.input_path, nrows=1)
     for row in df.itertuples(index=False):
         ecg_path = str(row.data_path)
@@ -66,7 +104,6 @@ if __name__ == "__main__":
                 fmt=['32'] * ecg.shape[1]
             )    
 
-        record = load_case(directory_path, case, row)
+        record, original_record = load_case(directory_path, case, row)
         analyse_single_case(record)
-        print(f'-------------Finished processing {ecg_path}-------------')
-        pprint(dir(record.cpp_record))
+        plot_segment(record, original_record)
