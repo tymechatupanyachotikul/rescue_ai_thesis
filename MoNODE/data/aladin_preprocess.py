@@ -11,7 +11,7 @@ from aladin import ALADIN
 from aladin.core import Record
 
 import matplotlib.pyplot as plt
-
+from pprint import pprint 
 
 MEDALCARE_XL_LEADS = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
 def load_case(dir, case, metadata):
@@ -31,6 +31,7 @@ def analyse_single_case(record):
     aladin = ALADIN(modelpaths=["ClassificationTrainer__nnUNetWithClassificationPlans__1d_decoding"],
                     debug={"segmenter": True, "afibdetector": False, "reflection": False, "total": True})
     aladin.extract_median_beat(record)
+    aladin.analyse(record)
 
 
 if __name__ == "__main__":
@@ -68,4 +69,4 @@ if __name__ == "__main__":
         record = load_case(directory_path, case, row)
         analyse_single_case(record)
         print(f'-------------Finished processing {ecg_path}-------------')
-        print(record.__dict__)
+        pprint(record.__dict__)
