@@ -17,9 +17,10 @@ MEDALCARE_XL_LEADS = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "
 def load_case(dir, case, metadata):
 
     file = os.path.join(dir,case)
-    ecg = wfdb.rdrecord(file)
+    rec = wfdb.rdrecord(file)
+    ecg = {name: rec.p_signal[:, i] for i, name in enumerate(rec.sig_name)}
 
-    record = Record(ecg, ecg.fs, "DEMO", case)
+    record = Record(ecg, rec.fs, "DEMO", case)
     record.groundtruth = metadata.label
     record.hash = metadata.hash
 
