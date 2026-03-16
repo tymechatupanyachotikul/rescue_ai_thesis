@@ -66,6 +66,7 @@ def segment(record, original_record, case, segment_type, out_dir):
     norm_ecg = (original_record.p_signal - mu) / (sigma + 1e-8)
 
     save_dir = os.path.join(out_dir, 'sampled')
+    os.makedirs(save_dir, exist_ok=True)
     for idx, segment in enumerate(segments):
         ecg_segment = norm_ecg[segment[0]: segment[1], :]
 
