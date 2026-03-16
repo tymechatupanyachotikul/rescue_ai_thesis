@@ -33,10 +33,10 @@ def analyse_single_case(record):
     aladin = ALADIN(modelpaths=["ClassificationTrainer__nnUNetWithClassificationPlans__1d_decoding"],
                     debug={"segmenter": True, "afibdetector": False, "reflection": False, "total": False})
     st = time.time()
-    aladin.segmenter.segment(record)
+    aladin.segmenter.batch(record)
     print("Segmenter", time.time()-st)
     st = time.time()
-    aladin.reflection.reflect(record)
+    aladin.reflection.batch(record)
     print("Reflection", time.time()-st)
 
 def plot_segment(record, original_record, case):
