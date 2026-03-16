@@ -40,7 +40,7 @@ if __name__ == "__main__":
 
 
     # 1 : Convert file to .dat and .hea format
-    df = pd.read_csv('data.csv', nrows=1)
+    df = pd.read_csv(args.input_path, nrows=1)
     for row in df.itertuples(index=False):
         ecg_path = str(row.data_path)
         print(f'Processing {ecg_path}')
