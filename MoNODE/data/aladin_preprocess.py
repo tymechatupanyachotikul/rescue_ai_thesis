@@ -30,7 +30,7 @@ def analyse_single_case(record):
 
     aladin = ALADIN(modelpaths=["ClassificationTrainer__nnUNetWithClassificationPlans__1d_decoding"],
                     debug={"segmenter": True, "afibdetector": False, "reflection": False, "total": True})
-    aladin.analyse(record)
+    aladin.extract_median_beat(record)
 
 
 if __name__ == "__main__":
@@ -51,8 +51,8 @@ if __name__ == "__main__":
         directory_path = "/".join(directory_path)
 
         filepath = os.path.join(directory_path, case)
-        print(f'Checking if {filepath}.dat and {filepath}.hea exist')
         if not os.path.exists(filepath + '.dat') or not os.path.exists(filepath + '.hea'):
+            print(f'Converting {ecg_path} to wfdb format')
             ecg = pd.read_csv(ecg_path, header=None).to_numpy().T
             print(f'Shape of loaded ECG : {ecg.shape}')
             wfdb.wrsamp(
@@ -67,3 +67,5 @@ if __name__ == "__main__":
 
         record = load_case(directory_path, case, row)
         analyse_single_case(record)
+        print(f'-------------Finished processing {ecg_path}-------------')
+        print(record)
