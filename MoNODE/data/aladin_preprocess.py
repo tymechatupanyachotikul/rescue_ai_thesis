@@ -69,4 +69,4 @@ if __name__ == "__main__":
         record = load_case(directory_path, case, row)
         analyse_single_case(record)
         print(f'-------------Finished processing {ecg_path}-------------')
-        pprint(dir(record.cpp_record.__dict__))
+        pprint(dir(record.cpp_record))
