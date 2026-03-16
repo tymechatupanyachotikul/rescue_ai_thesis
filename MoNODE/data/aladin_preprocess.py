@@ -29,15 +29,15 @@ def load_case(dir, case, metadata):
 
     return record, rec
 
-def analyse_single_case(record):
+def segment_records(records):
 
     aladin = ALADIN(modelpaths=["ClassificationTrainer__nnUNetWithClassificationPlans__1d_decoding"],
                     debug={"segmenter": True, "afibdetector": False, "reflection": False, "total": False})
     st = time.time()
-    aladin.segmenter.batch(record)
+    aladin.segmenter.batch(records)
     print("Segmenter", time.time()-st)
     st = time.time()
-    aladin.reflection.batch(record)
+    aladin.reflection.batch(records)
     print("Reflection", time.time()-st)
 
 def segment(record, original_record, case, segment_type, out_dir):
@@ -72,26 +72,28 @@ def segment(record, original_record, case, segment_type, out_dir):
 
         delta_t = segment[1] - segment[0]
         np.save(os.path.join(save_dir, f'T{delta_t}_{record.hash}_{record.groundtruth}_{idx}.npy'), ecg_segment.astype(np.float32))
+        np.save(os.path.join(save_dir, f'T{delta_t}_{record.hash}_{record.groundtruth}_{idx}_original.npy'), original_record.p_signal[segment[0]: segment[1], :].astype(np.float32))
+        np.save(os.path.join(save_dir, f'T{delta_t}_{record.hash}_{record.groundtruth}_{idx}_original_full.npy'), original_record.p_signal.astype(np.float32))
 
-    fig, ax = plt.subplots(1, 1, figsize=(len(norm_ecg)/(record.fs), 4), dpi=200)
-    ax.plot(np.arange(0, len(norm_ecg)), norm_ecg, color='black', label="ECG Signal")
+    # fig, ax = plt.subplots(1, 1, figsize=(len(norm_ecg)/(record.fs), 4), dpi=200)
+    # ax.plot(np.arange(0, len(norm_ecg)), norm_ecg, color='black', label="ECG Signal")
 
-    ymax = np.max(norm_ecg)
-    ymin = np.min(norm_ecg)
+    # ymax = np.max(norm_ecg)
+    # ymin = np.min(norm_ecg)
 
-    for (onset, offset) in segments:
-        qrscolor = '#f1c40f' 
-        ax.axvspan(onset, offset, ymax = ymax, ymin = ymin, color=qrscolor, alpha=0.5)
+    # for (onset, offset) in segments:
+    #     qrscolor = '#f1c40f' 
+    #     ax.axvspan(onset, offset, ymax = ymax, ymin = ymin, color=qrscolor, alpha=0.5)
 
-    ax.set_ylabel("Amplitude (mV)")
-    ax.set_xlabel("Time (s)")
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_visible(False)
+    # ax.set_ylabel("Amplitude (mV)")
+    # ax.set_xlabel("Time (s)")
+    # ax.spines['top'].set_visible(False)
+    # ax.spines['right'].set_visible(False)
+    # ax.spines['left'].set_visible(False)
 
-    plt.tight_layout()
-    plt.savefig(f'{case}_segments.png')
-    plt.close()
+    # plt.tight_layout()
+    # plt.savefig(f'{case}_segments.png')
+    # plt.close()
 
 if __name__ == "__main__":
 
@@ -109,7 +111,7 @@ if __name__ == "__main__":
     out_dir = os.path.join(out_dir, split, segment_type)
     os.makedirs(out_dir, exist_ok=True)
 
-    df = pd.read_csv(args.input_path, nrows=5)
+    df = pd.read_csv(args.input_path, nrows=1)
 
     cur_batch = []
     for cur_idx, row in enumerate(df.itertuples(index=False)):
@@ -139,7 +141,7 @@ if __name__ == "__main__":
         cur_batch.append((record, original_record, case))
         if len(cur_batch) == batch_size or cur_idx == len(df)-1:
             records = [_rec for _rec, _, _ in cur_batch]
-            analyse_single_case(records)
+            segment_records(records)
             for idx, _rec in enumerate(records):
                 segment(_rec, cur_batch[idx][1], cur_batch[idx][2], segment_type, out_dir)
 
