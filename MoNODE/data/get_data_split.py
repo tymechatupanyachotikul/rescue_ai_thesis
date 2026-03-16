@@ -134,9 +134,8 @@ def gen_ecg_data(args):
                         out_dataset['data_path'].append(paths[i])
                         out_dataset['label'].append(cls)
 
-                        filename = os.path.basename(paths[i])
                         out_dataset['hash'].append(
-                            hashlib.sha256(filename.encode()).hexdigest()
+                            hashlib.sha256(paths[i].encode()).hexdigest()
                         )
 
                         n_cls += 1
