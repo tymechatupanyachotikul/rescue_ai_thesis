@@ -39,7 +39,7 @@ def analyse_single_case(record):
     aladin.reflection.reflect(record)
     print("Reflection", time.time()-st)
 
-def plot_segment(record, original_record):
+def plot_segment(record, original_record, case):
 
     ecg = original_record.p_signal[:, 1]
     fig, ax = plt.subplots(1, 1, figsize=(len(ecg)/(record.fs), 4), dpi=200)
@@ -70,7 +70,7 @@ def plot_segment(record, original_record):
     ax.spines['left'].set_visible(False)
 
     plt.tight_layout()
-    plt.savefig(f'{record.case}_segments.png')
+    plt.savefig(f'{case}_segments.png')
     plt.close()
 
 if __name__ == "__main__":
@@ -106,4 +106,4 @@ if __name__ == "__main__":
 
         record, original_record = load_case(directory_path, case, row)
         analyse_single_case(record)
-        plot_segment(record, original_record)
+        plot_segment(record, original_record, case)
