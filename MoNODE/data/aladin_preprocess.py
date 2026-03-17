@@ -4,6 +4,7 @@ import time
 import pandas as pd 
 import os
 import glob
+import gc
 import wfdb
 from tqdm import tqdm
 import ast
@@ -29,7 +30,7 @@ def load_and_convert_case(row):
 
     # Convert if missing
     if not os.path.exists(filepath + '.dat') or not os.path.exists(filepath + '.hea'):
-        ecg = pd.read_csv(ecg_path, header=None).to_numpy()
+        ecg = pd.read_csv(ecg_path, header=None, dtype=np.float32).to_numpy()
         
         # Ensure shape is (samples, leads)
         if ecg.shape[0] < ecg.shape[1]:
@@ -128,7 +129,7 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
                 plt.close() 
 
                 plt.figure(figsize=(10, 4))
-                plt.plot(ecg_segment[:, 0], label='Normalised median beat')
+                plt.plot(norm_ecg[:, 0], label='Normalised median beat')
                 plt.axvspan(start, end, color='#e74c3c', alpha=0.5, label=f"Segmented for {segment_type}")
                 plt.xlabel('Time')
                 plt.ylabel('Amplitude')
@@ -212,5 +213,10 @@ if __name__ == "__main__":
                     future.result() # Catch any save errors
                 except Exception as e:
                     print(f"Error saving segment: {e}")
+        
+        del loaded_data 
+        del records 
+        del original_records
+        gc.collect()
 
     print("Processing complete!")
