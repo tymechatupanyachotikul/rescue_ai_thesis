@@ -167,6 +167,13 @@ if __name__ == "__main__":
     out_dir = os.path.join(args.out_dir, split, segment_type)
     os.makedirs(out_dir, exist_ok=True)
 
+    processed = set()
+    for f in os.listdir(os.path.join(out_dir, beat_type)):
+        if f.endswith('.npy'):
+            file_hash = f.split('_')[1]
+            processed.add(file_hash)
+
+    
     print("Loading ALADIN model into memory...")
     aladin = ALADIN(
         modelpaths=["ClassificationTrainer__nnUNetWithClassificationPlans__1d_decoding"],
@@ -174,7 +181,10 @@ if __name__ == "__main__":
     )
 
     df = pd.read_csv(args.input_path) if not demo else pd.read_csv(args.input_path, nrows=3)
-    
+    print(f"Total records in CSV: {len(df)}")
+    df = df[~df['hash'].isin(processed)]
+    print(f"Records to process after filtering: {len(df)}")
+
     chunks = [df.iloc[i:i + args.batch_size] for i in range(0, len(df), args.batch_size)]
     
     print(f"Starting processing with {args.workers} workers...")
