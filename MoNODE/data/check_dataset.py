@@ -25,12 +25,11 @@ def get_time_stats(base_dir, plot=False):
     if 'atrial' in base_dir:
         t_custom   = ((time >= 20) & (time <= 75)).sum()
         t_custom_2 = ((time >= 20) & (time <= 70)).sum()
-        t_custom_3 = ((time >= 20) & (time <= 65)).sum()
+        t_custom_3 = ((time >= 20) & (time <= 60)).sum()
         
         print(f'Total samples between 20 and 75: {t_custom}/{total_sample} ({t_custom/total_sample*100:.2f}%)')
         print(f'Total samples between 20 and 70: {t_custom_2}/{total_sample} ({t_custom_2/total_sample*100:.2f}%)')
-        print(f'Total samples between 20 and 65: {t_custom_3}/{total_sample} ({t_custom_3/total_sample*100:.2f}%)')
-
+        print(f'Total samples between 20 and 60: {t_custom_3}/{total_sample} ({t_custom_3/total_sample*100:.2f}%)')
     elif 'ventricular' in base_dir:
         t_custom   = ((time >= 160) & (time <= 250)).sum()
         t_custom_2 = ((time >= 160) & (time <= 240)).sum()
