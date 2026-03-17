@@ -98,7 +98,7 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
 
     original_ecg = original_record.p_signal if beat_type == 'sampled' else record.median_beat.ecg
     print(f'ECG for {beat_type} {segment_type} has shape {original_ecg.shape}')
-    
+
     mu = np.mean(original_record.p_signal, axis=0, keepdims=True)
     sigma = np.std(original_record.p_signal, axis=0, keepdims=True)
     norm_ecg = (original_record.p_signal - mu) / (sigma + 1e-8)
@@ -124,7 +124,7 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
                 plt.xlabel('Time')
                 plt.ylabel('Amplitude (mV)')
                 plt.legend()
-                plt.savefig(f'{base_name}_full_ecg.png')
+                plt.savefig(f'{base_name}_full_ecg_{beat_type}.png')
                 plt.close() 
 
                 plt.figure(figsize=(10, 4))
@@ -133,7 +133,7 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
                 plt.xlabel('Time')
                 plt.ylabel('Amplitude')
                 plt.legend()
-                plt.savefig(f'{base_name}_norm_segment.png')
+                plt.savefig(f'{base_name}_norm_segment_{beat_type}.png')
                 plt.close() 
 
                 plt.figure(figsize=(10, 4))
@@ -142,7 +142,7 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
                 plt.xlabel('Time')
                 plt.ylabel('Amplitude (mV)')
                 plt.legend()
-                plt.savefig(f'{base_name}_segment.png')
+                plt.savefig(f'{base_name}_segment_{beat_type}.png')
                 plt.close()
     
 
