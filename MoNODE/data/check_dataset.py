@@ -21,6 +21,22 @@ def get_time_stats(base_dir, plot=False):
     print(f'Total samples within 1.5 std of mean: {t_1_5}/{total_sample} ({t_1_5/total_sample*100:.2f}%) ({time.mean() - 1.5 * time.std():.2f} - {time.mean() + 1.5 * time.std():.2f})')
     t_2 = (np.abs(time - time.mean()) <= 2 * time.std()).sum()
     print(f'Total samples within 2 std of mean: {t_2}/{total_sample} ({t_2/total_sample*100:.2f}%) ({time.mean() - 2 * time.std():.2f} - {time.mean() + 2 * time.std():.2f})')
+
+    if 'atrial' in base_dir:
+        t_custom = (20 <= time <=75).sum()
+        t_custom_2 = (20 <= time <=70).sum()
+        t_custom_3 = (20 <= time <=65).sum()
+        print(f'Total samples between 20 and 75: {t_custom}/{total_sample} ({t_custom/total_sample*100:.2f}%) (20 - 75)')
+        print(f'Total samples between 20 and 70: {t_custom_2}/{total_sample} ({t_custom_2/total_sample*100:.2f}%) (20 - 70)')
+        print(f'Total samples between 20 and 65: {t_custom_3}/{total_sample} ({t_custom_3/total_sample*100:.2f}%) (20 - 65)')
+    elif 'ventricular' in base_dir:
+        t_custom = (160 <= time <=250).sum()
+        t_custom_2 = (160 <= time <=240).sum()
+        t_custom_3 = (160 <= time <=230).sum()
+        print(f'Total samples between 160 and 250: {t_custom}/{total_sample} ({t_custom/total_sample*100:.2f}%) (160 - 250)')
+        print(f'Total samples between 160 and 240: {t_custom_2}/{total_sample} ({t_custom_2/total_sample*100:.2f}%) (160 - 240)')
+        print(f'Total samples between 160 and 230: {t_custom_3}/{total_sample} ({t_custom_3/total_sample*100:.2f}%) (160 - 230)')
+
     if plot:
         fname = '_'.join(base_dir.split('/')[-3:]) + '_time.png'
         plt.figure(figsize=(8, 5))
