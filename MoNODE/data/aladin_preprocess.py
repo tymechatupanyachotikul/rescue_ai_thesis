@@ -160,13 +160,14 @@ if __name__ == "__main__":
     argparser.add_argument("--workers", type=int, help="Number of parallel workers", default=os.cpu_count())
     argparser.add_argument("--beat_type", type=str, choices=['sampled', 'median'], help="Types of beat to segment", required=True)
     argparser.add_argument("--demo", action='store_true', help="Run a quick demo with a subset of data")
-
+    argparser.add_argument("--plot_only", action='store_true', help="Only generate plots without saving segments")
     args = argparser.parse_args()
 
     segment_type = os.path.splitext(args.input_path)[0].split('_')[-1]
     beat_type = args.beat_type
     split = os.path.splitext(args.input_path)[0].split('_')[-2]
     demo = args.demo
+    plot_only = args.plot_only
     print(f'Processing {split} split for {segment_type} segments')
     
     out_dir = os.path.join(args.out_dir, split, segment_type)
@@ -209,16 +210,23 @@ if __name__ == "__main__":
         elif beat_type == 'median':
             aladin.extract_median_beat_batch(records)
         
-        with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = []
-            for rec, orig in zip(records, original_records):
-                futures.append(executor.submit(process_and_save_segments, rec, orig, segment_type, out_dir, beat_type, plot=demo))
-            
-            for future in as_completed(futures):
-                try:
-                    future.result() # Catch any save errors
-                except Exception as e:
-                    print(f"Error saving segment: {e}")
+        if plot_only:
+            for record in records:
+                run_id = record.original_file_path.split('/')[-2].split('_')[1]
+                session_id = record.original_file_path.split('/')[-1].split('_')[0]
+                label = record.groundtruth.replace('.', '')
+                aladin.plot(record, name=os.path.join(out_dir, f'{run_id}_{session_id}_{label}_ecg.png'))
+        else:
+            with ThreadPoolExecutor(max_workers=args.workers) as executor:
+                futures = []
+                for rec, orig in zip(records, original_records):
+                    futures.append(executor.submit(process_and_save_segments, rec, orig, segment_type, out_dir, beat_type, plot=demo))
+                
+                for future in as_completed(futures):
+                    try:
+                        future.result() # Catch any save errors
+                    except Exception as e:
+                        print(f"Error saving segment: {e}")
         
         del loaded_data 
         del records 
