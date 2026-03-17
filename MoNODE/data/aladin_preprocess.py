@@ -53,6 +53,7 @@ def load_and_convert_case(row):
     record = Record(ecg_dict, rec.fs, "DEMO", case)
     record.groundtruth = row.label 
     record.hash = row.hash        
+    record.original_file_path = row.data_path
     return record, rec
 
 def process_and_save_segments(record, original_record, segment_type, out_dir, beat_type, plot=False):
@@ -111,10 +112,14 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
         ecg_segment = norm_ecg[start:end, :]
         delta_t = end - start
         
+        run_id = record.original_file_path.split('/')[-2].split('_')[1]
+        session_id = record.original_file_path.split('/')[-1].split('_')[0]
+        label = record.groundtruth.replace('.', '')
+
         if beat_type == 'sampled':
-            base_name = f'T{delta_t}_{record.hash}_{record.groundtruth}_{idx}'
+            base_name = f'T{delta_t}_{run_id}_{session_id}_{label}_{idx}'
         else:
-            base_name = f'T{delta_t}_{record.hash}_{record.groundtruth}'
+            base_name = f'T{delta_t}_{run_id}_{session_id}_{label}'
 
         np.save(os.path.join(save_dir, f'{base_name}.npy'), ecg_segment.astype(np.float32))
 
@@ -167,23 +172,14 @@ if __name__ == "__main__":
     out_dir = os.path.join(args.out_dir, split, segment_type)
     os.makedirs(out_dir, exist_ok=True)
 
-    processed = set()
-    for f in os.listdir(os.path.join(out_dir, beat_type)):
-        if f.endswith('.npy'):
-            file_hash = f.split('_')[1]
-            processed.add(file_hash)
-
     
     print("Loading ALADIN model into memory...")
     aladin = ALADIN(
         modelpaths=["ClassificationTrainer__nnUNetWithClassificationPlans__1d_decoding"],
-        debug={"segmenter": True, "afibdetector": False, "reflection": False, "total": False}
+        debug={"segmenter": False, "afibdetector": False, "reflection": False, "total": False}
     )
 
     df = pd.read_csv(args.input_path) if not demo else pd.read_csv(args.input_path, nrows=3)
-    print(f"Total records in CSV: {len(df)}")
-    df = df[~df['hash'].isin(processed)]
-    print(f"Records to process after filtering: {len(df)}")
 
     chunks = [df.iloc[i:i + args.batch_size] for i in range(0, len(df), args.batch_size)]
     
