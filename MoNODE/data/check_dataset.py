@@ -1,4 +1,5 @@
-import os 
+import os
+import pickle 
 import numpy as np 
 import matplotlib.pyplot as plt
 
@@ -39,6 +40,9 @@ def get_time_stats(base_dir, plot=False):
         print(f'Total samples between 160 and 240: {t_custom_2}/{total_sample} ({t_custom_2/total_sample*100:.2f}%)')
         print(f'Total samples between 160 and 230: {t_custom_3}/{total_sample} ({t_custom_3/total_sample*100:.2f}%)')
 
+    with open('_'.join(base_dir.split('/')[-3:]) + '_time.pkl', "wb") as f:
+        pickle.dump(time, f)
+        
     if plot:
         fname = '_'.join(base_dir.split('/')[-3:]) + '_time.png'
         plt.figure(figsize=(8, 5))
@@ -54,7 +58,15 @@ dirs = [
     '/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled',
     '/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled',
     '/projects/prjs1890/MedalCare-XL/segments/train/ventricular/median',
-    '/projects/prjs1890/MedalCare-XL/segments/train/atrial/median'
+    '/projects/prjs1890/MedalCare-XL/segments/train/atrial/median',
+    '/projects/prjs1890/MedalCare-XL/segments/valid/ventricular/sampled',
+    '/projects/prjs1890/MedalCare-XL/segments/valid/atrial/sampled',
+    '/projects/prjs1890/MedalCare-XL/segments/valid/ventricular/median',
+    '/projects/prjs1890/MedalCare-XL/segments/valid/atrial/median'
+    '/projects/prjs1890/MedalCare-XL/segments/test/ventricular/sampled',
+    '/projects/prjs1890/MedalCare-XL/segments/test/atrial/sampled',
+    '/projects/prjs1890/MedalCare-XL/segments/test/ventricular/median',
+    '/projects/prjs1890/MedalCare-XL/segments/test/atrial/median'
 ]
 
 for base_dir in dirs:
