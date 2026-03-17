@@ -96,12 +96,12 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
     if not segments:
         return # Skip if no valid segments found
 
-    original_ecg = original_record.p_signal if beat_type == 'sampled' else record.median_beat.ecg
+    original_ecg = original_record.p_signal if beat_type == 'sampled' else record.median_beat.ecg.T
     print(f'ECG for {beat_type} {segment_type} has shape {original_ecg.shape}')
 
-    mu = np.mean(original_record.p_signal, axis=0, keepdims=True)
-    sigma = np.std(original_record.p_signal, axis=0, keepdims=True)
-    norm_ecg = (original_record.p_signal - mu) / (sigma + 1e-8)
+    mu = np.mean(original_ecg, axis=0, keepdims=True)
+    sigma = np.std(original_ecg, axis=0, keepdims=True)
+    norm_ecg = (original_ecg - mu) / (sigma + 1e-8)
 
     save_dir = os.path.join(out_dir, beat_type)
     os.makedirs(save_dir, exist_ok=True)
@@ -128,7 +128,7 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
                 plt.close() 
 
                 plt.figure(figsize=(10, 4))
-                plt.plot(ecg_segment, label='Normalised median beat')
+                plt.plot(ecg_segment[:, 0], label='Normalised median beat')
                 plt.axvspan(start, end, color='#e74c3c', alpha=0.5, label=f"Segmented for {segment_type}")
                 plt.xlabel('Time')
                 plt.ylabel('Amplitude')
