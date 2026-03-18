@@ -160,7 +160,7 @@ if __name__ == '__main__':
     logger.info('********** Running model on {} ********** '.format(device))
 
     ########### data ############ ``
-    trainset, validset, testset, params = load_data(args, dtype)
+    trainset, validset, testset, manager, params = load_data(args, dtype)
     logger.info('********** {} dataset with loaded ********** '.format(args.task))
     logger.info('data params: {}'.format(params[args.task]))
 
