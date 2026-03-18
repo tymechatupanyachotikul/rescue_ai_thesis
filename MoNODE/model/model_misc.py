@@ -2,6 +2,7 @@ import os, numpy as np
 from datetime import datetime
 import torch
 from torch.distributions import kl_divergence as kl
+from torch.nn.utils.rnn import pad_sequence
 
 from model.misc import log_utils 
 from model.misc.plot_utils import plot_results
@@ -153,6 +154,14 @@ def freeze_pars(par_list):
             print('something wrong!')
             raise ValueError('This is not a parameter!?')
 
+def compute_mse_stats(mse_list):
+    padded_tensor = pad_sequence(mse_list, batch_first=True, padding_value=float('nan'))
+    padded_np = padded_tensor.detach().cpu().numpy()
+    
+    mean_list = np.nanmean(padded_np, axis=0).astype(float).tolist()
+    std_list = np.nanstd(padded_np, axis=0).astype(float).tolist()
+    
+    return mean_list, std_list
 
 def train_model(args, model, plotter, trainset, validset, testset, logger, params, run, freeze_dyn=False):
 
@@ -232,7 +241,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 tr_minibatch = tr_minibatch.repeat([N_,1,1])
                 tr_minibatch = torch.stack([tr_minibatch[n,t0:t0+T_] for n,t0 in enumerate(t0s)]) # N*ns,T//2,d
                 
-            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _, _loss_per_class, _loss_per_patient, nlhood_dt= compute_loss(model, tr_minibatch, local_y, L, num_observations = trainset.dataset.shape[0])
+            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _, _loss_per_class, _loss_per_patient, nlhood_dt= compute_loss(model, tr_minibatch, local_y, L, num_observations = len(trainset.dataset.file_paths))
 
             optimizer.zero_grad()
             loss.backward() 
@@ -257,7 +266,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             time_val = datetime.now()-start_time
             run.log({
                 'train/tr_loss': loss.item(),
-                'train/tr_loss_per_sample': loss.item() / trainset.dataset.shape[0],
+                'train/tr_loss_per_sample': loss.item() / len(trainset.dataset.file_paths),
                 'train/mse': tr_mse.item(),
                 'train/nll': nlhood.item(),
                 'train/kl_z0': kl_z0.item(),
@@ -322,12 +331,9 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             valid_mse_rec = np.mean(dict_valid_mses[T_rec])
             valid_mse_for = np.mean(dict_valid_mses[T_for])
 
-            mse_t = list(torch.stack(dict_valid_misc['mse_t']).mean(dim=0).detach().cpu().numpy().astype(float))
-            sse_t = list(torch.stack(dict_valid_misc['mse_t']).std(dim=0).detach().cpu().numpy().astype(float))
-            mse_l = list(torch.stack(dict_valid_misc['mse_l']).mean(dim=0).detach().cpu().numpy().astype(float))
-            sse_l = list(torch.stack(dict_valid_misc['mse_l']).std(dim=0).detach().cpu().numpy().astype(float))
-            mse_dt = list(torch.stack(dict_valid_misc['mse_dt']).mean(dim=0).detach().cpu().numpy().astype(float))
-            sse_dt = list(torch.stack(dict_valid_misc['mse_dt']).std(dim=0).detach().cpu().numpy().astype(float))
+            mse_t, sse_t = compute_mse_stats(dict_valid_misc['mse_t'])
+            mse_l, sse_l = compute_mse_stats(dict_valid_misc['mse_l'])
+            mse_dt, sse_dt = compute_mse_stats(dict_valid_misc['mse_dt'])
 
             t = np.arange(len(mse_t))
             table = wandb.Table(data=[[ti, m, m-s, m+s] for ti, m, s in zip(t, mse_t, sse_t)],
@@ -447,7 +453,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
                     dict_test_misc['mse_t'].append(dict_misc['mse_t'])
                     dict_test_misc['mse_l'].append(dict_misc['mse_l'])
-                    dict_valid_misc['mse_dt'].append(dict_misc['mse_dt'])
+                    dict_test_misc['mse_dt'].append(dict_misc['mse_dt'])
 
                 logger.info('********** Current Best Model based on validation error ***********')
                 logger.info('Epoch:{:4d}/{:4d}'.format(ep, args.Nepoch))
@@ -456,12 +462,10 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                     run.log({
                         'test/mse': np.mean(dict_test_mses[key])
                     })
-                mse_t = list(torch.stack(dict_test_misc['mse_t']).mean(dim=0).detach().cpu().numpy().astype(float))
-                sse_t = list(torch.stack(dict_test_misc['mse_t']).std(dim=0).detach().cpu().numpy().astype(float))
-                mse_l = list(torch.stack(dict_test_misc['mse_l']).mean(dim=0).detach().cpu().numpy().astype(float))
-                sse_l = list(torch.stack(dict_test_misc['mse_l']).std(dim=0).detach().cpu().numpy().astype(float))
-                mse_dt = list(torch.stack(dict_valid_misc['mse_dt']).mean(dim=0).detach().cpu().numpy().astype(float))
-                sse_dt = list(torch.stack(dict_valid_misc['mse_dt']).std(dim=0).detach().cpu().numpy().astype(float))
+
+                mse_t, sse_t = compute_mse_stats(dict_test_misc['mse_t'])
+                mse_l, sse_l = compute_mse_stats(dict_test_misc['mse_l'])
+                mse_dt, sse_dt = compute_mse_stats(dict_test_misc['mse_dt'])
 
                 t = np.arange(len(mse_t))
                 table = wandb.Table(data=[[ti, m, m-s, m+s] for ti, m, s in zip(t, mse_t, sse_t)],

@@ -3,22 +3,15 @@ import yaml
 import json
 import torch
 from   torch.utils import data
-from data.data_gen import gen_sin_data, gen_lv_data, gen_rmnist_data, gen_bb_data, gen_mocap_data, gen_mocap_shift_data, gen_ecg_data
-import pickle
 from torch.nn.utils.rnn import pad_sequence
 from model.misc import io_utils
 
-def _adjust_name(data_path, substr, insertion):
-	idx = data_path.index(substr)
-	return data_path[:idx] + '-' + insertion + data_path[idx:]
-
-
 def load_data(args, dtype):
 	if args.task in ['rot_mnist', 'rot_mnist_ou', 'mov_mnist', 'sin', 'lv', 'spiral', 'bb', 'mocap', 'mocap_shift', 'ecg'] :
-		(trainset, valset, testset), params = __load_data(args, dtype, args.task)
+		(trainset, valset, testset, manager), params = __load_data(args, dtype, args.task)
 	else:
 		return ValueError(r'Invalid task {arg.task}')
-	return trainset, valset, testset, params  #, N, T, D, data_settings
+	return trainset, valset, testset, manager, params  #, N, T, D, data_settings
 
 class Dataset(data.Dataset):
 	def __init__(self, Xtr, Ytr=None):
@@ -82,7 +75,7 @@ def __load_data(args, dtype, dataset=None):
 	folder_path = os.path.join(args.data_root,args.task)
 
 	io_utils.makedirs(folder_path)
-	train_params, valid_params, test_params = get_data_params(args.data_root, params['dataset'], params['sample_type'], params['beat_type'], dataset, params[dataset]['exclude_leads'])
+	train_params, valid_params, test_params = get_data_params(args.dataset_root, params[dataset]['dataset'], params[dataset]['sample_type'], params[dataset]['beat_type'], dataset, params[dataset]['exclude_leads'])
 
 	return __build_dataset(args.num_workers, args.batch_size, train_params, valid_params, test_params, dtype, use_cache=params[dataset]['use_cache']), params
 
@@ -127,7 +120,7 @@ class ECGDataset(data.Dataset):
 			if self.include_idx is not None:
 				X = X[:, self.include_idx]
 				
-			if self.cache is not None and idx in self.cache:
+			if self.cache is not None and idx not in self.cache:
 				self.cache[idx] = X
 		
 		y = (self.labels[idx], self.run_id[idx]) if self.labels is not None else 0
@@ -144,6 +137,7 @@ def pad_collate(batch):
 
 def __build_dataset(num_workers, batch_size, train_params, valid_params, test_params, dtype, use_cache=True, shuffle=True):
 	# Data generators
+	manager = None
 	if num_workers>0:
 		import multiprocessing
 		torch.multiprocessing.set_start_method('spawn', force="True")
@@ -165,12 +159,12 @@ def __build_dataset(num_workers, batch_size, train_params, valid_params, test_pa
 		'collate_fn': pad_collate,
 		'pin_memory': True,
 		'persistent_workers': num_workers>0,
-		'prefetch_factor': 2 if num_workers>0 else 0
+		'prefetch_factor': 2 if num_workers>0 else None
 	}
 	
 	trainset  = ECGDataset(
 		train_params['file_paths'], 
-		train_params['labels'], 
+		train_params['class'], 
 		train_params['run_id'], 
 		dtype, 
 		train_params['exclude_leads'],
@@ -183,17 +177,18 @@ def __build_dataset(num_workers, batch_size, train_params, valid_params, test_pa
 		'shuffle': False, 
 		'num_workers': num_workers,
 		'drop_last': False,
+		'collate_fn': pad_collate,
 		'pin_memory': True,
 		'persistent_workers': num_workers>0,
-		'prefetch_factor': 2 if num_workers>0 else 0
+		'prefetch_factor': 2 if num_workers>0 else None
 	}
 	validset  = ECGDataset(
 		valid_params['file_paths'], 
-		valid_params['labels'], 
+		valid_params['class'], 
 		valid_params['run_id'], 
 		dtype, 
 		valid_params['exclude_leads'], 
-		use_cache=use_cache
+		shared_cache=valid_cache
 	)
 	validset  = data.DataLoader(validset, **vl_params)
 
@@ -202,19 +197,20 @@ def __build_dataset(num_workers, batch_size, train_params, valid_params, test_pa
 		'shuffle': False, 
 		'num_workers': num_workers, 
 		'drop_last': False,
+		'collate_fn': pad_collate,
 		'pin_memory': True,
 		'persistent_workers': num_workers>0,
-		'prefetch_factor': 2 if num_workers>0 else 0
+		'prefetch_factor': 2 if num_workers>0 else None
 	}
 
 	testset   = ECGDataset(
 		test_params['file_paths'], 
-		test_params['labels'],
+		test_params['class'],
 		test_params['run_id'], 
 		dtype, 
 		test_params['exclude_leads'], 
-		use_cache=use_cache
+		shared_cache=test_cache
 	)
 	testset   = data.DataLoader(testset, **te_params)
-	return trainset, validset, testset
+	return trainset, validset, testset, manager
 

@@ -94,6 +94,7 @@ ecg:
     T: 200
   dataset: MedalCare-XL
   beat_type: atrial
-  sample_type: sampled
+  sample_type: median
+  f: 500
   exclude_leads: []
   use_cache: True

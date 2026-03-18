@@ -124,11 +124,6 @@ parser.add_argument('--continue_dir', type=str, default='results/',
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    run = wandb.init(
-        entity="tymechatu-university-of-amsterdam",
-        project="rescue_ai",
-        config=vars(args),
-    )
     ######### setup output directory and logger ###########
     args.save = os.path.join(os.path.abspath(os.path.dirname(__file__)), \
         args.save+args.task+'/'+args.model+'/'+datetime.now().strftime('%d_%m_%Y-%H:%M-')+str(args.exp_id), '')
@@ -161,6 +156,12 @@ if __name__ == '__main__':
 
     ########### data ############ ``
     trainset, validset, testset, manager, params = load_data(args, dtype)
+    run = wandb.init(
+        entity="tymechatu-university-of-amsterdam",
+        name=f'{args.model}_ode-{args.ode_latent_dim}_mod-{args.modulator_dim}_batch-{args.batch_size}_lr-{args.lr}_sample-{params[args.task]["sample_type"]}',
+        project=f"rescue_ai/NODE_{params[args.task]['beat_type']}",
+        config=vars(args),
+    )
     logger.info('********** {} dataset with loaded ********** '.format(args.task))
     logger.info('data params: {}'.format(params[args.task]))
 
