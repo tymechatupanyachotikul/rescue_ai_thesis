@@ -1,6 +1,9 @@
 import os
+import numpy as np
+import torch
+from pathlib import Path
+import itertools
 import pickle 
-import numpy as np 
 import matplotlib.pyplot as plt
 
 def get_time_stats(base_dir, plot=False):
@@ -71,5 +74,45 @@ dirs = [
     '/projects/prjs1890/MedalCare-XL/segments/test/atrial/median'
 ]
 
-for base_dir in dirs:
-    get_time_stats(base_dir)
+def convert_npy_to_pth(base_dir):
+    base_path = Path(base_dir)
+    splits = ['train', 'valid', 'test']
+    beat_type  = ['ventricular', 'atrial']
+    sample_type = ['sampled', 'median']
+
+    combinations = itertools.product(splits, beat_type, sample_type)
+
+    for split, beat, sample in combinations:
+        cur_dir = base_path / split / beat / sample
+
+        if not cur_dir.exists():
+            continue
+        
+        print(f'Processing directory: {cur_dir}')
+
+        processed = 0
+        total_files = 0
+        for npy_file in cur_dir.glob('*.npy'):
+            pth_file = npy_file.with_suffix('.pth')
+            total_files += 1
+            try:
+                data = np.load(npy_file)
+                tensor_data = torch.from_numpy(data)
+                
+                torch.save(tensor_data, pth_file)
+                
+                if pth_file.exists() and pth_file.stat().st_size > 0:
+                    npy_file.unlink() 
+                    processed += 1
+                else:
+                    print(f"Warning: {pth_file} failed to save properly. Keeping original.")
+                    
+            except Exception as e:
+                print(f"Error processing {npy_file.name}: {e}")
+                if pth_file.exists():
+                    pth_file.unlink()
+
+        print(f'Finished processing {cur_dir}. Successfully converted {processed}/{total_files} files.')
+
+base_dir = '/projects/prjs1890/MedalCare-XL/segments/'
+convert_npy_to_pth(base_dir)
