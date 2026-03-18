@@ -85,14 +85,15 @@ mocap_shift:
 ecg:
   train:
     N: 5600
-    T: 500
+    T: 200
   valid:
     N: 490
-    T: 500
+    T: 200
   test:
     N: 490
-    T: 500
-  f: 250
+    T: 200
   dataset: MedalCare-XL
-  type: raw
-  exclude_leads: ['II', 'III', 'aVR', 'aVL']
+  beat_type: atrial
+  sample_type: sampled
+  exclude_leads: []
+  use_cache: True

@@ -5,7 +5,7 @@ import torch
 from   torch.utils import data
 from data.data_gen import gen_sin_data, gen_lv_data, gen_rmnist_data, gen_bb_data, gen_mocap_data, gen_mocap_shift_data, gen_ecg_data
 import pickle
-
+from torch.nn.utils.rnn import pad_sequence
 from model.misc import io_utils
 
 def _adjust_name(data_path, substr, insertion):
@@ -13,162 +13,12 @@ def _adjust_name(data_path, substr, insertion):
 	return data_path[:idx] + '-' + insertion + data_path[idx:]
 
 
-def load_data(args, device, dtype):
+def load_data(args, dtype):
 	if args.task in ['rot_mnist', 'rot_mnist_ou', 'mov_mnist', 'sin', 'lv', 'spiral', 'bb', 'mocap', 'mocap_shift', 'ecg'] :
-		(trainset, valset, testset), params = __load_data(args, device, dtype, args.task)
+		(trainset, valset, testset), params = __load_data(args, dtype, args.task)
 	else:
 		return ValueError(r'Invalid task {arg.task}')
 	return trainset, valset, testset, params  #, N, T, D, data_settings
-
-
-def __load_data(args, device, dtype, dataset=None):
-	#load data parameters
-	with open("data/config.yml", 'r') as stream:
-		try:
-			params = yaml.safe_load(stream)
-		except yaml.YAMLError as exc:
-			print(exc)
-
-	#create data folder/files
-	if args.task == 'sin':
-		#override config file
-		if args.noise is not None:
-			params[args.task]['noise'] = args.noise
-
-		folder_path = os.path.join(args.data_root,args.task + str(params[args.task]['noise']))	     
-	else:
-		folder_path = os.path.join(args.data_root,args.task)
-
-	io_utils.makedirs(folder_path)
-	data_path_tr = os.path.join(folder_path,f'{dataset}-tr-data.pkl')
-	data_path_vl = os.path.join(folder_path,f'{dataset}-vl-data.pkl')
-	data_path_te = os.path.join(folder_path,f'{dataset}-te-data.pkl')
-
-	data_path_ytr = os.path.join(folder_path,f'{dataset}-ytr-data.pkl')
-	data_path_yvl = os.path.join(folder_path,f'{dataset}-yvl-data.pkl')
-	data_path_yte = os.path.join(folder_path,f'{dataset}-yte-data.pkl')
-
-	#adjust name if specifc configuration
-	if dataset == 'bb':
-		data_path_tr = _adjust_name(data_path_tr, '.pkl', str(params[dataset]['nballs']))
-		data_path_vl = _adjust_name(data_path_vl, '.pkl', str(params[dataset]['nballs']))
-		data_path_te = _adjust_name(data_path_te, '.pkl', str(params[dataset]['nballs']))
-	elif dataset == 'ecg':
-		data_path_tr = _adjust_name(data_path_tr, '.pkl', 
-							  str(params[dataset]['type']) + 
-							  str(params[dataset]['f']) + str(params[dataset]['dataset']) + 
-							  str('150' if params[dataset]['qrs_only'] else params[dataset]['train']['T']) + 
-							  str('QRS' if params[dataset]['qrs_only'] else '') + 
-							  str('join_atrial' if params[dataset]['join_atrial'] else ''))
-		data_path_vl = _adjust_name(data_path_vl, '.pkl', 
-							  str(params[dataset]['type']) +
-							    str(params[dataset]['f']) + 
-								str(params[dataset]['dataset']) + 
-								str('150' if params[dataset]['qrs_only'] else params[dataset]['valid']['T']) + 
-								str('QRS' if params[dataset]['qrs_only'] else '') + 
-								str('join_atrial' if params[dataset]['join_atrial'] else ''))
-		data_path_te = _adjust_name(data_path_te, '.pkl', 
-							  str(params[dataset]['type']) + 
-							  str(params[dataset]['f']) + 
-							  str(params[dataset]['dataset']) + 
-							  str('150' if params[dataset]['qrs_only'] else params[dataset]['test']['T']) + 
-							  str('QRS' if params[dataset]['qrs_only'] else '') + 
-							  str('join_atrial' if params[dataset]['join_atrial'] else ''))
-
-	#load or generate data
-	try:
-		Xtr = torch.load(data_path_tr)
-		Xvl = torch.load(data_path_vl)
-		Xte = torch.load(data_path_te)
-		Ytr = None
-		Yvl = None
-		Yte = None
-		print('Data loaded')
-		#if loaded data does not match the parameter settings assert and re generate the data 
-		if dataset != 'ecg':
-			assert Xtr.shape[0] == params[dataset]['train']['N'] and Xtr.shape[1] == params[dataset]['train']['T'] 
-			assert Xvl.shape[0] == params[dataset]['valid']['N'] and Xvl.shape[1] == params[dataset]['valid']['T']
-			assert Xte.shape[0] == params[dataset]['test']['N'] and Xte.shape[1] == params[dataset]['test']['T']
-		else:
-			with open(data_path_ytr, "rb") as f:
-				Ytr = pickle.load(f)
-			with open(data_path_yvl, "rb") as f:
-				Yvl = pickle.load(f)
-			with open(data_path_yte, "rb") as f:
-				Yte = pickle.load(f)
-			print('GT loaded')
-	except:
-		print(f'Could not load data from {data_path_tr}, {data_path_vl}, {data_path_te} or GT from {data_path_ytr}, {data_path_yvl}, {data_path_yte}. Generating data...')
-		with open(folder_path+'/gen_info.txt', 'w') as f:
-			f.write(json.dumps(params[dataset]))
-
-		if dataset=='sin':
-			data_loader_fnc = gen_sin_data
-		elif dataset == 'lv':
-			data_loader_fnc = gen_lv_data
-		elif dataset == 'rot_mnist':
-			data_loader_fnc = gen_rmnist_data
-		elif dataset == 'bb':
-			data_loader_fnc = gen_bb_data
-		elif dataset == 'mocap':
-			data_loader_fnc = gen_mocap_data
-		elif dataset == 'mocap_shift':
-			data_loader_fnc = gen_mocap_shift_data
-		elif dataset == 'ecg':
-			data_loader_fnc = gen_ecg_data
-
-		data_loader_fnc(data_path_tr, data_path_ytr, params, flag='train')
-		data_loader_fnc(data_path_vl, data_path_yvl, params, flag='valid')
-		data_loader_fnc(data_path_te, data_path_yte, params, flag='test')
-
-		Xtr = torch.load(data_path_tr)
-		Xvl = torch.load(data_path_vl)
-		Xte = torch.load(data_path_te)
-
-		with open(data_path_ytr, "rb") as f:
-				Ytr = pickle.load(f)
-		with open(data_path_yvl, "rb") as f:
-			Yvl = pickle.load(f)
-		with open(data_path_yte, "rb") as f:
-			Yte = pickle.load(f)
-
-	if dataset == 'bb':
-		Xtr = torch.Tensor(Xtr).unsqueeze(2)
-		Xvl = torch.Tensor(Xvl).unsqueeze(2)
-		Xte = torch.Tensor(Xte).unsqueeze(2)
-
-	if dataset == 'ecg':
-		exclude_leads = params[dataset]['exclude_leads']
-		lead_idx = {
-			'I': 0, 
-			'II': 1,
-			'III': 2, 
-			'aVR': 3, 
-			'aVL': 4,
-			'aVF': 5,
-			'V1': 6,
-			'V2': 7,
-			'V3': 8, 
-			'V4': 9, 
-			'V5': 10, 
-			'V6': 11
-		}
-
-		include_idx = [idx for lead, idx in lead_idx.items() if lead not in exclude_leads]
-		Xtr = Xtr[:, :, include_idx]
-		Xvl = Xvl[:, :, include_idx]
-		Xte = Xte[:, :, include_idx]
-
-	Xtr = Xtr.to(device).to(dtype)
-	Xvl = Xvl.to(device).to(dtype)
-	Xte = Xte.to(device).to(dtype)
-
-	print('Train data: ', Xtr.shape)
-	print('Val   data: ', Xvl.shape)
-	print('Test  data: ', Xte.shape)
-
-	return __build_dataset(args.num_workers, args.batch_size, Xtr, Xvl, Xte, Ytr, Yvl, Yte), params
-
 
 class Dataset(data.Dataset):
 	def __init__(self, Xtr, Ytr=None):
@@ -184,21 +34,187 @@ class Dataset(data.Dataset):
 	def shape(self):
 		return self.Xtr.shape
 
+def get_data_params(root_dir, dataset, sample_type, beat_type, task, exclude_leads=[]):
 
-def __build_dataset(num_workers, batch_size, Xtr, Xvl, Xte, Ytr=None, Yvl=None, Yte=None, shuffle=True):
+	splits = ['train', 'valid', 'test']
+	data_param_path = os.path.join('data', task, f'{dataset}_{beat_type}_{sample_type}_data_params.json')
+	if os.path.exists(data_param_path):
+		with open(data_param_path, 'r') as f:
+			split_dict = json.load(f)
+			
+			return split_dict['train'], split_dict['valid'], split_dict['test']
+		
+	split_dict = {}
+	for split in splits:
+		base_dir = os.path.join(root_dir, dataset, 'segments', split, beat_type, sample_type)
+
+		split_info = {
+			'file_paths': [],
+			'class': [], 
+			'run_id': [],
+			'exclude_leads': exclude_leads
+		}
+
+		for file_path in os.listdir(base_dir):
+			if file_path.endswith('.pth'):
+				split_info['file_paths'].append(os.path.join(base_dir, file_path))
+
+				path_split = file_path.split('_')
+				split_info['run_id'].append(path_split[1])
+				split_info['class'].append('_'.join(path_split[3:]).split('.')[0])
+		
+		split_dict[split] = split_info
+	
+	with open(data_param_path, 'w') as f:
+		json.dump(split_dict, f, indent=4)
+
+	return split_dict['train'], split_dict['valid'], split_dict['test']
+
+
+def __load_data(args, dtype, dataset=None):
+	#load data parameters
+	with open("data/config.yml", 'r') as stream:
+		try:
+			params = yaml.safe_load(stream)
+		except yaml.YAMLError as exc:
+			print(exc)
+
+	folder_path = os.path.join(args.data_root,args.task)
+
+	io_utils.makedirs(folder_path)
+	train_params, valid_params, test_params = get_data_params(args.data_root, params['dataset'], params['sample_type'], params['beat_type'], dataset, params[dataset]['exclude_leads'])
+
+	return __build_dataset(args.num_workers, args.batch_size, train_params, valid_params, test_params, dtype, use_cache=params[dataset]['use_cache']), params
+
+
+class ECGDataset(data.Dataset):
+	def __init__(self, file_paths, labels, run_id, dtype, exclude_leads=[], shared_cache=None):
+		self.file_paths = file_paths
+		self.labels = labels
+		self.run_id = run_id
+		self.exclude_leads = exclude_leads
+		self.cache = shared_cache
+		self.dtype = dtype
+
+		self.lead_idx = {
+			'I': 0, 
+			'II': 1,
+			'III': 2, 
+			'aVR': 3, 
+			'aVL': 4,
+			'aVF': 5,
+			'V1': 6,
+			'V2': 7,
+			'V3': 8, 
+			'V4': 9, 
+			'V5': 10, 
+			'V6': 11
+		}
+
+		if self.exclude_leads:
+			self.include_idx = [idx for lead, idx in self.lead_idx.items() if lead not in self.exclude_leads]
+		else:
+			self.include_idx = None
+
+	def __len__(self):
+		return len(self.file_paths)
+	
+	def __getitem__(self, idx):
+		if self.cache is not None and idx in self.cache:
+			X = self.cache[idx]
+		else:
+			X = torch.load(self.file_paths[idx]).to(dtype=self.dtype)
+			if self.include_idx is not None:
+				X = X[:, self.include_idx]
+				
+			if self.cache is not None and idx in self.cache:
+				self.cache[idx] = X
+		
+		y = (self.labels[idx], self.run_id[idx]) if self.labels is not None else 0
+		return X, y
+	
+
+def pad_collate(batch):
+	sequences = [item[0] for item in batch]
+	labels = [item[1] for item in batch]
+	
+	padded_sequences = pad_sequence(sequences, batch_first=True, padding_value=0.0)
+
+	return padded_sequences, labels
+
+def __build_dataset(num_workers, batch_size, train_params, valid_params, test_params, dtype, use_cache=True, shuffle=True):
 	# Data generators
 	if num_workers>0:
-		from multiprocessing import Process, freeze_support
+		import multiprocessing
 		torch.multiprocessing.set_start_method('spawn', force="True")
+		manager = multiprocessing.Manager() 
 
-	tr_params = {'batch_size': min(batch_size,Xtr.shape[0]), 'shuffle': shuffle, 'num_workers': num_workers, 'drop_last': True}
-	trainset  = Dataset(Xtr, Ytr)
+		train_cache = manager.dict() if use_cache else None
+		valid_cache = manager.dict() if use_cache else None
+		test_cache  = manager.dict() if use_cache else None
+	else:
+		train_cache = {} if use_cache else None
+		valid_cache = {} if use_cache else None
+		test_cache  = {} if use_cache else None
+
+	tr_params = {
+		'batch_size': min(batch_size, len(train_params['file_paths'])), 
+		'shuffle': shuffle, 
+		'num_workers': num_workers, 
+		'drop_last': True, 
+		'collate_fn': pad_collate,
+		'pin_memory': True,
+		'persistent_workers': num_workers>0,
+		'prefetch_factor': 2 if num_workers>0 else 0
+	}
+	
+	trainset  = ECGDataset(
+		train_params['file_paths'], 
+		train_params['labels'], 
+		train_params['run_id'], 
+		dtype, 
+		train_params['exclude_leads'],
+		shared_cache=train_cache
+	)
 	trainset  = data.DataLoader(trainset, **tr_params)
-	vl_params = {'batch_size': min(batch_size,Xvl.shape[0]), 'shuffle': shuffle, 'num_workers': num_workers, 'drop_last': True}
-	validset  = Dataset(Xvl, Yvl)
+
+	vl_params = {
+		'batch_size': min(batch_size, len(valid_params['file_paths'])), 
+		'shuffle': False, 
+		'num_workers': num_workers,
+		'drop_last': False,
+		'pin_memory': True,
+		'persistent_workers': num_workers>0,
+		'prefetch_factor': 2 if num_workers>0 else 0
+	}
+	validset  = ECGDataset(
+		valid_params['file_paths'], 
+		valid_params['labels'], 
+		valid_params['run_id'], 
+		dtype, 
+		valid_params['exclude_leads'], 
+		use_cache=use_cache
+	)
 	validset  = data.DataLoader(validset, **vl_params)
-	te_params = {'batch_size': min(batch_size,Xte.shape[0]), 'shuffle': shuffle, 'num_workers': num_workers, 'drop_last': True}
-	testset   = Dataset(Xte, Yte)
+
+	te_params = {
+		'batch_size': min(batch_size, len(test_params['file_paths'])), 
+		'shuffle': False, 
+		'num_workers': num_workers, 
+		'drop_last': False,
+		'pin_memory': True,
+		'persistent_workers': num_workers>0,
+		'prefetch_factor': 2 if num_workers>0 else 0
+	}
+
+	testset   = ECGDataset(
+		test_params['file_paths'], 
+		test_params['labels'],
+		test_params['run_id'], 
+		dtype, 
+		test_params['exclude_leads'], 
+		use_cache=use_cache
+	)
 	testset   = data.DataLoader(testset, **te_params)
 	return trainset, validset, testset
 

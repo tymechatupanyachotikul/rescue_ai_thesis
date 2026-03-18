@@ -30,6 +30,8 @@ parser.add_argument('--data_root', type=str, default='data/',
                     help="general data location")
 parser.add_argument('--shuffle', type=eval, default=True,
                help='For Moving MNIST whetehr to shuffle the data')
+parser.add_argument('--dataset_root', type=str, default='/projects/prjs1890/',
+                    help="dataset location for ecg")
 
 #de model
 parser.add_argument('--model', type=str, default='node', choices=MODELS,
@@ -158,7 +160,7 @@ if __name__ == '__main__':
     logger.info('********** Running model on {} ********** '.format(device))
 
     ########### data ############ ``
-    trainset, validset, testset, params = load_data(args, device, dtype)
+    trainset, validset, testset, params = load_data(args, dtype)
     logger.info('********** {} dataset with loaded ********** '.format(args.task))
     logger.info('data params: {}'.format(params[args.task]))
 
