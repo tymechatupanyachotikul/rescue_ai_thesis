@@ -1,4 +1,5 @@
 import os
+from turtle import pd
 import numpy as np
 import torch
 from pathlib import Path
@@ -6,6 +7,7 @@ import itertools
 import pickle 
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import random 
 
 def get_time_stats(base_dir, plot=False):
     
@@ -117,5 +119,36 @@ def convert_npy_to_pth(base_dir):
 
         tqdm.write(f'Finished processing {cur_dir}. Successfully converted {processed}/{total_files} files.')
 
-base_dir = '/projects/prjs1890/MedalCare-XL/segments/'
-convert_npy_to_pth(base_dir)
+def get_uk_bb_split(root_dir):
+    train_split = 0.7 
+    val_split = 0.15 
+
+    npy_files = list(root_dir.glob('*.npy'))
+    random.seed(42)
+    random.shuffle(npy_files)
+
+    num_patients = len(npy_files)
+    train_end = int(num_patients * train_split)
+    val_end = train_end + int(num_patients * val_split)
+
+    train_ids = npy_files[:train_end]
+    val_ids = npy_files[train_end:val_end]
+    test_ids = npy_files[val_end:]
+
+    train_paths = {'data_path': [os.path.join(root_dir, str(f)) for f in train_ids]}
+    val_paths = {'data_path': [os.path.join(root_dir, str(f)) for f in val_ids]}
+    test_paths = {'data_path': [os.path.join(root_dir, str(f)) for f in test_ids]}  
+
+    df_train = pd.DataFrame(train_paths)
+    df_train.to_csv("/projects/prjs1890/uk_biobank/data_split/ukbb_train.csv", index=False)
+
+    df_val = pd.DataFrame(val_paths)
+    df_val.to_csv("/projects/prjs1890/uk_biobank/data_split/ukbb_valid.csv", index=False)
+
+    df_test = pd.DataFrame(test_paths)
+    df_test.to_csv("/projects/prjs1890/uk_biobank/data_split/ukbb_test.csv", index=False)
+
+    print(f"Train: {len(df_train)} | Val: {len(df_val)} | Test: {len(df_test)}")
+
+root_dir = '/projects/prjs1890/uk_biobank/processed'
+get_uk_bb_split(root_dir)
