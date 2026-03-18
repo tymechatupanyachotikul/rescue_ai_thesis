@@ -115,7 +115,7 @@ def convert_npy_to_pth(base_dir):
                 if pth_file.exists():
                     pth_file.unlink()
 
-        print(f'Finished processing {cur_dir}. Successfully converted {processed}/{total_files} files.')
+        tqdm.write(f'Finished processing {cur_dir}. Successfully converted {processed}/{total_files} files.')
 
 base_dir = '/projects/prjs1890/MedalCare-XL/segments/'
 convert_npy_to_pth(base_dir)
