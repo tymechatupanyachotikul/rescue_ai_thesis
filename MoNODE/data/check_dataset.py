@@ -5,6 +5,7 @@ from pathlib import Path
 import itertools
 import pickle 
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 def get_time_stats(base_dir, plot=False):
     
@@ -88,13 +89,15 @@ def convert_npy_to_pth(base_dir):
         if not cur_dir.exists():
             continue
         
-        print(f'Processing directory: {cur_dir}')
+        npy_files = list(cur_dir.glob('*.npy'))
+        total_files = len(npy_files)
 
+        print(f'Processing directory: {cur_dir}')
+    
         processed = 0
-        total_files = 0
-        for npy_file in cur_dir.glob('*.npy'):
+        desc_label = f"{split}/{beat}/{sample}"
+        for npy_file in tqdm(npy_files, desc=desc_label):
             pth_file = npy_file.with_suffix('.pth')
-            total_files += 1
             try:
                 data = np.load(npy_file)
                 tensor_data = torch.from_numpy(data)
@@ -105,10 +108,10 @@ def convert_npy_to_pth(base_dir):
                     npy_file.unlink() 
                     processed += 1
                 else:
-                    print(f"Warning: {pth_file} failed to save properly. Keeping original.")
+                    tqdm.write(f"Warning: {pth_file} failed to save properly. Keeping original.")
                     
             except Exception as e:
-                print(f"Error processing {npy_file.name}: {e}")
+                tqdm.write(f"Error processing {npy_file.name}: {e}")
                 if pth_file.exists():
                     pth_file.unlink()
 
