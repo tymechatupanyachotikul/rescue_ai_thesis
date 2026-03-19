@@ -217,7 +217,12 @@ def get_mimic_split(root_dir, dest_dir, lvef_csv):
 # root_dir = '/projects/prjs1890/uk_biobank/processed'
 # get_uk_bb_split(root_dir)
 
-root_dir = '/scratch-shared/tchatupanyacho/mimic-iv-ecg-diagnostic-electrocardiogram-matched-subset-1.0'
-save_dir = '/projects/prjs1890/mimic-iv'
-lvef_csv = '/home/tchatupanyacho/rescue_ai_thesis/ECGFounder/csv/LVEF.csv'
-get_mimic_split(root_dir, save_dir, lvef_csv)
+# root_dir = '/scratch-shared/tchatupanyacho/mimic-iv-ecg-diagnostic-electrocardiogram-matched-subset-1.0'
+# save_dir = '/projects/prjs1890/mimic-iv'
+# lvef_csv = '/home/tchatupanyacho/rescue_ai_thesis/ECGFounder/csv/LVEF.csv'
+#get_mimic_split(root_dir, save_dir, lvef_csv)
+
+get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled')
+get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled')
+
+
