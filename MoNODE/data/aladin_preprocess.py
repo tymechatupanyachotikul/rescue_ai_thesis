@@ -61,6 +61,10 @@ def load_and_convert_case(row, dataset):
     record = Record(ecg_dict, rec.fs, "DEMO", case)
     if hasattr(row, 'label'):
         record.groundtruth = row.label 
+    if hasattr(row, 'class'):
+        record.groundtruth = getattr(row, 'class')
+    if hasattr(row, 'LVEF'):
+        record.LVEF = row.LVEF
     if hasattr(row, 'hash'):
         record.hash = row.hash        
     record.original_file_path = row.data_path
@@ -121,7 +125,7 @@ def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, 
                 base_name = f'T{delta_t}_{run_id}_{session_id}_{label}_{idx}'
             else:
                 base_name = f'T{delta_t}_{run_id}_{session_id}_{label}'
-        elif dataset == 'ukbb':
+        elif dataset in ['ukbb', 'mimic-iv']:
             run_id = os.path.splitext(record.original_file_path)[0]
             if beat_type == 'sampled':
                 base_name = f'T{delta_t}_{run_id}_{idx}'
@@ -199,13 +203,13 @@ if __name__ == "__main__":
 
     if dataset == 'MedalCare-XL':
         segment_type = os.path.splitext(args.input_path)[0].split('_')[-1]
-    elif dataset == 'ukbb':
+    elif dataset in ['ukbb', 'mimic-iv']:
         segment_type = 'both'
 
     beat_type = args.beat_type
     if dataset == 'MedalCare-XL':
         split = os.path.splitext(args.input_path)[0].split('_')[-2]
-    elif dataset == 'ukbb':
+    elif dataset in ['ukbb', 'mimic-iv']:
         split = os.path.splitext(args.input_path)[0].split('_')[-1]
 
     demo = args.demo
@@ -261,7 +265,7 @@ if __name__ == "__main__":
                     session_id = record.original_file_path.split('/')[-1].split('_')[0]
                     label = record.groundtruth.replace('.', '')
                     aladin.plot(record, name=os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_ecg.png'))
-                elif dataset == 'ukbb':
+                elif dataset in ['ukbb', 'mimic-iv']:
                     run_id = os.path.splitext(record.original_file_path)[0]
                     aladin.plot(record, name=os.path.join(plot_dir, f'{run_id}_ecg.png'))
         else:
