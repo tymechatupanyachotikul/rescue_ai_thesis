@@ -171,9 +171,9 @@ def get_mimic_split(root_dir, dest_dir, lvef_csv):
             filename = '_'.join(file_path.split('/')[2:4])
             file_path = os.path.join(ecg_save_dir, filename)
 
-        patient_id_dict[row.patient_id]['file_path'].append(file_path)
-        patient_id_dict[row.patient_id]['lvef'].append(row.LVEF)
-        patient_id_dict[row.patient_id]['class'].append(getattr(row, 'class'))
+        patient_id_dict[row.subject_id]['file_path'].append(file_path)
+        patient_id_dict[row.subject_id]['lvef'].append(row.LVEF)
+        patient_id_dict[row.subject_id]['class'].append(getattr(row, 'class'))
     
     n_train = int(len(df) * 0.8)
     n_val = int(len(df) * 0.1)
