@@ -97,8 +97,8 @@ def process_file(task: tuple) -> tuple[str, str]:
         feats = feats[:, :TARGET_SIZE]
 
         # -- Global normalisation --------------------------------------------
-        std = feats.std()
-        feats = (feats - feats.mean()) / (std + 1e-8)
+        # std = feats.std()
+        # feats = (feats - feats.mean()) / (std + 1e-8)
 
         # -- Save ------------------------------------------------------------
         np.save(out_path, feats.astype(np.float32))
