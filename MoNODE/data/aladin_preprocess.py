@@ -5,6 +5,7 @@ import pandas as pd
 import os
 import glob
 import gc
+from carputils.carputils import ecg
 import wfdb
 from tqdm import tqdm
 import ast
@@ -43,7 +44,10 @@ def load_and_convert_case(row, dataset):
 
         if ecg.shape[0] < ecg.shape[1]:
             ecg = ecg.T
-            
+        
+        print(f"Global Max: {np.max(ecg)}")
+        print(f"Global Min: {np.min(ecg)}")
+        
         wfdb.wrsamp(
             record_name=case, 
             write_dir=directory_path,
