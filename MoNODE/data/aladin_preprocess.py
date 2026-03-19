@@ -11,6 +11,7 @@ import ast
 import argparse
 import numpy as np 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import torch 
 
 from aladin import ALADIN
 from aladin.core import Record
@@ -43,9 +44,6 @@ def load_and_convert_case(row, dataset):
 
         if ecg.shape[0] < ecg.shape[1]:
             ecg = ecg.T
-        
-        print(f"Global Max: {np.max(ecg)}")
-        print(f"Global Min: {np.min(ecg)}")
 
         wfdb.wrsamp(
             record_name=case, 
@@ -54,7 +52,7 @@ def load_and_convert_case(row, dataset):
             units=['mV'] * ecg.shape[1], 
             sig_name=LEADS_DICT[dataset][:ecg.shape[1]], 
             p_signal=ecg, 
-            fmt=['32'] * ecg.shape[1]
+            fmt=['16'] * ecg.shape[1]
         )    
 
     rec = wfdb.rdrecord(filepath)
@@ -130,7 +128,9 @@ def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, 
             else:
                 base_name = f'T{delta_t}_{run_id}'
 
-        np.save(os.path.join(save_dir, f'{base_name}.npy'), ecg_segment.astype(np.float32))
+        ecg_segment = torch.from_numpy(ecg_segment.astype(np.float32))
+        save_path = os.path.join(save_dir, f'{base_name}.pth')
+        torch.save(ecg_segment, save_path)
 
         if plot:
             if beat_type == 'median':
@@ -160,7 +160,7 @@ def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, 
                 fig.savefig(f'{base_name}_segment_{beat_type}.png')
                 plt.close(fig)
 
-def process_and_save_segments(record, original_record, segment_type, out_dir, beat_type, dataset, normalise=True, plot=False):
+def process_and_save_segments(record, original_record, segment_type, out_dir, beat_type, dataset, plot=False):
     """Worker function to handle normalization and saving to disk."""
     segments_dict = {}
     segment_type = ['atrial', 'ventricular'] if segment_type == 'both' else [segment_type]
@@ -176,12 +176,9 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
     original_ecg = original_record.p_signal if beat_type == 'sampled' else record.median_beat.ecg.T
     print(f'ECG for {beat_type} {segment_type} has shape {original_ecg.shape}')
 
-    if normalise:
-        mu = np.mean(original_ecg, axis=0, keepdims=True)
-        sigma = np.std(original_ecg, axis=0, keepdims=True)
-        norm_ecg = (original_ecg - mu) / (sigma + 1e-8)
-    else:
-        norm_ecg = original_ecg
+    mu = np.mean(original_ecg, axis=0, keepdims=True)
+    sigma = np.std(original_ecg, axis=0, keepdims=True)
+    norm_ecg = (original_ecg - mu) / (sigma + 1e-8)
 
     for seg_type, seg_idx in segments_dict.items():
         save_ecg_segment(seg_idx, norm_ecg, original_record, record, seg_type, out_dir, beat_type, dataset, plot=plot)
@@ -202,10 +199,8 @@ if __name__ == "__main__":
 
     if dataset == 'MedalCare-XL':
         segment_type = os.path.splitext(args.input_path)[0].split('_')[-1]
-        normalise = True
     elif dataset == 'ukbb':
         segment_type = 'both'
-        normalise = False
 
     beat_type = args.beat_type
     if dataset == 'MedalCare-XL':
@@ -273,7 +268,7 @@ if __name__ == "__main__":
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
                 futures = []
                 for rec, orig in zip(records, original_records):
-                    futures.append(executor.submit(process_and_save_segments, rec, orig, segment_type, out_dir, beat_type, dataset, normalise=normalise, plot=demo))
+                    futures.append(executor.submit(process_and_save_segments, rec, orig, segment_type, out_dir, beat_type, dataset, plot=demo))
                 
                 for future in as_completed(futures):
                     try:
