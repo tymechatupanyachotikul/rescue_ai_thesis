@@ -123,6 +123,7 @@ def get_uk_bb_split(root_dir):
     train_split = 0.7 
     val_split = 0.15 
 
+    root_dir = Path(root_dir)
     npy_files = list(root_dir.glob('*.npy'))
     random.seed(42)
     random.shuffle(npy_files)
@@ -135,9 +136,9 @@ def get_uk_bb_split(root_dir):
     val_ids = npy_files[train_end:val_end]
     test_ids = npy_files[val_end:]
 
-    train_paths = {'data_path': [os.path.join(root_dir, str(f)) for f in train_ids]}
-    val_paths = {'data_path': [os.path.join(root_dir, str(f)) for f in val_ids]}
-    test_paths = {'data_path': [os.path.join(root_dir, str(f)) for f in test_ids]}  
+    train_paths = {'data_path': [root_dir / str(f) for f in train_ids]}
+    val_paths = {'data_path': [root_dir /  str(f) for f in val_ids]}
+    test_paths = {'data_path': [root_dir / str(f) for f in test_ids]}  
 
     df_train = pd.DataFrame(train_paths)
     df_train.to_csv("/projects/prjs1890/uk_biobank/data_split/ukbb_train.csv", index=False)
