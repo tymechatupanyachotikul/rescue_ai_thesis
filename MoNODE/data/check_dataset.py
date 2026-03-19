@@ -8,6 +8,8 @@ import pickle
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import random 
+from collections import defaultdict
+import shutil 
 
 def get_time_stats(base_dir, plot=False):
     
@@ -151,5 +153,71 @@ def get_uk_bb_split(root_dir):
 
     print(f"Train: {len(df_train)} | Val: {len(df_val)} | Test: {len(df_test)}")
 
-root_dir = '/projects/prjs1890/uk_biobank/processed'
-get_uk_bb_split(root_dir)
+def get_mimic_split(root_dir, dest_dir, lvef_csv):
+
+    df = pd.read_csv(lvef_csv)
+
+    patient_id_dict = defaultdict(lambda: defaultdict(list))
+    ecg_save_dir = os.path.join(dest_dir, 'raw')
+    for row in df.itertuples():
+        file_path = os.path.join(root_dir, str(row.waveform_path))
+        if not os.path.exists(file_path + '.dat') or not os.path.exists(file_path + '.hea'):
+            print(f"Warning: File {file_path} does not exist. Skipping.")
+            continue
+        else:
+            shutil.move(file_path + '.dat', ecg_save_dir)
+            shutil.move(file_path + '.hea', ecg_save_dir)
+
+            filename = '_'.join(file_path.split('/')[2:4])
+            file_path = os.path.join(ecg_save_dir, filename)
+
+        patient_id_dict[row.patient_id]['file_path'].append(file_path)
+        patient_id_dict[row.patient_id]['lvef'].append(row.LVEF)
+        patient_id_dict[row.patient_id]['class'].append(getattr(row, 'class'))
+    
+    n_train = int(len(df) * 0.8)
+    n_val = int(len(df) * 0.1)
+
+    patient_ids = list(patient_id_dict.keys())
+    random.seed(42)
+    random.shuffle(patient_ids)
+
+    train_paths = {'data_path': [], 'lvef': [], 'class': []}
+    val_paths = {'data_path': [], 'lvef': [], 'class': []}
+    test_paths = {'data_path': [], 'lvef': [], 'class': []}
+
+    for paths in patient_id_dict.values():
+        if len(train_paths['data_path']) < n_train:
+            train_paths['data_path'].extend(paths['file_path'])
+            train_paths['lvef'].extend(paths['lvef'])
+            train_paths['class'].extend(paths['class'])
+        elif len(val_paths['data_path']) < n_val:
+            val_paths['data_path'].extend(paths['file_path'])
+            val_paths['lvef'].extend(paths['lvef'])
+            val_paths['class'].extend(paths['class'])
+        else:
+            test_paths['data_path'].extend(paths['file_path'])
+            test_paths['lvef'].extend(paths['lvef'])
+            test_paths['class'].extend(paths['class'])
+    
+    out_dir = os.path.join(dest_dir, 'data_split')
+    os.makedirs(out_dir, exist_ok=True)
+
+    df_train = pd.DataFrame(train_paths)
+    df_train.to_csv(os.path.join(out_dir, "mimic-iv_train.csv"), index=False)
+
+    df_val = pd.DataFrame(val_paths)
+    df_val.to_csv(os.path.join(out_dir, "mimic-iv_valid.csv"), index=False)
+
+    df_test = pd.DataFrame(test_paths)
+    df_test.to_csv(os.path.join(out_dir, "mimic-iv_test.csv"), index=False)
+
+    print(f"Train: {len(df_train)} | Val: {len(df_val)} | Test: {len(df_test)}")
+
+# root_dir = '/projects/prjs1890/uk_biobank/processed'
+# get_uk_bb_split(root_dir)
+
+root_dir = '/scratch-shared/tchatupanyacho/mimic-iv-ecg-diagnostic-electrocardiogram-matched-subset-1.0'
+save_dir = '/projects/prjs1890/mimic-iv'
+lvef_csv = '/home/tchatupanyacho/rescue_ai_thesis/ECGFounder/csv/LVEF.csv'
+get_mimic_split(root_dir, save_dir, lvef_csv)
