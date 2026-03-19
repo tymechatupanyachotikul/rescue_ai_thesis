@@ -16,7 +16,7 @@ def get_time_stats(base_dir, plot=False):
     time = [] 
     file_list = []
     for f in os.listdir(base_dir):
-        if f.endswith('.npy'):
+        if f.endswith('.pth'):
             time.append(int(f.split('_')[0][1:]))
             file_list.append(f)
     
