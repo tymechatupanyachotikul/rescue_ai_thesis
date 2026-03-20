@@ -11,15 +11,33 @@ import random
 from collections import defaultdict
 import shutil 
 
-def get_time_stats(base_dir, plot=False):
+def get_time_stats(base_dir, anomoly_ecg_path=None, plot=False):
+
+    if anomoly_ecg_path is not None:
+        with open(anomoly_ecg_path, "rb") as f:
+            anomoly_ecg = pickle.load(f)
+    else:
+        anomoly_ecg = []
     
+    for a in anomoly_ecg:
+        session_id = a.split('/')[-1].split('_')[0]
+        run_id = a.split('/')[-2].split('_')[1]
+        _cls = a.split('/')[-4].replace('.', '')
+        anomoly_ecg.append(f'{run_id}_{session_id}_{_cls}')
+
     time = [] 
     file_list = []
+    anomoly_found = 0
     for f in os.listdir(base_dir):
         if f.endswith('.pth'):
+            if '_'.join(f.split('_')[1:-2]) in anomoly_ecg:
+
+                anomoly_found += 1 
+                continue
             time.append(int(f.split('_')[0][1:]))
             file_list.append(f)
     
+    print(f'Total anomoly ECG found : {anomoly_found}/{len(anomoly_ecg)}')
     time = np.array(time)
     total_sample = len(time)
     print(f"Dataset: {base_dir}")
@@ -237,16 +255,20 @@ def find_anomoly_ecg(csv_path, out_dir):
 # lvef_csv = '/home/tchatupanyacho/rescue_ai_thesis/ECGFounder/csv/LVEF.csv'
 #get_mimic_split(root_dir, save_dir, lvef_csv)
 
-#get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled')
-#get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled')
+anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000010_raw.csv_anomoly_ecg.pkl'
+get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled', anomoly_ecg_path)
 
-csv_path = '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv'
-out_dir = '/projects/prjs1890/MedalCare-XL/examples'
+#anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000010_raw.csv_anomoly_ecg.pkl'
 
-find_anomoly_ecg(csv_path, out_dir)
+#get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled', anomoly_ecg_path)
 
-csv_path = '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_ventricular.csv'
-find_anomoly_ecg(csv_path, out_dir)
+# csv_path = '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv'
+# out_dir = '/projects/prjs1890/MedalCare-XL/examples'
+
+# find_anomoly_ecg(csv_path, out_dir)
+
+# csv_path = '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_ventricular.csv'
+# find_anomoly_ecg(csv_path, out_dir)
 
 
 
