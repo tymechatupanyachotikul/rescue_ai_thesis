@@ -182,20 +182,20 @@ def get_mimic_split(root_dir, dest_dir, lvef_csv):
     patient_id_dict = defaultdict(lambda: defaultdict(list))
     ecg_save_dir = os.path.join(dest_dir, 'raw')
     for row in tqdm(df.itertuples(), total=len(df), desc="Moving Files & Grouping"):
-        file_path = os.path.join(root_dir, str(row.waveform_path))
-        if not os.path.exists(file_path + '.dat') or not os.path.exists(file_path + '.hea'):
-            if os.path.exists(os.path.join(ecg_save_dir, os.path.basename(file_path) + '.dat')) and os.path.exists(os.path.join(ecg_save_dir, os.path.basename(file_path) + '.hea')):
-                pass
-            else:
-                print(f"Warning: File {file_path} does not exist. Skipping.")
-                continue
-        else:
-            if not os.path.exists(os.path.join(ecg_save_dir, os.path.basename(file_path) + '.dat')):
-                shutil.move(file_path + '.dat', ecg_save_dir)
-            if not os.path.exists(os.path.join(ecg_save_dir, os.path.basename(file_path) + '.hea')):
-                shutil.move(file_path + '.hea', ecg_save_dir)
+        # file_path = os.path.join(root_dir, str(row.waveform_path))
+        # if not os.path.exists(file_path + '.dat') or not os.path.exists(file_path + '.hea'):
+        #     if os.path.exists(os.path.join(ecg_save_dir, os.path.basename(file_path) + '.dat')) and os.path.exists(os.path.join(ecg_save_dir, os.path.basename(file_path) + '.hea')):
+        #         pass
+        #     else:
+        #         print(f"Warning: File {file_path} does not exist. Skipping.")
+        #         continue
+        # else:
+        #     if not os.path.exists(os.path.join(ecg_save_dir, os.path.basename(file_path) + '.dat')):
+        #         shutil.move(file_path + '.dat', ecg_save_dir)
+        #     if not os.path.exists(os.path.join(ecg_save_dir, os.path.basename(file_path) + '.hea')):
+        #         shutil.move(file_path + '.hea', ecg_save_dir)
 
-        filename = '_'.join(str(row.waveform_path).split('/')[2:4])
+        filename = str(row.waveform_path).split('/')[3]
         file_path = os.path.join(ecg_save_dir, filename)
 
         patient_id_dict[row.subject_id]['file_path'].append(file_path)
