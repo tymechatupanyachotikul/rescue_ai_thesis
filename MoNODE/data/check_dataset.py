@@ -256,14 +256,14 @@ def find_anomoly_ecg(csv_path, out_dir):
 # root_dir = '/scratch-shared/tchatupanyacho/mimic-iv-ecg-diagnostic-electrocardiogram-matched-subset-1.0'
 # save_dir = '/projects/prjs1890/mimic-iv'
 # lvef_csv = '/home/tchatupanyacho/rescue_ai_thesis/ECGFounder/csv/LVEF.csv'
-#get_mimic_split(root_dir, save_dir, lvef_csv)
+# get_mimic_split(root_dir, save_dir, lvef_csv)
 
 anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000010_raw.csv_anomoly_ecg.pkl'
-get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled', anomoly_ecg_path)
+get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled', anomoly_ecg_path)
 
 anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000031_raw.csv_anomoly_ecg.pkl'
 
-get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled', anomoly_ecg_path)
+get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled', anomoly_ecg_path)
 
 # csv_path = '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv'
 # out_dir = '/projects/prjs1890/MedalCare-XL/examples'
