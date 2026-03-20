@@ -203,7 +203,6 @@ if __name__ == "__main__":
         segment_type = 'both'
 
     beat_type = args.beat_type
-    split = 'train'
     if dataset == 'medalcare-xl':
         split = os.path.splitext(args.input_path)[0].split('_')[-2]
     elif dataset in ['ukbb', 'mimic-iv']:
@@ -257,7 +256,7 @@ if __name__ == "__main__":
             os.makedirs(plot_dir, exist_ok=True)
 
             for record in records:
-                if dataset == 'MedalCare-XL':
+                if dataset == 'medalcare-xl':
                     run_id = record.original_file_path.split('/')[-2].split('_')[1]
                     session_id = record.original_file_path.split('/')[-1].split('_')[0]
                     label = record.groundtruth.replace('.', '')
