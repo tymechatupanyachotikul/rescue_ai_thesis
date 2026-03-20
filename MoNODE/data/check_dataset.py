@@ -33,6 +33,7 @@ def get_time_stats(base_dir, anomoly_ecg_path=None, plot=False):
     anomoly_found = 0
     for f in os.listdir(base_dir):
         if f.endswith('.pth'):
+            print('_'.join(f.split('_')[1:-2]))
             if '_'.join(f.split('_')[1:-2]) in anomoly_ecg:
 
                 anomoly_found += 1 
