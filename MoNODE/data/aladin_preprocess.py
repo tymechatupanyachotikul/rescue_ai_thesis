@@ -263,8 +263,9 @@ if __name__ == "__main__":
                     aladin.plot(record, name=os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_ecg'))
                 else:
                     run_id = os.path.splitext(record.original_file_path)[0]
-                    print(f'Saving to {os.path.join(plot_dir, f'{run_id}_ecg')}')
-                    aladin.plot(record, name=os.path.join(plot_dir, f'{run_id}_ecg'))
+                    save_dir = os.path.join(plot_dir, f'{run_id}_ecg')
+                    print(f'Saving to {save_dir}')
+                    aladin.plot(record, name=save_dir)
         else:
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
                 futures = []
