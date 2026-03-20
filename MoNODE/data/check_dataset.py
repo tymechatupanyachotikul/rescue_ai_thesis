@@ -1,3 +1,4 @@
+import json
 import os
 import pandas as pd 
 import numpy as np
@@ -250,6 +251,44 @@ def find_anomoly_ecg(csv_path, out_dir):
     with open(os.path.join(out_dir, f'{os.path.basename(file_path)}_anomoly_ecg.pkl'), "wb") as f:
         pickle.dump(anomoly_ecg, f)
 
+def plot_ecg(file_path, root_dir):
+    if 'atrial' in file_path:
+        type = 'atrial'
+    elif 'ventricular' in file_path:
+        type = 'ventricular'
+
+    if 'upper' in file_path:
+        sample_type = 'upper'
+    elif 'lower' in file_path:
+        sample_type = 'lower'
+    
+    save_dir = os.path.join(root_dir, type, sample_type)
+    os.makedirs(save_dir, exist_ok=True)
+    
+    with open(file_path, 'rb') as f:
+        file_paths = json.load(f)
+    
+    f = 500
+    for file in file_paths:
+        ecg = pd.read_csv(file_path, header=None).to_numpy()
+        
+        t = ecg.shape[1]
+        l = ecg.shape[0]
+
+        fig, axes = plt.subplots(l, 1, sharex=True)
+        time = np.arange(t) / f
+
+        for j in range(l):
+            ax = axes[j]
+            ax.plot(time, ecg[j, :], linewidth=0.7)
+
+            if j < l - 1:
+                ax.tick_params(axis='x', which='both', bottom=False, labelbottom=False)
+
+        plt.xlabel("Time (seconds)", fontsize=12)
+        plt.savefig(os.path.join(root_dir,os.path.basename(file).replace('.csv', '.png')), bbox_inches='tight')
+
+
 # root_dir = '/projects/prjs1890/uk_biobank/processed'
 # get_uk_bb_split(root_dir)
 
@@ -258,12 +297,12 @@ def find_anomoly_ecg(csv_path, out_dir):
 # lvef_csv = '/home/tchatupanyacho/rescue_ai_thesis/ECGFounder/csv/LVEF.csv'
 # get_mimic_split(root_dir, save_dir, lvef_csv)
 
-anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000010_raw.csv_anomoly_ecg.pkl'
-get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled', anomoly_ecg_path)
+# anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000010_raw.csv_anomoly_ecg.pkl'
+# get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled', anomoly_ecg_path)
 
-anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000031_raw.csv_anomoly_ecg.pkl'
+# anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000031_raw.csv_anomoly_ecg.pkl'
 
-get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled', anomoly_ecg_path)
+# get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled', anomoly_ecg_path)
 
 # csv_path = '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv'
 # out_dir = '/projects/prjs1890/MedalCare-XL/examples'
@@ -273,5 +312,13 @@ get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampl
 # csv_path = '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_ventricular.csv'
 # find_anomoly_ecg(csv_path, out_dir)
 
+root_dir = '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly'
+file_paths = [
+    '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly/filepaths/atrial_lower_files.json',
+    '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly/filepaths/atrial_upper_files.json',
+    '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly/filepaths/ventricular_lower_files.json',
+    '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly/filepaths/ventricular_upper_files.json',
+]
 
-
+for file_path in file_paths:
+    plot_ecg(file_path, root_dir)
