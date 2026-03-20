@@ -195,7 +195,7 @@ if __name__ == "__main__":
     argparser.add_argument("--plot_only", action='store_true', help="Only generate plots without saving segments")
     args = argparser.parse_args()
 
-    dataset = os.path.basename(args.input_path).split('_')[0]
+    dataset = 'medalcare-xl' if 'medalcare-xl' in args.input_path else os.path.basename(args.input_path).split('_')[0]
 
     if dataset == 'medalcare-xl':
         segment_type = os.path.splitext(args.input_path)[0].split('_')[-1]
