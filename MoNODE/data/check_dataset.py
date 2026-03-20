@@ -195,7 +195,7 @@ def get_mimic_split(root_dir, dest_dir, lvef_csv):
             if not os.path.exists(os.path.join(ecg_save_dir, os.path.basename(file_path) + '.hea')):
                 shutil.move(file_path + '.hea', ecg_save_dir)
 
-        filename = '_'.join(file_path.split('/')[2:4])
+        filename = '_'.join(str(row.waveform_path).split('/')[2:4])
         file_path = os.path.join(ecg_save_dir, filename)
 
         patient_id_dict[row.subject_id]['file_path'].append(file_path)
@@ -301,13 +301,13 @@ def plot_ecg(file_path, root_dir):
             print(f"Error processing {file}: {e}")
 
 
-root_dir = '/projects/prjs1890/uk_biobank/raw'
-get_uk_bb_split(root_dir)
+# root_dir = '/projects/prjs1890/uk_biobank/raw'
+# get_uk_bb_split(root_dir)
 
-# root_dir = '/scratch-shared/tchatupanyacho/mimic-iv-ecg-diagnostic-electrocardiogram-matched-subset-1.0'
-# save_dir = '/projects/prjs1890/mimic-iv'
-# lvef_csv = '/home/tchatupanyacho/rescue_ai_thesis/ECGFounder/csv/LVEF.csv'
-# get_mimic_split(root_dir, save_dir, lvef_csv)
+root_dir = '/scratch-shared/tchatupanyacho/mimic-iv-ecg-diagnostic-electrocardiogram-matched-subset-1.0'
+save_dir = '/projects/prjs1890/mimic-iv'
+lvef_csv = '/home/tchatupanyacho/rescue_ai_thesis/ECGFounder/csv/LVEF.csv'
+get_mimic_split(root_dir, save_dir, lvef_csv)
 
 # root_dir = '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly/plots'
 # anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000010_raw.csv_anomoly_ecg.pkl'
