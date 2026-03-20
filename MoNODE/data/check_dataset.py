@@ -270,7 +270,7 @@ def plot_ecg(file_path, root_dir):
     
     f = 500
     for file in file_paths:
-        ecg = pd.read_csv(file_path, header=None).to_numpy()
+        ecg = pd.read_csv(file, header=None).to_numpy()
         
         t = ecg.shape[1]
         l = ecg.shape[0]
