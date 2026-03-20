@@ -61,10 +61,6 @@ def load_and_convert_case(row, dataset):
     record = Record(ecg_dict, rec.fs, "DEMO", case)
     if hasattr(row, 'label'):
         record.groundtruth = row.label 
-    if hasattr(row, 'class'):
-        record.groundtruth = getattr(row, 'class')
-    if hasattr(row, 'LVEF'):
-        record.LVEF = row.LVEF
     if hasattr(row, 'hash'):
         record.hash = row.hash        
     record.original_file_path = row.data_path
@@ -201,13 +197,14 @@ if __name__ == "__main__":
 
     dataset = os.path.basename(args.input_path).split('_')[0]
 
-    if dataset == 'MedalCare-XL':
+    if dataset == 'medalcare-xl':
         segment_type = os.path.splitext(args.input_path)[0].split('_')[-1]
     elif dataset in ['ukbb', 'mimic-iv']:
         segment_type = 'both'
 
     beat_type = args.beat_type
-    if dataset == 'MedalCare-XL':
+    split = 'train'
+    if dataset == 'medalcare-xl':
         split = os.path.splitext(args.input_path)[0].split('_')[-2]
     elif dataset in ['ukbb', 'mimic-iv']:
         split = os.path.splitext(args.input_path)[0].split('_')[-1]
