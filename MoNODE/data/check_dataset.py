@@ -181,15 +181,15 @@ def get_mimic_split(root_dir, dest_dir, lvef_csv):
 
     patient_id_dict = defaultdict(lambda: defaultdict(list))
     ecg_save_dir = os.path.join(dest_dir, 'raw')
-    for row in df.itertuples():
+    for row in tqdm(df.itertuples(), total=len(df), desc="Moving Files & Grouping"):
         file_path = os.path.join(root_dir, str(row.waveform_path))
         if not os.path.exists(file_path + '.dat') or not os.path.exists(file_path + '.hea'):
             print(f"Warning: File {file_path} does not exist. Skipping.")
             continue
         else:
-            if os.path.exists(os.path.join(ecg_save_dir, os.path.basename(file_path) + '.dat')):
+            if not os.path.exists(os.path.join(ecg_save_dir, os.path.basename(file_path) + '.dat')):
                 shutil.move(file_path + '.dat', ecg_save_dir)
-            if os.path.exists(os.path.join(ecg_save_dir, os.path.basename(file_path) + '.hea')):
+            if not os.path.exists(os.path.join(ecg_save_dir, os.path.basename(file_path) + '.hea')):
                 shutil.move(file_path + '.hea', ecg_save_dir)
 
             filename = '_'.join(file_path.split('/')[2:4])
@@ -210,7 +210,7 @@ def get_mimic_split(root_dir, dest_dir, lvef_csv):
     val_paths = {'data_path': [], 'lvef': [], 'class': []}
     test_paths = {'data_path': [], 'lvef': [], 'class': []}
 
-    for paths in patient_id_dict.values():
+    for paths in tqdm(patient_id_dict.values(), desc="Splitting Dataset"):
         if len(train_paths['data_path']) < n_train:
             train_paths['data_path'].extend(paths['file_path'])
             train_paths['lvef'].extend(paths['lvef'])
@@ -301,10 +301,10 @@ def plot_ecg(file_path, root_dir):
 # root_dir = '/projects/prjs1890/uk_biobank/processed'
 # get_uk_bb_split(root_dir)
 
-# root_dir = '/scratch-shared/tchatupanyacho/mimic-iv-ecg-diagnostic-electrocardiogram-matched-subset-1.0'
-# save_dir = '/projects/prjs1890/mimic-iv'
-# lvef_csv = '/home/tchatupanyacho/rescue_ai_thesis/ECGFounder/csv/LVEF.csv'
-# get_mimic_split(root_dir, save_dir, lvef_csv)
+root_dir = '/scratch-shared/tchatupanyacho/mimic-iv-ecg-diagnostic-electrocardiogram-matched-subset-1.0'
+save_dir = '/projects/prjs1890/mimic-iv'
+lvef_csv = '/home/tchatupanyacho/rescue_ai_thesis/ECGFounder/csv/LVEF.csv'
+get_mimic_split(root_dir, save_dir, lvef_csv)
 
 # root_dir = '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly/plots'
 # anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000010_raw.csv_anomoly_ecg.pkl'
@@ -356,41 +356,41 @@ def remove_anomoly_ecg(base_dir, remove_dir, anomoly_ecg = []):
 
 
 
-base_dirs = [
-    '/projects/prjs1890/MedalCare-XL/segments/train/atrial/median',
-    '/projects/prjs1890/MedalCare-XL/segments/train/ventricular/median',
-    '/projects/prjs1890/MedalCare-XL/segments/valid/atrial/median',
-    '/projects/prjs1890/MedalCare-XL/segments/valid/ventricular/median',
-    '/projects/prjs1890/MedalCare-XL/segments/test/atrial/median',
-    '/projects/prjs1890/MedalCare-XL/segments/test/ventricular/median', 
-    '/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled',
-    '/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled',
-    '/projects/prjs1890/MedalCare-XL/segments/valid/atrial/sampled',
-    '/projects/prjs1890/MedalCare-XL/segments/valid/ventricular/sampled',
-    '/projects/prjs1890/MedalCare-XL/segments/test/atrial/sampled',
-    '/projects/prjs1890/MedalCare-XL/segments/test/ventricular/sampled',
-]
+# base_dirs = [
+#     '/projects/prjs1890/MedalCare-XL/segments/train/atrial/median',
+#     '/projects/prjs1890/MedalCare-XL/segments/train/ventricular/median',
+#     '/projects/prjs1890/MedalCare-XL/segments/valid/atrial/median',
+#     '/projects/prjs1890/MedalCare-XL/segments/valid/ventricular/median',
+#     '/projects/prjs1890/MedalCare-XL/segments/test/atrial/median',
+#     '/projects/prjs1890/MedalCare-XL/segments/test/ventricular/median', 
+#     '/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled',
+#     '/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled',
+#     '/projects/prjs1890/MedalCare-XL/segments/valid/atrial/sampled',
+#     '/projects/prjs1890/MedalCare-XL/segments/valid/ventricular/sampled',
+#     '/projects/prjs1890/MedalCare-XL/segments/test/atrial/sampled',
+#     '/projects/prjs1890/MedalCare-XL/segments/test/ventricular/sampled',
+# ]
 
-csv_paths = [
-    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv',
-    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_ventricular.csv',
-    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_atrial.csv',
-    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_ventricular.csv',
-    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_atrial.csv',
-    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_ventricular.csv',
-    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv',
-    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_ventricular.csv',
-    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_atrial.csv',
-    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_ventricular.csv',
-    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_atrial.csv',
-    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_ventricular.csv',
-]
-for base_dir, csv_path in zip(base_dirs, csv_paths):
-    remove_dir = base_dir.replace('segments', 'removed_anomoly_segments')
-    os.makedirs(remove_dir, exist_ok=True)
+# csv_paths = [
+#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv',
+#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_ventricular.csv',
+#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_atrial.csv',
+#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_ventricular.csv',
+#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_atrial.csv',
+#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_ventricular.csv',
+#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv',
+#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_ventricular.csv',
+#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_atrial.csv',
+#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_ventricular.csv',
+#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_atrial.csv',
+#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_ventricular.csv',
+# ]
+# for base_dir, csv_path in zip(base_dirs, csv_paths):
+#     remove_dir = base_dir.replace('segments', 'removed_anomoly_segments')
+#     os.makedirs(remove_dir, exist_ok=True)
 
-    anomoly_ecg = find_anomoly_ecg(csv_path)
-    remove_anomoly_ecg(base_dir, remove_dir, anomoly_ecg)
+#     anomoly_ecg = find_anomoly_ecg(csv_path)
+#     remove_anomoly_ecg(base_dir, remove_dir, anomoly_ecg)
 
 # csv_path = '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv'
 # out_dir = '/projects/prjs1890/MedalCare-XL/examples'
