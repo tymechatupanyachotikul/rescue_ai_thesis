@@ -122,7 +122,7 @@ def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, 
             else:
                 base_name = f'T{delta_t}_{run_id}_{session_id}_{label}'
         elif dataset in ['ukbb', 'mimic-iv']:
-            run_id = os.path.splitext(record.original_file_path)[0]
+            run_id = os.path.splitext(os.path.basename(record.original_file_path))[0]
             if beat_type == 'sampled':
                 base_name = f'T{delta_t}_{run_id}_{idx}'
             else:
