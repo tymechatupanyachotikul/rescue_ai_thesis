@@ -238,7 +238,7 @@ def get_mimic_split(root_dir, dest_dir, lvef_csv):
 
     print(f"Train: {len(df_train)} | Val: {len(df_val)} | Test: {len(df_test)}")
 
-def find_anomoly_ecg(csv_path, out_dir):
+def find_anomoly_ecg(csv_path):
 
     df = pd.read_csv(csv_path)
     anomoly_ecg = []
@@ -248,8 +248,7 @@ def find_anomoly_ecg(csv_path, out_dir):
         if np.abs(ecg).max() > 10:
             anomoly_ecg.append(file_path) 
 
-    with open(os.path.join(out_dir, f'{os.path.basename(file_path)}_anomoly_ecg.pkl'), "wb") as f:
-        pickle.dump(anomoly_ecg, f)
+    return anomoly_ecg
 
 def plot_ecg(file_path, root_dir):
     type = ''
@@ -307,15 +306,91 @@ def plot_ecg(file_path, root_dir):
 # lvef_csv = '/home/tchatupanyacho/rescue_ai_thesis/ECGFounder/csv/LVEF.csv'
 # get_mimic_split(root_dir, save_dir, lvef_csv)
 
-root_dir = '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly/plots'
-anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000010_raw.csv_anomoly_ecg.pkl'
+# root_dir = '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly/plots'
+# anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000010_raw.csv_anomoly_ecg.pkl'
 
-get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled', anomoly_ecg_path)
-plot_ecg(anomoly_ecg_path, root_dir)
+# get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled', anomoly_ecg_path)
+# plot_ecg(anomoly_ecg_path, root_dir)
 
-anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000031_raw.csv_anomoly_ecg.pkl'
-plot_ecg(anomoly_ecg_path, root_dir)
-get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled', anomoly_ecg_path)
+# anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000031_raw.csv_anomoly_ecg.pkl'
+# plot_ecg(anomoly_ecg_path, root_dir)
+# get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled', anomoly_ecg_path)
+
+
+def remove_anomoly_ecg(base_dir, remove_dir, anomoly_ecg = []):
+    
+    for a in anomoly_ecg:
+        try:
+            session_id = a.split('/')[-1].split('_')[0]
+            run_id = a.split('/')[-2].split('_')[1]
+            _cls = a.split('/')[-4].replace('.', '')
+            anomoly_ecg.append(f'{run_id}_{session_id}_{_cls}')
+        except Exception as e:
+            pass
+
+    def check_range(time, type):
+        if type == 'atrial':
+            return 30 <= time <= 70
+        elif type == 'ventricular':
+            return 150 <= time <= 250
+
+    if 'atrial' in base_dir:
+        type = 'atrial'
+    elif 'ventricular' in base_dir:
+        type = 'ventricular'
+
+    total_ecg = 0
+    for f in os.listdir(base_dir):
+        if f.endswith('.pth'):
+            total_ecg += 1
+            if '_'.join(f.split('_')[1:-1]) in anomoly_ecg or check_range(int(f.split('_')[0][1:]), type) == False:
+                 filename = os.path.join(base_dir, f)
+                 shutil.move(filename, os.path.join(remove_dir, f))
+
+    remaining = 0
+    for f in os.listdir(base_dir):
+        if f.endswith('.pth'):
+            remaining += 1 
+
+    print(f'Total ECG: {total_ecg} | Remaining ECG: {remaining} | Removed ECG: {total_ecg - remaining}')
+
+
+
+base_dirs = [
+    '/projects/prjs1890/MedalCare-XL/segments/train/atrial/median',
+    '/projects/prjs1890/MedalCare-XL/segments/train/ventricular/median',
+    '/projects/prjs1890/MedalCare-XL/segments/valid/atrial/median',
+    '/projects/prjs1890/MedalCare-XL/segments/valid/ventricular/median',
+    '/projects/prjs1890/MedalCare-XL/segments/test/atrial/median',
+    '/projects/prjs1890/MedalCare-XL/segments/test/ventricular/median', 
+    '/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled',
+    '/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled',
+    '/projects/prjs1890/MedalCare-XL/segments/valid/atrial/sampled',
+    '/projects/prjs1890/MedalCare-XL/segments/valid/ventricular/sampled',
+    '/projects/prjs1890/MedalCare-XL/segments/test/atrial/sampled',
+    '/projects/prjs1890/MedalCare-XL/segments/test/ventricular/sampled',
+]
+
+csv_paths = [
+    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv',
+    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_ventricular.csv',
+    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_atrial.csv',
+    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_ventricular.csv',
+    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_atrial.csv',
+    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_ventricular.csv',
+    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv',
+    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_ventricular.csv',
+    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_atrial.csv',
+    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_ventricular.csv',
+    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_atrial.csv',
+    '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_ventricular.csv',
+]
+for base_dir, csv_path in zip(base_dirs, csv_paths):
+    remove_dir = base_dir.replace('segments', 'removed_anomoly_segments')
+    os.makedirs(remove_dir, exist_ok=True)
+
+    anomoly_ecg = find_anomoly_ecg(csv_path)
+    remove_anomoly_ecg(base_dir, remove_dir, anomoly_ecg)
 
 # csv_path = '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv'
 # out_dir = '/projects/prjs1890/MedalCare-XL/examples'
