@@ -20,12 +20,14 @@ def get_time_stats(base_dir, anomoly_ecg_path=None, plot=False):
         anomoly_ecg = []
     
     for a in anomoly_ecg:
-        print(a)
-        session_id = a.split('/')[-1].split('_')[0]
-        run_id = a.split('/')[-2].split('_')[1]
-        _cls = a.split('/')[-4].replace('.', '')
-        anomoly_ecg.append(f'{run_id}_{session_id}_{_cls}')
-
+        try:
+            session_id = a.split('/')[-1].split('_')[0]
+            run_id = a.split('/')[-2].split('_')[1]
+            _cls = a.split('/')[-4].replace('.', '')
+            anomoly_ecg.append(f'{run_id}_{session_id}_{_cls}')
+        except Exception as e:
+            print(f"Error processing {a}: {e}")
+            
     time = [] 
     file_list = []
     anomoly_found = 0
