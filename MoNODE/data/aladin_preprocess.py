@@ -261,7 +261,7 @@ if __name__ == "__main__":
                     session_id = record.original_file_path.split('/')[-1].split('_')[0]
                     label = record.groundtruth.replace('.', '')
                     aladin.plot(record, name=os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_ecg.png'))
-                elif dataset in ['ukbb', 'mimic-iv']:
+                else:
                     run_id = os.path.splitext(record.original_file_path)[0]
                     aladin.plot(record, name=os.path.join(plot_dir, f'{run_id}_ecg.png'))
         else:
