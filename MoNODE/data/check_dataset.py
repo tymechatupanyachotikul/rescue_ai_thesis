@@ -195,7 +195,7 @@ def get_mimic_split(root_dir, dest_dir, lvef_csv):
         #     if not os.path.exists(os.path.join(ecg_save_dir, os.path.basename(file_path) + '.hea')):
         #         shutil.move(file_path + '.hea', ecg_save_dir)
 
-        filename = str(row.waveform_path).split('/')[3]
+        filename = str(row.waveform_path).split('/')[3][1:]
         file_path = os.path.join(ecg_save_dir, filename)
 
         patient_id_dict[row.subject_id]['file_path'].append(file_path)
