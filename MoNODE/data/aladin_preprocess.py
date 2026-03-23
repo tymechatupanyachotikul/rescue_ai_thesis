@@ -31,6 +31,10 @@ LEADS_DICT = {
     'MedalCare-XL': MEDALCARE_XL_LEADS,
     'ukbb': UK_BB_LEADS
 }
+ACCEPTED_TIME_RANGES = {
+    'atrial': (30, 70),
+    'ventricular': (150, 250)
+}
 
 def convert_ecg_to_wfdb(filename, ecg_path, directory_path, dataset):
 
@@ -129,10 +133,12 @@ def get_ecg_segments_idx(record, segment_type, beat_type):
 
     return segments 
 
-def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, out_dir, beat_type, dataset, plot=False):
+def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, out_dir, beat_type, dataset, split, error_dict, plot=False):
 
     save_dir = os.path.join(out_dir, segment_type, beat_type)
+    anomalies_dir = os.path.join(out_dir, 'anomalies', split)
     os.makedirs(save_dir, exist_ok=True)
+    os.makedirs(anomalies_dir, exist_ok=True)
 
     for idx, (start, end) in enumerate(segments):
         ecg_segment = norm_ecg[start:end, :]
@@ -154,10 +160,18 @@ def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, 
             else:
                 base_name = f'T{delta_t}_{run_id}'
 
+        min_time, max_time = ACCEPTED_TIME_RANGES[segment_type]
         ecg_segment = torch.from_numpy(ecg_segment.astype(np.float32))
-        save_path = os.path.join(save_dir, f'{base_name}.pth')
-        torch.save(ecg_segment, save_path)
 
+        if min_time <= delta_t <= max_time:
+            save_path = os.path.join(save_dir, f'{base_name}.pth')
+        else:
+            save_path = os.path.join(anomalies_dir, f'{base_name}_{segment_type}.pth')
+            with error_lock:
+                error_dict['time_anomalies'][segment_type]['count'] += 1
+                error_dict['time_anomalies'][segment_type]['paths'].append(record.original_file_path)
+
+        torch.save(ecg_segment, save_path)
         if plot:
             if beat_type == 'median':
                 fig, ax = plt.subplots(figsize=(10, 4))
@@ -186,7 +200,7 @@ def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, 
                 fig.savefig(f'{base_name}_segment_{beat_type}.png')
                 plt.close(fig)
 
-def process_and_save_segments(record, original_record, segment_type, out_dir, beat_type, dataset, error_dict,plot=False):
+def process_and_save_segments(record, original_record, segment_type, out_dir, beat_type, dataset, split, error_dict,plot=False):
     """Worker function to handle normalization and saving to disk."""
     MAX_VAL = 30 
 
@@ -218,7 +232,7 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
     norm_ecg = (original_ecg - mu) / (sigma + 1e-8)
 
     for seg_type, seg_idx in segments_dict.items():
-        save_ecg_segment(seg_idx, norm_ecg, original_record, record, seg_type, out_dir, beat_type, dataset, plot=plot)
+        save_ecg_segment(seg_idx, norm_ecg, original_record, record, seg_type, out_dir, beat_type, dataset, split, error_dict, plot=plot)
     
 
 if __name__ == "__main__":
@@ -280,7 +294,17 @@ if __name__ == "__main__":
         },
         'anomoly': 0,
         'segmentation_failures': [],
-        'median_beat_extraction': 0
+        'median_beat_extraction': 0,
+        'time_anomalies': {
+            'atrial': {
+                'count': 0,
+                'paths': []
+            }, 
+            'ventricular': {
+                'count': 0,
+                'paths': []
+            }
+        }
     }
 
     n_success = 0
@@ -335,7 +359,7 @@ if __name__ == "__main__":
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
                 futures = []
                 for rec, orig in zip(records, original_records):
-                    futures.append(executor.submit(process_and_save_segments, rec, orig, segment_type, out_dir, beat_type, dataset, error_dict, plot=demo))
+                    futures.append(executor.submit(process_and_save_segments, rec, orig, segment_type, out_dir, beat_type, dataset, split, error_dict, plot=demo))
                 
                 for future in as_completed(futures):
                     try:
