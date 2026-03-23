@@ -18,6 +18,10 @@ from aladin.core import Record
 
 import matplotlib.pyplot as plt
 from pprint import pprint 
+from collections import defaultdict
+
+from threading import Lock
+error_lock = Lock()
 
 
 
@@ -160,8 +164,10 @@ def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, 
                 fig.savefig(f'{base_name}_segment_{beat_type}.png')
                 plt.close(fig)
 
-def process_and_save_segments(record, original_record, segment_type, out_dir, beat_type, dataset, plot=False):
+def process_and_save_segments(record, original_record, segment_type, out_dir, beat_type, dataset, error_dict,plot=False):
     """Worker function to handle normalization and saving to disk."""
+    MAX_VAL = 30 
+
     segments_dict = {}
     segment_type = ['atrial', 'ventricular'] if segment_type == 'both' else [segment_type]
 
@@ -169,6 +175,10 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
         segment_idx = get_ecg_segments_idx(record, seg_type, beat_type)
         if segment_idx:
             segments_dict[seg_type] = segment_idx
+        else:
+            with error_lock:
+                error_dict['segmentation'][seg_type][beat_type] += 1
+                error_dict['segmentation_failures'].append((record.original_file_path, seg_type, beat_type))
 
     if len(segments_dict.keys()) == 0:
         return
@@ -176,6 +186,11 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
     original_ecg = original_record.p_signal if beat_type == 'sampled' else record.median_beat.ecg.T
     print(f'ECG for {beat_type} {segment_type} has shape {original_ecg.shape}')
 
+    if np.max(original_ecg) > MAX_VAL:
+        with error_lock:
+            error_dict['anomoly'] += 1
+        return
+    
     mu = np.mean(original_ecg, axis=0, keepdims=True)
     sigma = np.std(original_ecg, axis=0, keepdims=True)
     norm_ecg = (original_ecg - mu) / (sigma + 1e-8)
@@ -226,7 +241,24 @@ if __name__ == "__main__":
     chunks = [df.iloc[i:i + args.batch_size] for i in range(0, len(df), args.batch_size)]
     
     print(f"Starting processing with {args.workers} workers...")
-    
+    error_dict = {
+        'convert_case': defaultdict(int),
+        'save_segment': defaultdict(int),
+        'segmentation': {
+            'ventricular': {
+                'sampled': 0,
+                'median': 0
+            },
+            'atrial': {
+                'sampled': 0,
+                'median': 0
+            }
+        },
+        'anomoly': 0,
+        'segmentation_failures': []
+    }
+
+    n_success = 0
     for chunk_idx, chunk in enumerate(tqdm(chunks, desc="Processing Batches")):
         
         loaded_data = []
@@ -236,6 +268,8 @@ if __name__ == "__main__":
                 try:
                     loaded_data.append(future.result())
                 except Exception as e:
+                    with error_lock:
+                        error_dict['convert_case'][type(e).__name__] += 1
                     print(f"Error loading record: {e}")
         
         if not loaded_data:
@@ -270,12 +304,15 @@ if __name__ == "__main__":
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
                 futures = []
                 for rec, orig in zip(records, original_records):
-                    futures.append(executor.submit(process_and_save_segments, rec, orig, segment_type, out_dir, beat_type, dataset, plot=demo))
+                    futures.append(executor.submit(process_and_save_segments, rec, orig, segment_type, out_dir, beat_type, dataset, error_dict, plot=demo))
                 
                 for future in as_completed(futures):
                     try:
                         future.result()
+                        n_success += 1
                     except Exception as e:
+                        with error_lock:
+                            error_dict['save_segment'][type(e).__name__] += 1
                         print(f"Error saving segment: {e}")
         
         del loaded_data 
@@ -284,3 +321,6 @@ if __name__ == "__main__":
         gc.collect()
 
     print("Processing complete!")
+    print(f"Successfully processed {n_success}/{len(df)} records.")
+    print("\nError Summary:")
+    print(error_dict)
