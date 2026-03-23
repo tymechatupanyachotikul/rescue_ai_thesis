@@ -32,6 +32,30 @@ LEADS_DICT = {
     'ukbb': UK_BB_LEADS
 }
 
+def convert_ecg_to_wfdb(filename, ecg_path, directory_path, dataset):
+
+    case = os.path.splitext(filename)[0]
+
+    if filename.endswith('.csv'):
+        ecg = pd.read_csv(ecg_path, header=None, dtype=np.float32).to_numpy()
+    elif filename.endswith('.npy'):
+        ecg = np.load(ecg_path)
+
+    if ecg.shape[0] < ecg.shape[1]:
+        ecg = ecg.T
+
+    ecg = np.nan_to_num(ecg, nan=0.0, copy=False)
+
+    wfdb.wrsamp(
+        record_name=case, 
+        write_dir=directory_path,
+        fs=500, 
+        units=['mV'] * ecg.shape[1], 
+        sig_name=LEADS_DICT[dataset][:ecg.shape[1]], 
+        p_signal=ecg, 
+        fmt=['16'] * ecg.shape[1]
+    )    
+    
 def load_and_convert_case(row, dataset):
     """Worker function to handle file checking, conversion, and loading."""
 
@@ -44,25 +68,14 @@ def load_and_convert_case(row, dataset):
     filepath = os.path.join(directory_path, case)
 
     if not os.path.exists(filepath + '.dat') or not os.path.exists(filepath + '.hea'):
-        if filename.endswith('.csv'):
-            ecg = pd.read_csv(ecg_path, header=None, dtype=np.float32).to_numpy()
-        elif filename.endswith('.npy'):
-            ecg = np.load(ecg_path)
+        convert_ecg_to_wfdb(filename, ecg_path, directory_path, dataset)
+    
+    try:
+        rec = wfdb.rdrecord(filepath)
+    except Exception as e:
+        convert_ecg_to_wfdb(filename, ecg_path, directory_path, dataset)
+        rec = wfdb.rdrecord(filepath)
 
-        if ecg.shape[0] < ecg.shape[1]:
-            ecg = ecg.T
-
-        wfdb.wrsamp(
-            record_name=case, 
-            write_dir=directory_path,
-            fs=500, 
-            units=['mV'] * ecg.shape[1], 
-            sig_name=LEADS_DICT[dataset][:ecg.shape[1]], 
-            p_signal=ecg, 
-            fmt=['16'] * ecg.shape[1]
-        )    
-
-    rec = wfdb.rdrecord(filepath)
     if rec.p_signal.shape[0] < MIN_LENGTH:
         raise ValueError(f"ECG signal too short: {rec.p_signal.shape[0]} samples in {filepath}")
     
