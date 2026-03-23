@@ -94,6 +94,9 @@ def get_ecg_segments_idx(record, segment_type, beat_type):
 
     segments = []
     
+    def is_valid(val):
+        return val is not None and not np.isnan(val)
+    
     if segment_type == 'ventricular':
         if beat_type == 'sampled':
             qrst_idx = []
@@ -111,7 +114,7 @@ def get_ecg_segments_idx(record, segment_type, beat_type):
             onset = record.median_beat.delineations.qrs.onset
             offset = record.median_beat.delineations.t.offset
 
-            segments = [(int(onset), int(offset))] if onset is not None and offset is not None else []
+            segments = [(int(onset), int(offset))] if is_valid(onset) and is_valid(offset) else []
         
     elif segment_type == 'atrial':
         if beat_type == 'sampled':
@@ -122,7 +125,7 @@ def get_ecg_segments_idx(record, segment_type, beat_type):
             onset = record.median_beat.delineations.p.onset
             offset = record.median_beat.delineations.p.offset
 
-            segments = [(int(onset), int(offset))] if onset is not None and offset is not None else []
+            segments = [(int(onset), int(offset))] if is_valid(onset) and is_valid(offset) else []
 
     return segments 
 
