@@ -92,6 +92,9 @@ def load_and_convert_case(row, dataset):
         record.hash = row.hash        
     record.original_file_path = row.data_path
 
+    if os.path.exists(filepath + '.npy'):
+        os.remove(filepath + '.npy')
+        
     return record, rec
 
 def get_ecg_segments_idx(record, segment_type, beat_type):
