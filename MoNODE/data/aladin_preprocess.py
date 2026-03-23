@@ -383,5 +383,5 @@ if __name__ == "__main__":
     print("\nError Summary:")
     print(error_dict)
 
-    with open(os.path.join(error_dir, f'{split}_error_summary.json'), 'w') as f:
+    with open(os.path.join(error_dir, f'{split}_{segment_type}_error_summary.json'), 'w') as f:
         json.dump(error_dict, f, indent=4)
