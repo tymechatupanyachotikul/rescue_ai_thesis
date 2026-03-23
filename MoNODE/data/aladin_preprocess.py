@@ -94,7 +94,7 @@ def load_and_convert_case(row, dataset):
 
     if os.path.exists(filepath + '.npy'):
         os.remove(filepath + '.npy')
-        
+
     return record, rec
 
 def get_ecg_segments_idx(record, segment_type, beat_type):
@@ -136,10 +136,10 @@ def get_ecg_segments_idx(record, segment_type, beat_type):
 
     return segments 
 
-def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, out_dir, beat_type, dataset, split, error_dict, plot=False):
+def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, out_dir, beat_type, dataset, error_dict, plot=False):
 
     save_dir = os.path.join(out_dir, segment_type, beat_type)
-    anomalies_dir = os.path.join(out_dir, 'anomalies', split)
+    anomalies_dir = os.path.join(out_dir, 'anomalies')
     os.makedirs(save_dir, exist_ok=True)
     os.makedirs(anomalies_dir, exist_ok=True)
 
@@ -203,7 +203,7 @@ def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, 
                 fig.savefig(f'{base_name}_segment_{beat_type}.png')
                 plt.close(fig)
 
-def process_and_save_segments(record, original_record, segment_type, out_dir, beat_type, dataset, split, error_dict,plot=False):
+def process_and_save_segments(record, original_record, segment_type, out_dir, beat_type, dataset, error_dict,plot=False):
     """Worker function to handle normalization and saving to disk."""
     MAX_VAL = 30 
 
@@ -235,7 +235,7 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
     norm_ecg = (original_ecg - mu) / (sigma + 1e-8)
 
     for seg_type, seg_idx in segments_dict.items():
-        save_ecg_segment(seg_idx, norm_ecg, original_record, record, seg_type, out_dir, beat_type, dataset, split, error_dict, plot=plot)
+        save_ecg_segment(seg_idx, norm_ecg, original_record, record, seg_type, out_dir, beat_type, dataset, error_dict, plot=plot)
     
 
 if __name__ == "__main__":
@@ -362,7 +362,7 @@ if __name__ == "__main__":
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
                 futures = []
                 for rec, orig in zip(records, original_records):
-                    futures.append(executor.submit(process_and_save_segments, rec, orig, segment_type, out_dir, beat_type, dataset, split, error_dict, plot=demo))
+                    futures.append(executor.submit(process_and_save_segments, rec, orig, segment_type, out_dir, beat_type, dataset, error_dict, plot=demo))
                 
                 for future in as_completed(futures):
                     try:
