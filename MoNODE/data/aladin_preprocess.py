@@ -27,10 +27,14 @@ error_lock = Lock()
 
 MEDALCARE_XL_LEADS = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
 UK_BB_LEADS    = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
+MIMIC_IV_LEADS = ['I', 'II', 'III', 'aVF', 'aVR', 'aVL', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
+
 LEADS_DICT = {
-    'MedalCare-XL': MEDALCARE_XL_LEADS,
-    'ukbb': UK_BB_LEADS
+    'medalcare-xl': MEDALCARE_XL_LEADS,
+    'ukbb': UK_BB_LEADS,
+    'mimic-iv': MIMIC_IV_LEADS
 }
+
 ACCEPTED_TIME_RANGES = {
     'atrial': (30, 70),
     'ventricular': (150, 250)
@@ -147,7 +151,7 @@ def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, 
         ecg_segment = norm_ecg[start:end, :]
         delta_t = end - start
         
-        if dataset == 'MedalCare-XL':
+        if dataset == 'medalcare-xl':
             run_id = record.original_file_path.split('/')[-2].split('_')[1]
             session_id = record.original_file_path.split('/')[-1].split('_')[0]
             label = record.groundtruth.replace('.', '')
