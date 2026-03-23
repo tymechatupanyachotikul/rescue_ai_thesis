@@ -261,7 +261,8 @@ if __name__ == "__main__":
             }
         },
         'anomoly': 0,
-        'segmentation_failures': []
+        'segmentation_failures': [],
+        'median_beat_extraction': 0
     }
 
     n_success = 0
@@ -285,11 +286,17 @@ if __name__ == "__main__":
         original_records = [data[1] for data in loaded_data]
 
         st = time.time()
-        if beat_type == 'sampled':
-            aladin.segmenter.batch(records)
-            aladin.reflection.batch(records)
-        elif beat_type == 'median':
-            aladin.extract_median_beat_batch(records)
+        aladin.segmenter.batch(records)
+        aladin.reflection.batch(records)
+
+        if beat_type == 'median':
+            for record in tqdm(records, desc="Extracting median beats"):
+                try:
+                    aladin.calculate_median(record, 0.4, 0.6, 0.1)
+                except Exception as e:
+                    with error_lock:
+                        error_dict['median_beat_extraction'] += 1
+                    print(f"Error processing record {record.recordname}: {e}")
         
         if plot_only:
             plot_dir = os.path.join(out_dir, segment_type)
