@@ -250,7 +250,9 @@ if __name__ == "__main__":
     print(f'Processing {split} split for {segment_type} segments')
     
     out_dir = os.path.join(args.out_dir, split)
+    error_dir = os.path.join(args.out_dir, 'errors')
     os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(error_dir, exist_ok=True)
 
     print("Loading ALADIN model into memory...")
     aladin = ALADIN(
@@ -353,3 +355,6 @@ if __name__ == "__main__":
     print(f"Successfully processed {n_success}/{len(df)} records.")
     print("\nError Summary:")
     print(error_dict)
+
+    with open(os.path.join(error_dir, f'{split}_error_summary.json'), 'w') as f:
+        json.dump(error_dict, f, indent=4)
