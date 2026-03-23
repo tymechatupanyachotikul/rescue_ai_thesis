@@ -85,7 +85,7 @@ class MoNODE(nn.Module):
         XrecL  = torch.stack(L*[Xrec]) # L,N,T,D
         return XrecL
 
-    def forward(self, X, L=1, T_custom=None):
+    def forward(self, X, L=1, T_custom=None, mask=None):
 
         try:
             self.inv_enc.last_layer_gp.build_cache()
@@ -100,7 +100,7 @@ class MoNODE(nn.Module):
         in_data = X[:,:self.Tin]
         # if self.model == 'node':
         if self.model == 'node' or self.model == 'hbnode':
-            s0_mu, s0_logv = self.vae.encoder(in_data) # N,q
+            s0_mu, s0_logv = self.vae.encoder(in_data, mask=mask) # N,q
             z0 = self.vae.encoder.sample(s0_mu, s0_logv, L=L) # N,q or L,N,q
             z0 = z0.unsqueeze(0) if z0.ndim==2 else z0 # L,N,q
 

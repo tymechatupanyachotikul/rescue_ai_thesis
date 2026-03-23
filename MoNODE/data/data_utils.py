@@ -6,6 +6,15 @@ from   torch.utils import data
 from torch.nn.utils.rnn import pad_sequence
 from model.misc import io_utils
 
+DEFAULT_LEADS = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
+MIMIC_IV_LEADS = ['I', 'II', 'III', 'aVF', 'aVR', 'aVL', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
+
+LEADS_DICT = {
+    'medalcare-xl': DEFAULT_LEADS,
+    'ukbb': DEFAULT_LEADS,
+    'mimic-iv': MIMIC_IV_LEADS
+}
+
 def load_data(args, dtype):
 	if args.task in ['rot_mnist', 'rot_mnist_ou', 'mov_mnist', 'sin', 'lv', 'spiral', 'bb', 'mocap', 'mocap_shift', 'ecg'] :
 		(trainset, valset, testset, manager), params = __load_data(args, dtype, args.task)
@@ -77,11 +86,11 @@ def __load_data(args, dtype, dataset=None):
 	io_utils.makedirs(folder_path)
 	train_params, valid_params, test_params = get_data_params(args.dataset_root, params[dataset]['dataset'], params[dataset]['sample_type'], params[dataset]['beat_type'], dataset, params[dataset]['exclude_leads'])
 
-	return __build_dataset(args.num_workers, args.batch_size, train_params, valid_params, test_params, dtype, use_cache=params[dataset]['use_cache']), params
+	return __build_dataset(args.num_workers, args.batch_size, train_params, valid_params, test_params, dtype, params[dataset]['dataset'], use_cache=params[dataset]['use_cache']), params
 
 
 class ECGDataset(data.Dataset):
-	def __init__(self, file_paths, labels, run_id, dtype, exclude_leads=[], shared_cache=None):
+	def __init__(self, file_paths, labels, run_id, dtype, dataset, exclude_leads=[], shared_cache=None):
 		self.file_paths = file_paths
 		self.labels = labels
 		self.run_id = run_id
@@ -109,6 +118,14 @@ class ECGDataset(data.Dataset):
 		else:
 			self.include_idx = None
 
+		self.idx_map = None 
+		self.permute_lead = False
+
+		if not LEADS_DICT[dataset.lower()] == DEFAULT_LEADS:
+			source_leads = LEADS_DICT[dataset.lower()]
+			self.idx_map = [source_leads.index(lead) for lead in DEFAULT_LEADS]
+			self.permute_lead = True
+
 	def __len__(self):
 		return len(self.file_paths)
 	
@@ -117,6 +134,9 @@ class ECGDataset(data.Dataset):
 			X = self.cache[idx]
 		else:
 			X = torch.load(self.file_paths[idx]).to(dtype=self.dtype)
+			if self.permute_lead:
+				X = X[:, self.idx_map]
+			
 			if self.include_idx is not None:
 				X = X[:, self.include_idx]
 				
@@ -130,12 +150,17 @@ class ECGDataset(data.Dataset):
 def pad_collate(batch):
 	sequences = [item[0] for item in batch]
 	labels = [item[1] for item in batch]
-	
+	lengths = torch.tensor([s.shape[0] for s in sequences], dtype=torch.long)
+
 	padded_sequences = pad_sequence(sequences, batch_first=True, padding_value=0.0)
 
-	return padded_sequences, labels
+	N, T = padded_sequences.shape[:2]
+	T_idx = torch.arange(T).unsqueeze(0).expand(N, T) 
+	mask = T_idx < lengths.unsqueeze(1) 
 
-def __build_dataset(num_workers, batch_size, train_params, valid_params, test_params, dtype, use_cache=True, shuffle=True):
+	return padded_sequences, labels, mask
+
+def __build_dataset(num_workers, batch_size, train_params, valid_params, test_params, dtype, dataset, use_cache=True, shuffle=True):
 	# Data generators
 	manager = None
 	if num_workers>0:
@@ -167,6 +192,7 @@ def __build_dataset(num_workers, batch_size, train_params, valid_params, test_pa
 		train_params['class'], 
 		train_params['run_id'], 
 		dtype, 
+		dataset,
 		train_params['exclude_leads'],
 		shared_cache=train_cache
 	)
@@ -187,6 +213,7 @@ def __build_dataset(num_workers, batch_size, train_params, valid_params, test_pa
 		valid_params['class'], 
 		valid_params['run_id'], 
 		dtype, 
+		dataset,
 		valid_params['exclude_leads'], 
 		shared_cache=valid_cache
 	)
@@ -208,6 +235,7 @@ def __build_dataset(num_workers, batch_size, train_params, valid_params, test_pa
 		test_params['class'],
 		test_params['run_id'], 
 		dtype, 
+		dataset,
 		test_params['exclude_leads'], 
 		shared_cache=test_cache
 	)

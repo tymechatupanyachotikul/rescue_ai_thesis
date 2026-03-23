@@ -9,7 +9,7 @@ from model.misc.plot_utils import plot_results
 import wandb
 from collections import defaultdict
 
-def elbo(model, X, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L):
+def elbo(model, X, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L, mask=None):
     ''' Input:
             qz_m        - latent means [N,2q]
             qz_logv     - latent logvars [N,2q]
@@ -25,9 +25,32 @@ def elbo(model, X, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L):
 
     #Reconstruction log-likelihood
     lhood, lhood_v = model.vae.decoder.log_prob(X,Xrec,L) #L,N,T,d,nc,nc
-    idx   = list(np.arange(X.ndim+1)) # 0,1,2,...
-    lhood = lhood.sum(idx[2:]).mean(0) #N
-    lhood_v = lhood_v.sum(idx[2:]).mean(0) if lhood_v is not None else torch.zeros_like(lhood)
+
+    if mask is not None:
+        mask_exp = mask.unsqueeze(0)                               # [1,N,T]
+        for _ in range(lhood.ndim - mask_exp.ndim):
+            mask_exp = mask_exp.unsqueeze(-1)                      # [1,N,T,1,...]
+        mask_exp = mask_exp.expand_as(lhood).float()               # [L,N,T,...]
+
+        lhood   = lhood   * mask_exp
+        if lhood_v is not None:
+            mask_exp_v = mask.unsqueeze(0)
+            for _ in range(lhood_v.ndim - mask_exp_v.ndim):
+                mask_exp_v = mask_exp_v.unsqueeze(-1)
+            lhood_v = lhood_v * mask_exp_v.expand_as(lhood_v).float()
+
+        idx      = list(np.arange(X.ndim + 1))                    # [0,1,2,...]
+        lhood    = lhood.sum(idx[2:])                              # [L,N]  summed over T,...
+        lhood    = lhood.mean(0)                                   # [N]    mean over L
+
+        if lhood_v is not None:
+            lhood_v = lhood_v.sum(idx[2:]).mean(0)      # [N]
+        else:
+            lhood_v = torch.zeros_like(lhood)
+    else:
+        idx   = list(np.arange(X.ndim+1)) # 0,1,2,...
+        lhood = lhood.sum(idx[2:]).mean(0) #N
+        lhood_v = lhood_v.sum(idx[2:]).mean(0) if lhood_v is not None else torch.zeros_like(lhood)
 
     return lhood.mean(), lhood_v.mean(), kl_z0.mean() 
 
@@ -47,35 +70,53 @@ def contrastive_loss(C):
     pos = Z[idxset0,idxset1].sum()
     return -pos
 
-def compute_mse(model, data, y_data, T_train, L=1, task=None):
+def compute_masked_mse(se, mask=None,dims=None):
+
+    if mask is None:
+        mse = torch.mean(se)
+    else:
+        mask = mask.unsqueeze(0).unsqueeze(-1).float() 
+        for _ in range(se.ndim - mask.ndim):
+            mask = mask.unsqueeze(-1)
+        mask = mask.expand_as(se)
+        diff = se * mask
+
+        if dims is None:
+            return diff.sum() / (mask.sum() + 1e-8)
+        else:
+            return diff.sum(dim=dims) / (mask.sum(dim=dims) + 1e-8)
+
+    return mse 
+
+def compute_mse(model, data, y_data, T_train, L=1, mask=None, task=None):
 
     T_start = 0
     T_max = 0
     T = data.shape[1]
     #run model    
-    Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), C, c, m = model(data, L, T)
+    Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), C, c, m = model(data, L, T, mask=mask)
     
     dict_mse = {}
     dict_misc = {}
     while T_max < T:
         if task == 'rot_mnist':
             T_max += T_train
-            mse = torch.mean((Xrec[:,:,T_start:T_max]-data[:,T_start:T_max])**2)
+            mse = compute_masked_mse((Xrec[:,:,T_start:T_max]-data[:,T_start:T_max])**2, mask=mask)
             dict_mse[str(T_max)] = mse
             T_start += T_train 
             T_max += T_train
         else:
             T_max += T_train
             se = (Xrec[:,:,:T_max]-data[:,:T_max])**2
-            mse = torch.mean(se)
-            dict_mse[str(T_max)] = mse
+            mse = compute_masked_mse(se, mask=mask[:, :T_max])
+            dict_mse[str(T_max)] = mse.item()
             if T_max >= T:
-                mse_T = se.mean(dim=(-1, 1))[0]
+                mse_T = compute_masked_mse(se,  mask=mask[:, :T_max], dims=(1, 3))
 
-                mse_l = se.mean(dim=(2, 1))[0]
-                dict_misc['mse_dt'] = ((torch.diff(Xrec[:,:,:T_max], dim=2)-torch.diff(data[:,:T_max], dim=1))**2).mean(dim=(-1, 1))[0]
-                dict_misc['mse_t'] = mse_T
-                dict_misc['mse_l'] = mse_l
+                mse_l = compute_masked_mse(se, mask=mask[:, :T_max], dims=(1, 2))
+                #dict_misc['mse_dt'] = ((torch.diff(Xrec[:,:,:T_max], dim=2)-torch.diff(data[:,:T_max], dim=1))**2).mean(dim=(-1, 1))[0]
+                dict_misc['mse_t'] = mse_T.item()
+                dict_misc['mse_l'] = mse_l.item()
 
                 loss_per_class = {}
                 loss_per_patient = {}
@@ -99,7 +140,7 @@ def compute_mse(model, data, y_data, T_train, L=1, task=None):
     return dict_mse, dict_misc, loss_per_class, loss_per_patient
 
 
-def compute_loss(model, data, y, L, num_observations):
+def compute_loss(model, data, y, L, num_observations, mask=None):
     """
     Compute loss for optimization
     @param model: mo/node  
@@ -110,7 +151,7 @@ def compute_loss(model, data, y, L, num_observations):
     T = data.shape[1]
 
     #run model    
-    Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), C, c, m = model(data, L, T_custom=T)
+    Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), C, c, m = model(data, L, T_custom=T, mask=mask)
 
     loss_per_class = {} 
     loss_per_patient = {}
@@ -132,12 +173,13 @@ def compute_loss(model, data, y, L, num_observations):
 
     #compute loss
     if model.model =='sonode':
-        mse   = torch.mean((Xrec-data)**2)
+        mse = compute_masked_mse((Xrec-data)**2, mask=mask)
+
         loss = mse 
         return loss, 0.0, 0.0, Xrec, ztL, mse, c, m
     
     elif model.model =='node' or model.model == 'hbnode':
-        lhood, lhood_dt, kl_z0 = elbo(model, data, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L)
+        lhood, lhood_dt, kl_z0 = elbo(model, data, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L, mask=mask)
         
         lhood = (lhood + lhood_dt) * num_observations
         kl_z0 = kl_z0 * num_observations
@@ -228,7 +270,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             T_ += ep_inc_v
         loss_per_class = defaultdict(list)
         loss_per_patient = defaultdict(list)
-        for itr, (local_batch, local_y) in enumerate(trainset):
+        for itr, (local_batch, local_y, local_mask) in enumerate(trainset):
             tr_minibatch = local_batch.to(model.device) # N,T,...
             if args.task=='sin' or args.task=='spiral' or args.task=='lv' or 'mocap' in args.task: #slowly increase sequence length
                 [N,T] = tr_minibatch.shape[:2]
@@ -241,7 +283,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 tr_minibatch = tr_minibatch.repeat([N_,1,1])
                 tr_minibatch = torch.stack([tr_minibatch[n,t0:t0+T_] for n,t0 in enumerate(t0s)]) # N*ns,T//2,d
                 
-            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _, _loss_per_class, _loss_per_patient, nlhood_dt= compute_loss(model, tr_minibatch, local_y, L, num_observations = len(trainset.dataset.file_paths))
+            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _, _loss_per_class, _loss_per_patient, nlhood_dt= compute_loss(model, tr_minibatch, local_y, L, mask=local_mask, num_observations = len(trainset.dataset.file_paths))
 
             optimizer.zero_grad()
             loss.backward() 
@@ -304,14 +346,14 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             dict_valid_misc = {
                 'mse_t': [],
                 'mse_l': [],
-                'mse_dt': [],
+                #'mse_dt': [],
             }
             val_loss_per_class = defaultdict(list)
             val_loss_per_patient = defaultdict(list)
 
-            for valid_batch, valid_y in validset:
+            for valid_batch, valid_y, valid_mask in validset:
                 valid_batch = valid_batch.to(model.device)
-                dict_mse, dict_misc, _loss_per_class, _loss_per_patient = compute_mse(model, valid_batch, valid_y, T_train)
+                dict_mse, dict_misc, _loss_per_class, _loss_per_patient = compute_mse(model, valid_batch, valid_y, T_train, valid_mask)
                 for key,val in dict_mse.items():
                     if key not in dict_valid_mses:
                         dict_valid_mses[key] = []
@@ -323,7 +365,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
                 dict_valid_misc['mse_t'].append(dict_misc['mse_t'])
                 dict_valid_misc['mse_l'].append(dict_misc['mse_l'])
-                dict_valid_misc['mse_dt'].append(dict_misc['mse_dt'])
+                #dict_valid_misc['mse_dt'].append(dict_misc['mse_dt'])
                 
 
             T_rec = list(dict_valid_mses.keys())[0]
@@ -333,7 +375,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
             mse_t, sse_t = compute_mse_stats(dict_valid_misc['mse_t'])
             mse_l, sse_l = compute_mse_stats(dict_valid_misc['mse_l'])
-            mse_dt, sse_dt = compute_mse_stats(dict_valid_misc['mse_dt'])
+            #mse_dt, sse_dt = compute_mse_stats(dict_valid_misc['mse_dt'])
 
             t = np.arange(len(mse_t))
             table = wandb.Table(data=[[ti, m, m-s, m+s] for ti, m, s in zip(t, mse_t, sse_t)],
@@ -352,22 +394,22 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 )
             })
 
-            t = np.arange(len(mse_dt))
-            table = wandb.Table(data=[[ti, m, m-s, m+s] for ti, m, s in zip(t, mse_dt, sse_dt)],
-                                columns=["timestep", "mean", "lower", "upper"])
+            # t = np.arange(len(mse_dt))
+            # table = wandb.Table(data=[[ti, m, m-s, m+s] for ti, m, s in zip(t, mse_dt, sse_dt)],
+            #                     columns=["timestep", "mean", "lower", "upper"])
 
-            run.log({
-                "val/mse_dt": wandb.plot_table(
-                    vega_spec_name="tymechatu-university-of-amsterdam/std_band_custom", 
-                    data_table=table,
-                    fields={
-                        "x": "timestep",
-                        "y": "mean",
-                        "lower_bound": "lower",
-                        "upper_bound": "upper"
-                    }
-                )
-            })
+            # run.log({
+            #     "val/mse_dt": wandb.plot_table(
+            #         vega_spec_name="tymechatu-university-of-amsterdam/std_band_custom", 
+            #         data_table=table,
+            #         fields={
+            #             "x": "timestep",
+            #             "y": "mean",
+            #             "lower_bound": "lower",
+            #             "upper_bound": "upper"
+            #         }
+            #     )
+            # })
             
             channel = np.arange(len(mse_t)) if not custom_channel else custom_channel
             table = wandb.Table(data=[[ti, m, m-s, m+s] for ti, m, s in zip(channel, mse_l, sse_l)],
@@ -432,7 +474,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 dict_test_misc = {
                     'mse_t': [],
                     'mse_l': [],
-                    'mse_dt': []
+                    #'mse_dt': []
                 }
                 test_loss_per_class = defaultdict(list)
                 test_loss_per_patient = defaultdict(list)
@@ -453,7 +495,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
                     dict_test_misc['mse_t'].append(dict_misc['mse_t'])
                     dict_test_misc['mse_l'].append(dict_misc['mse_l'])
-                    dict_test_misc['mse_dt'].append(dict_misc['mse_dt'])
+                    #dict_test_misc['mse_dt'].append(dict_misc['mse_dt'])
 
                 logger.info('********** Current Best Model based on validation error ***********')
                 logger.info('Epoch:{:4d}/{:4d}'.format(ep, args.Nepoch))
@@ -465,7 +507,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
                 mse_t, sse_t = compute_mse_stats(dict_test_misc['mse_t'])
                 mse_l, sse_l = compute_mse_stats(dict_test_misc['mse_l'])
-                mse_dt, sse_dt = compute_mse_stats(dict_test_misc['mse_dt'])
+                #mse_dt, sse_dt = compute_mse_stats(dict_test_misc['mse_dt'])
 
                 t = np.arange(len(mse_t))
                 table = wandb.Table(data=[[ti, m, m-s, m+s] for ti, m, s in zip(t, mse_t, sse_t)],
@@ -484,22 +526,22 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                     )
                 })
 
-                t = np.arange(len(mse_dt))
-                table = wandb.Table(data=[[ti, m, m-s, m+s] for ti, m, s in zip(t, mse_dt, sse_dt)],
-                                    columns=["timestep", "mean", "lower", "upper"])
+                # t = np.arange(len(mse_dt))
+                # table = wandb.Table(data=[[ti, m, m-s, m+s] for ti, m, s in zip(t, mse_dt, sse_dt)],
+                #                     columns=["timestep", "mean", "lower", "upper"])
 
-                run.log({
-                    "test/mse_dt": wandb.plot_table(
-                        vega_spec_name="tymechatu-university-of-amsterdam/std_band_custom", 
-                        data_table=table,
-                        fields={
-                            "x": "timestep",
-                            "y": "mean",
-                            "lower_bound": "lower",
-                            "upper_bound": "upper"
-                        }
-                    )
-                })
+                # run.log({
+                #     "test/mse_dt": wandb.plot_table(
+                #         vega_spec_name="tymechatu-university-of-amsterdam/std_band_custom", 
+                #         data_table=table,
+                #         fields={
+                #             "x": "timestep",
+                #             "y": "mean",
+                #             "lower_bound": "lower",
+                #             "upper_bound": "upper"
+                #         }
+                #     )
+                # })
 
                 channel = np.arange(len(mse_t)) if not custom_channel else custom_channel
                 table = wandb.Table(data=[[ti, m, m-s, m+s] for ti, m, s in zip(channel, mse_l, sse_l)],
