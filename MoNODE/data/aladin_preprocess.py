@@ -34,6 +34,9 @@ LEADS_DICT = {
 
 def load_and_convert_case(row, dataset):
     """Worker function to handle file checking, conversion, and loading."""
+
+    MIN_LENGTH = 100 
+
     ecg_path = str(row.data_path)
     directory_path, filename = os.path.split(ecg_path)
     case = os.path.splitext(filename)[0]
@@ -60,6 +63,9 @@ def load_and_convert_case(row, dataset):
         )    
 
     rec = wfdb.rdrecord(filepath)
+    if rec.p_signal.shape[0] < MIN_LENGTH:
+        raise ValueError(f"ECG signal too short: {rec.p_signal.shape[0]} samples in {filepath}")
+    
     ecg_dict = {name: rec.p_signal[:, i] for i, name in enumerate(rec.sig_name)}
 
     record = Record(ecg_dict, rec.fs, "DEMO", case)
