@@ -80,6 +80,17 @@ def load_and_convert_case(row, dataset):
     
     try:
         rec = wfdb.rdrecord(filepath)
+        if dataset == 'mimic-iv':
+            rec.sig_name = LEADS_DICT[dataset]
+            wfdb.wrsamp(
+                record_name=case,
+                write_dir=directory_path,
+                fs=rec.fs,
+                units=rec.units,
+                sig_name=rec.sig_name,
+                p_signal=rec.p_signal,
+                fmt=rec.fmt
+            )
     except Exception as e:
         convert_ecg_to_wfdb(filename, ecg_path, directory_path, dataset)
         rec = wfdb.rdrecord(filepath)
