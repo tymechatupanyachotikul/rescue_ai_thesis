@@ -317,8 +317,12 @@ class EncoderRNN(AbstractEncoder):
         enc_out_dim      = enc_out_dim + enc_out_dim*(out_distr=='normal')
         self.gru = GRUEncoder(enc_out_dim, input_dim, rnn_output_size=rnn_hidden, H=H)
         
-    def forward(self, x):
-        outputs = self.gru(x)
+    def forward(self, x, mask=None):
+        lengths = None
+        if mask is not None:
+            lengths = mask.sum(dim=1).cpu().to(torch.int64)
+
+        outputs = self.gru(x, lengths=lengths)
         if self.out_distr=='normal':
             z0_mu, z0_log_sig = outputs[:,:self.enc_out_dim,], outputs[:,self.enc_out_dim:]
             z0_log_sig = self.sp(z0_log_sig)
