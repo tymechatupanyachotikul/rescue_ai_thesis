@@ -43,10 +43,8 @@ def elbo(model, X, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L, mask=None):
         lhood    = lhood.sum(idx[2:])                              # [L,N]  summed over T,...
         lhood    = lhood.mean(0)                                   # [N]    mean over L
 
-        if lhood_v is not None:
-            lhood_v = lhood_v.sum(idx[2:]).mean(0)      # [N]
-        else:
-            lhood_v = torch.zeros_like(lhood)
+        lhood_v = lhood_v.sum(idx[2:]).mean(0) if lhood_v is not None else torch.zeros_like(lhood)    # [N]
+
     else:
         idx   = list(np.arange(X.ndim+1)) # 0,1,2,...
         lhood = lhood.sum(idx[2:]).mean(0) #N
@@ -109,14 +107,14 @@ def compute_mse(model, data, y_data, T_train, L=1, mask=None, task=None):
             T_max += T_train
             se = (Xrec[:,:,:T_max]-data[:,:T_max])**2
             mse = compute_masked_mse(se, mask=mask[:, :T_max])
-            dict_mse[str(T_max)] = mse.item()
+            dict_mse[str(T_max)] = mse
             if T_max >= T:
                 mse_T = compute_masked_mse(se,  mask=mask[:, :T_max], dims=(1, 3))
 
                 mse_l = compute_masked_mse(se, mask=mask[:, :T_max], dims=(1, 2))
                 #dict_misc['mse_dt'] = ((torch.diff(Xrec[:,:,:T_max], dim=2)-torch.diff(data[:,:T_max], dim=1))**2).mean(dim=(-1, 1))[0]
-                dict_misc['mse_t'] = mse_T.item()
-                dict_misc['mse_l'] = mse_l.item()
+                dict_misc['mse_t'] = mse_T.squeeze(0)
+                dict_misc['mse_l'] = mse_l.squeeze(0)
 
                 loss_per_class = {}
                 loss_per_patient = {}
@@ -165,11 +163,11 @@ def compute_loss(model, data, y, L, num_observations, mask=None):
 
     for cls in list(set(classes)):
         idx = [i for i, val in enumerate(classes) if val == cls]
-        loss_per_class[cls] = torch.mean((Xrec[:, idx, :, :] - data[idx, :, :])**2).item()
+        loss_per_class[cls] = compute_masked_mse((Xrec[:, idx, :, :] - data[idx, :, :])**2,  mask=mask[idx]).cpu().detach().numpy()
 
     for run_id in list(set(run_ids)):
         idx = [i for i, val in enumerate(run_ids) if val == run_id]
-        loss_per_patient[run_id] = torch.mean((Xrec[:, idx, :, :] - data[idx, :, :])**2).item()
+        loss_per_patient[run_id] = compute_masked_mse((Xrec[:, idx, :, :] - data[idx, :, :])**2,  mask=mask[idx]).cpu().detach().numpy()
 
     #compute loss
     if model.model =='sonode':
@@ -353,7 +351,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
             for valid_batch, valid_y, valid_mask in validset:
                 valid_batch = valid_batch.to(model.device)
-                dict_mse, dict_misc, _loss_per_class, _loss_per_patient = compute_mse(model, valid_batch, valid_y, T_train, valid_mask)
+                dict_mse, dict_misc, _loss_per_class, _loss_per_patient = compute_mse(model, valid_batch, valid_y, T_train, mask=valid_mask)
                 for key,val in dict_mse.items():
                     if key not in dict_valid_mses:
                         dict_valid_mses[key] = []
@@ -480,9 +478,9 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 test_loss_per_patient = defaultdict(list)
 
                 # test_mse = {}
-                for test_batch, test_y in testset:
+                for test_batch, test_y, test_mask in testset:
                     test_batch = test_batch.to(model.device)
-                    dict_mse, dict_misc, _loss_per_class, _loss_per_patient = compute_mse(model, test_batch, test_y, T_train, L=1, task=args.task)
+                    dict_mse, dict_misc, _loss_per_class, _loss_per_patient = compute_mse(model, test_batch, test_y, T_train, L=1, task=args.task, mask=test_mask)
                     for key,val in dict_mse.items():
                         if key not in dict_test_mses:
                             dict_test_mses[key] = []

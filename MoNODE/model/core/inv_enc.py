@@ -27,12 +27,12 @@ class INV_ENC(nn.Module):
     def kl(self):
         return torch.zeros(1) * 0.0
 
-    def forward(self, X, L=1):
+    def forward(self, X, mask=None, L=1):
         ''' 
             X is [N,T,nc,d,d] or [N,T,q] 
             returns [L,N,T,q]
         '''
-        c = self.inv_encoder(X) # N,Tinv,q or N,ns,q
+        c = self.inv_encoder(X, mask=mask) # N,Tinv,q or N,ns,q
         return c.repeat([L,1,1,1]) # L,N,T,q
 
 class InvariantEncoderRCNN(nn.Module):
@@ -90,13 +90,49 @@ class InvariantEncoderRNN(EncoderRNN):
     def __init__(self, input_dim, T_inv=None, rnn_hidden=10, enc_out_dim=16, out_distr='dirac'):
         super(InvariantEncoderRNN, self).__init__(input_dim, rnn_hidden=rnn_hidden, enc_out_dim=enc_out_dim, out_distr=out_distr)
         self.T_inv = T_inv
-    def forward(self, X, ns=5):
+
+    def forward(self, X, mask=None, ns=5):
         [N,T,d] = X.shape
         T_inv = T//2 if self.T_inv is None else self.T_inv
         T_inv = min(T_inv,T)
-        X   = X.repeat([ns,1,1])
-        t0s = torch.randint(0,T-T_inv+1,[ns*N]) 
-        X   = torch.stack([X[n,t0:t0+T_inv] for n,t0 in enumerate(t0s)]) # ns*N,T_inv,d
-        X_out = super().forward(X) # ns*N,enc_out_dim
-        return X_out.reshape(ns,N,self.enc_out_dim).permute(1,0,2) # N,ns,enc_out_dim
+
+        if mask is None:
+            mask = torch.ones((N, T), device=X.device)
+
+        lengths = mask.sum(1).long()
+        X   = X.repeat_interleave(ns, dim=0)
+        mask_rep = mask.repeat_interleave(ns, dim=0)
+        lengths_rep = lengths.repeat_interleave(ns)
+
+        t0s = torch.zeros(ns * N, dtype=torch.long, device=X.device)
+        max_lengths = torch.clamp(lengths_rep - T_inv, min=0)
+
+        t0s = (torch.rand(ns * N, device=X.device) * (max_lengths+1)).long()
+        batch_idx = torch.arange(ns * N, device=X.device).unsqueeze(1)
+        time_idx = t0s.unsqueeze(1) + torch.arange(T_inv, device=X.device).unsqueeze(0)
+
+        X_sub = X[batch_idx, time_idx]             # [ns*N, T_inv, d]
+        mask_sub = mask_rep[batch_idx, time_idx]
+        
+        # X_sub = []
+        # mask_sub = []
+
+        # for i in range(N):
+        #     max_length = max(0, lengths[i].item() - T_inv)
+        #     if max_length > 0:
+        #         t0 = torch.randint(0, max_length + 1, (ns,), dtype=torch.long, device=X.device)
+        #     else:
+        #         t0 = torch.zeros((ns,), dtype=torch.long, device=X.device)
+        #     t0s[i*ns:(i+1)*ns] = t0 
+
+        # for i, t0 in enumerate(t0s):
+        #     X_sub.append(X [i, t0 : t0 + T_inv])
+        #     mask_sub.append(mask_rep[i, t0 : t0 + T_inv])
+            
+        # X_sub = torch.stack(X_sub)              # [ns*N, T_inv, d]
+        # mask_sub = torch.stack(mask_sub)  # [ns*N]
+
+        X_out = super().forward(X_sub, mask=mask_sub) # ns*N,enc_out_dim
+
+        return X_out.reshape(N, ns, self.enc_out_dim) # N,ns,enc_out_dim
         

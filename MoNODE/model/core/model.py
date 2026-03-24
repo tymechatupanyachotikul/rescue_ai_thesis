@@ -97,7 +97,7 @@ class MoNODE(nn.Module):
             T = T_custom
 
         #condition on
-        in_data = X[:,:self.Tin]
+        in_data = X
         # if self.model == 'node':
         if self.model == 'node' or self.model == 'hbnode':
             s0_mu, s0_logv = self.vae.encoder(in_data, mask=mask) # N,q
@@ -110,7 +110,7 @@ class MoNODE(nn.Module):
 
             v0_mu, v0_logv = None, None
             if self.order == 2:
-                v0_mu, v0_logv = self.vae.encoder_v(in_data)
+                v0_mu, v0_logv = self.vae.encoder_v(in_data, mask=mask)
                 v0 = self.vae.encoder_v.sample(v0_mu, v0_logv, L=L) # N,q or L,N,q
                 v0 = v0.unsqueeze(0) if v0.ndim==2 else v0
 
@@ -132,7 +132,7 @@ class MoNODE(nn.Module):
 
         #encode content (invariance), pass whole sequence length 
         if self.is_inv:
-            InvMatrix = self.inv_enc(X, L=L) # embeddings [L,N,T,q] or [L,N,ns,q]
+            InvMatrix = self.inv_enc(X, L=L, mask=mask) # embeddings [L,N,T,q] or [L,N,ns,q]
             inv_var = InvMatrix.mean(2) # time-invariant code [L,N,q]
             c, m = inv_var[:,:,:self.inv_enc.content_dim], inv_var[:,:,self.inv_enc.content_dim:]
         else:

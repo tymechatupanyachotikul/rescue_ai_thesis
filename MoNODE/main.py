@@ -159,7 +159,7 @@ if __name__ == '__main__':
     run = wandb.init(
         entity="tymechatu-university-of-amsterdam",
         name=f'{args.model}_ode-{args.ode_latent_dim}_mod-{args.modulator_dim}_batch-{args.batch_size}_lr-{args.lr}_sample-{params[args.task]["sample_type"]}',
-        project=f"rescue_ai/NODE_{params[args.task]['beat_type']}",
+        project=f"NODE_{params[args.task]['beat_type']}",
         config=vars(args),
     )
     logger.info('********** {} dataset with loaded ********** '.format(args.task))
