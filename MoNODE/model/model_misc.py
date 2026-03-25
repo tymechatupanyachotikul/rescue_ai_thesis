@@ -76,7 +76,7 @@ def compute_masked_mse(se, mask=None,dims=None):
         mask = mask.unsqueeze(0).unsqueeze(-1).float() 
         for _ in range(se.ndim - mask.ndim):
             mask = mask.unsqueeze(-1)
-        mask = mask.expand_as(se)
+        mask = mask.expand_as(se).to(se.device)
         diff = se * mask
 
         if dims is None:
