@@ -101,7 +101,7 @@ class InvariantEncoderRNN(EncoderRNN):
 
         lengths = mask.sum(1).long()
         X   = X.repeat_interleave(ns, dim=0)
-        mask_rep = mask.repeat_interleave(ns, dim=0)
+        mask_rep = mask.repeat_interleave(ns, dim=0).to(X.device)
         lengths_rep = lengths.repeat_interleave(ns)
 
         t0s = torch.zeros(ns * N, dtype=torch.long, device=X.device)
