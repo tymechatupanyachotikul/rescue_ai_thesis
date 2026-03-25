@@ -156,7 +156,7 @@ def pad_collate(batch):
 
 	N, T = padded_sequences.shape[:2]
 	T_idx = torch.arange(T).unsqueeze(0).expand(N, T) 
-	mask = T_idx < lengths.unsqueeze(1) 
+	mask = (T_idx < lengths.unsqueeze(1)).to(padded_sequences.device)
 
 	return padded_sequences, labels, mask
 
