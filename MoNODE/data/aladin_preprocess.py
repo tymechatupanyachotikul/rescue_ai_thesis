@@ -387,12 +387,20 @@ if __name__ == "__main__":
                         aladin.plot(record, name=os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_ecg'))
                     else:
                         median_beat = record.median_beat.ecg.T
+                        original_ecg = record.p_signal
+
                         mu = np.mean(median_beat, axis=0, keepdims=True)
                         sigma = np.std(median_beat, axis=0, keepdims=True)
                         norm_median_beat = (median_beat - mu) / (sigma + 1e-8)
-                        
+
+                        mu = np.mean(original_ecg, axis=0, keepdims=True)
+                        sigma = np.std(original_ecg, axis=0, keepdims=True)
+                        norm_original_ecg = (original_ecg - mu) / (sigma + 1e-8)
+
                         plot_ecg(median_beat, os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_median_ecg.png'))
                         plot_ecg(norm_median_beat, os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_norm_median_ecg.png'))
+                        plot_ecg(original_ecg, os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_original_ecg.png'))
+                        plot_ecg(norm_original_ecg, os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_norm_original_ecg.png'))
                 else:
                     run_id = os.path.splitext(record.original_file_path)[0]
                     save_dir = os.path.join(plot_dir, f'{run_id}_ecg')
