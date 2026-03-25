@@ -207,7 +207,7 @@ def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, 
                 plt.close(fig) 
 
                 fig, ax = plt.subplots(figsize=(10, 4))
-                ax.plot(norm_ecg[:, 0], label='Normalised median beat')
+                ax.plot(ecg_segment.detach().cpu().numpy()[:, 0], label='Normalised median beat')
                 ax.axvspan(start, end, color='#e74c3c', alpha=0.5, label=f"Segmented for {segment_type}")
                 ax.set_xlabel('Time')
                 ax.set_ylabel('Amplitude')
