@@ -376,7 +376,7 @@ if __name__ == "__main__":
         if beat_type == 'median':
             for record in tqdm(records, desc="Extracting median beats"):
                 try:
-                    aladin.calculate_median(record, 0.4, 0.6, 0.1, normalise=False)
+                    aladin.calculate_median(record, 0.4, 0.6, 0.1, normalise=True)
                 except Exception as e:
                     with error_lock:
                         error_dict['median_beat_extraction'] += 1
