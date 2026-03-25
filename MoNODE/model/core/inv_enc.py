@@ -105,7 +105,7 @@ class InvariantEncoderRNN(EncoderRNN):
         lengths_rep = lengths.repeat_interleave(ns)
 
         t0s = torch.zeros(ns * N, dtype=torch.long, device=X.device)
-        max_lengths = torch.clamp(lengths_rep - T_inv, min=0)
+        max_lengths = torch.clamp(lengths_rep - T_inv, min=0).to(device=X.device)
 
         t0s = (torch.rand(ns * N, device=X.device) * (max_lengths+1)).long()
         batch_idx = torch.arange(ns * N, device=X.device).unsqueeze(1)
