@@ -378,7 +378,7 @@ if __name__ == "__main__":
             plot_dir = args.plot_dir
             os.makedirs(plot_dir, exist_ok=True)
 
-            for record in records:
+            for record, original_record in zip(records, original_records):
                 if dataset == 'medalcare-xl':
                     run_id = record.original_file_path.split('/')[-2].split('_')[1]
                     session_id = record.original_file_path.split('/')[-1].split('_')[0]
@@ -387,7 +387,7 @@ if __name__ == "__main__":
                         aladin.plot(record, name=os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_ecg'))
                     else:
                         median_beat = record.median_beat.ecg.T
-                        original_ecg = record.ecg
+                        original_ecg = original_record.p_signal
 
                         mu = np.mean(median_beat, axis=0, keepdims=True)
                         sigma = np.std(median_beat, axis=0, keepdims=True)
