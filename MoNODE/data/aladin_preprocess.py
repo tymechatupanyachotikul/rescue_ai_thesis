@@ -160,6 +160,12 @@ def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, 
 
     for idx, (start, end) in enumerate(segments):
         ecg_segment = norm_ecg[start:end, :]
+
+        if beat_type == 'median':
+            mu = np.mean(ecg_segment, axis=0, keepdims=True)
+            sigma = np.std(ecg_segment, axis=0, keepdims=True)
+            ecg_segment = (ecg_segment - mu) / (sigma + 1e-8)
+
         delta_t = end - start
         
         if dataset == 'medalcare-xl':
@@ -245,9 +251,11 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
             error_dict['anomoly'] += 1
         return
     
-    mu = np.mean(original_ecg, axis=0, keepdims=True)
-    sigma = np.std(original_ecg, axis=0, keepdims=True)
-    norm_ecg = (original_ecg - mu) / (sigma + 1e-8)
+    norm_ecg = original_ecg
+    if beat_type == 'sampled':
+        mu = np.mean(original_ecg, axis=0, keepdims=True)
+        sigma = np.std(original_ecg, axis=0, keepdims=True)
+        norm_ecg = (original_ecg - mu) / (sigma + 1e-8)
 
     for seg_type, seg_idx in segments_dict.items():
         save_ecg_segment(seg_idx, norm_ecg, original_record, record, seg_type, out_dir, beat_type, dataset, error_dict, plot=plot)
