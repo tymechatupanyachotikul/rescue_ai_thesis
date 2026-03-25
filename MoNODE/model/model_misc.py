@@ -434,7 +434,8 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 )
             })
 
-            table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in val_loss_per_patient.items()],
+            print(f'val loss per class : {val_loss_per_class}')
+            table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in val_loss_per_class.items()],
                                 columns=["class", "mse"])
 
             run.log({
@@ -553,7 +554,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                         title="MSE per Lead"
                     )
                 })
-
+                print(f'test loss per class : {test_loss_per_class}')
                 table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in test_loss_per_class.items()],
                                 columns=["class", "mse"])
 
