@@ -387,7 +387,7 @@ if __name__ == "__main__":
                         aladin.plot(record, name=os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_ecg'))
                     else:
                         median_beat = record.median_beat.ecg.T
-                        original_ecg = record.p_signal
+                        original_ecg = record.ecg
 
                         mu = np.mean(median_beat, axis=0, keepdims=True)
                         sigma = np.std(median_beat, axis=0, keepdims=True)
