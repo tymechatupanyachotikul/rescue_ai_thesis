@@ -148,7 +148,7 @@ class ECGDataset(data.Dataset):
 	
 
 def pad_collate(batch):
-	sequences = [item[0] for item in batch]
+	sequences = [torch.nan_to_num(item[0], nan=0.0) for item in batch]
 	labels = [item[1] for item in batch]
 	lengths = torch.tensor([s.shape[0] for s in sequences], dtype=torch.long)
 

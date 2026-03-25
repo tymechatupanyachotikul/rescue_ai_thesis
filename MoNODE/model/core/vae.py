@@ -212,9 +212,7 @@ class AbstractEncoder(nn.Module):
         else:
             means = mu_s
             stds  = std_s
-        print("means nan:", torch.isnan(means).any(), "inf:", torch.isinf(means).any())
-        print("stds nan:", torch.isnan(stds).any(), "inf:", torch.isinf(stds).any())
-        print("stds min:", stds.min().item(), "max:", stds.max().item())
+            
         return Normal(means, stds) #N,q
 
     @property
