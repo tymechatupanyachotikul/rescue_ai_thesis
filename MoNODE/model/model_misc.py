@@ -27,14 +27,14 @@ def elbo(model, X, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L, mask=None):
     lhood, lhood_v = model.vae.decoder.log_prob(X,Xrec,L) #L,N,T,d,nc,nc
 
     if mask is not None:
-        mask_exp = mask.unsqueeze(0)                               # [1,N,T]
+        mask_exp = mask.unsqueeze(0).to(lhood.device)                             # [1,N,T]
         for _ in range(lhood.ndim - mask_exp.ndim):
             mask_exp = mask_exp.unsqueeze(-1)                      # [1,N,T,1,...]
         mask_exp = mask_exp.expand_as(lhood).float()               # [L,N,T,...]
 
         lhood   = lhood   * mask_exp
         if lhood_v is not None:
-            mask_exp_v = mask.unsqueeze(0)
+            mask_exp_v = mask.unsqueeze(0).to(lhood_v.device)
             for _ in range(lhood_v.ndim - mask_exp_v.ndim):
                 mask_exp_v = mask_exp_v.unsqueeze(-1)
             lhood_v = lhood_v * mask_exp_v.expand_as(lhood_v).float()
