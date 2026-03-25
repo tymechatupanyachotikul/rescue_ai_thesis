@@ -127,11 +127,11 @@ def compute_mse(model, data, y_data, T_train, L=1, mask=None, task=None):
                     patient_ids.append(patient_id)
 
                 for cls in list(set(classes)):
-                    idx = [i for i, val in enumerate(y_data) if val == cls]
+                    idx = [i for i, val in enumerate(y_data) if val[0] == cls]
                     loss_per_class[cls] = torch.mean((Xrec[:, idx, :, :] - data[idx, :, :])**2).item()
                 
                 for patient_id in list(set(patient_ids)):
-                    idx = [i for i, val in enumerate(patient_ids) if val == patient_id]
+                    idx = [i for i, val in enumerate(patient_ids) if val[1] == patient_id]
                     loss_per_patient[patient_id] = torch.mean((Xrec[:, idx, :, :] - data[idx, :, :])**2).item()
 
 
@@ -162,11 +162,11 @@ def compute_loss(model, data, y, L, num_observations, mask=None):
         run_ids.append(run_id)
 
     for cls in list(set(classes)):
-        idx = [i for i, val in enumerate(classes) if val == cls]
+        idx = [i for i, val in enumerate(classes) if val[0] == cls]
         loss_per_class[cls] = compute_masked_mse((Xrec[:, idx, :, :] - data[idx, :, :])**2,  mask=mask[idx]).cpu().detach().numpy()
 
     for run_id in list(set(run_ids)):
-        idx = [i for i, val in enumerate(run_ids) if val == run_id]
+        idx = [i for i, val in enumerate(run_ids) if val[1] == run_id]
         loss_per_patient[run_id] = compute_masked_mse((Xrec[:, idx, :, :] - data[idx, :, :])**2,  mask=mask[idx]).cpu().detach().numpy()
 
     #compute loss
