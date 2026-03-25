@@ -320,7 +320,7 @@ class EncoderRNN(AbstractEncoder):
     def forward(self, x, mask=None):
         lengths = None
         if mask is not None:
-            lengths = mask.sum(dim=1).cpu().to(torch.int64)
+            lengths = mask.sum(dim=1).to(dtype=torch.int64, device=x.device)
 
         outputs = self.gru(x, lengths=lengths)
         if self.out_distr=='normal':
