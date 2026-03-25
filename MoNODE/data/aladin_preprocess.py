@@ -252,6 +252,21 @@ def process_and_save_segments(record, original_record, segment_type, out_dir, be
     for seg_type, seg_idx in segments_dict.items():
         save_ecg_segment(seg_idx, norm_ecg, original_record, record, seg_type, out_dir, beat_type, dataset, error_dict, plot=plot)
     
+def plot_ecg(ecg, out_path, f = 500):
+    t, l = ecg.shape
+    time = np.arange(t) / f
+    fig, axes = plt.subplots(l, 1, sharex=True)
+
+    for j in range(l):
+        ax = axes[j]
+        ax.plot(time, ecg[:, j], linewidth=0.7)
+        
+        if j < l - 1:
+            ax.tick_params(axis='x', which='both', bottom=False, labelbottom=False)
+         
+    plt.xlabel("Time (seconds)", fontsize=12)
+    plt.savefig(out_path)
+    plt.close(fig)
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description="Load and analyze ECG cases")
@@ -262,6 +277,7 @@ if __name__ == "__main__":
     argparser.add_argument("--beat_type", type=str, choices=['sampled', 'median'], help="Types of beat to segment", required=True)
     argparser.add_argument("--demo", action='store_true', help="Run a quick demo with a subset of data")
     argparser.add_argument("--plot_only", action='store_true', help="Only generate plots without saving segments")
+    argparser.add_argument("--plot_dir", type=str, help="Path to the directory where plots will be saved", default='/home/tchatupanyacho/rescue_ai_thesis/results/plots')
     args = argparser.parse_args()
 
     dataset = 'medalcare-xl' if 'medalcare-xl' in args.input_path else os.path.basename(args.input_path).split('_')[0]
@@ -359,7 +375,7 @@ if __name__ == "__main__":
                     print(f"Error processing record {record.recordname}: {e}")
         
         if plot_only:
-            plot_dir = os.path.join(out_dir, segment_type)
+            plot_dir = args.plot_dir
             os.makedirs(plot_dir, exist_ok=True)
 
             for record in records:
@@ -367,7 +383,16 @@ if __name__ == "__main__":
                     run_id = record.original_file_path.split('/')[-2].split('_')[1]
                     session_id = record.original_file_path.split('/')[-1].split('_')[0]
                     label = record.groundtruth.replace('.', '')
-                    aladin.plot(record, name=os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_ecg'))
+                    if beat_type == 'sampled':
+                        aladin.plot(record, name=os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_ecg'))
+                    else:
+                        median_beat = record.median_beat.ecg.T
+                        mu = np.mean(median_beat, axis=0, keepdims=True)
+                        sigma = np.std(median_beat, axis=0, keepdims=True)
+                        norm_median_beat = (median_beat - mu) / (sigma + 1e-8)
+                        
+                        plot_ecg(median_beat, os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_median_ecg.png'))
+                        plot_ecg(norm_median_beat, os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_norm_median_ecg.png'))
                 else:
                     run_id = os.path.splitext(record.original_file_path)[0]
                     save_dir = os.path.join(plot_dir, f'{run_id}_ecg')
