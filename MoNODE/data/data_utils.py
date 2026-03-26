@@ -81,6 +81,7 @@ def __load_data(args, dtype, dataset=None):
 		except yaml.YAMLError as exc:
 			print(exc)
 
+	params[dataset]['beat_type'] = args.segment_type
 	folder_path = os.path.join(args.data_root,args.task)
 
 	io_utils.makedirs(folder_path)

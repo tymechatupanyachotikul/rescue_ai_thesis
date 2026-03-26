@@ -32,6 +32,8 @@ parser.add_argument('--shuffle', type=eval, default=True,
                help='For Moving MNIST whetehr to shuffle the data')
 parser.add_argument('--dataset_root', type=str, default='/projects/prjs1890/',
                     help="dataset location for ecg")
+parser.add_argument('--segment_type', choices=['atrial', 'ventricular'],
+                    help="Segment type of heart beat", type=str)
 
 #de model
 parser.add_argument('--model', type=str, default='node', choices=MODELS,

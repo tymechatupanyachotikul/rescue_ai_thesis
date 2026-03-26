@@ -162,11 +162,11 @@ def compute_loss(model, data, y, L, num_observations, mask=None):
         run_ids.append(run_id)
 
     for cls in list(set(classes)):
-        idx = [i for i, val in enumerate(classes) if val[0] == cls]
+        idx = [i for i, val in enumerate(classes) if val == cls]
         loss_per_class[cls] = compute_masked_mse((Xrec[:, idx, :, :] - data[idx, :, :])**2,  mask=mask[idx]).cpu().detach().numpy()
 
     for run_id in list(set(run_ids)):
-        idx = [i for i, val in enumerate(run_ids) if val[1] == run_id]
+        idx = [i for i, val in enumerate(run_ids) if val == run_id]
         loss_per_patient[run_id] = compute_masked_mse((Xrec[:, idx, :, :] - data[idx, :, :])**2,  mask=mask[idx]).cpu().detach().numpy()
 
     #compute loss
@@ -182,7 +182,7 @@ def compute_loss(model, data, y, L, num_observations, mask=None):
         lhood = (lhood + lhood_dt) * num_observations
         kl_z0 = kl_z0 * num_observations
         loss  = - lhood + kl_z0
-        mse   = torch.mean((Xrec-data)**2)
+        mse   = compute_masked_mse((Xrec-data)**2, mask=mask)
         return loss, -lhood, kl_z0, Xrec, ztL, mse, c, m, loss_per_class, loss_per_patient, -lhood_dt * num_observations
     
 
