@@ -86,7 +86,7 @@ def compute_masked_mse(se, mask=None,dims=None):
 
     return mse 
 
-def compute_mse(model, data, y_data, T_train, L=1, mask=None, task=None):
+def compute_mse(model, data, y_data, T_train, L=1, mask=None, task=None, out_channels=None):
 
     T_start = 0
     T_max = 0
@@ -94,6 +94,9 @@ def compute_mse(model, data, y_data, T_train, L=1, mask=None, task=None):
     #run model    
     Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), C, c, m = model(data, L, T, mask=mask)
     
+    if out_channels is not None:
+        data = data[:,:, out_channels]
+        
     dict_mse = {}
     dict_misc = {}
     while T_max < T:
@@ -138,7 +141,7 @@ def compute_mse(model, data, y_data, T_train, L=1, mask=None, task=None):
     return dict_mse, dict_misc, loss_per_class, loss_per_patient
 
 
-def compute_loss(model, data, y, L, num_observations, mask=None):
+def compute_loss(model, data, y, L, num_observations, mask=None, out_channels=None):
     """
     Compute loss for optimization
     @param model: mo/node  
@@ -150,6 +153,9 @@ def compute_loss(model, data, y, L, num_observations, mask=None):
 
     #run model    
     Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), C, c, m = model(data, L, T_custom=T, mask=mask)
+
+    if out_channels is not None:
+        data = data[:,:, out_channels]
 
     loss_per_class = {} 
     loss_per_patient = {}
@@ -238,8 +244,9 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
     best_valid_loss = 1e9
 
     custom_channel = None
+    out_ecg_lead_idx = None
     if args.task == 'ecg':
-        exclude_leads = params['exclude_leads']
+        exclude_leads = params['exclude_leads_in']
         lead_idx = {
             'I': 0, 
             'II': 1,
@@ -256,6 +263,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
         }
 
         custom_channel = [lead for lead, idx in lead_idx.items() if lead not in exclude_leads]
+        out_ecg_lead_idx = [idx for lead, idx in lead_idx.items() if lead not in params['exclude_leads_out']]
 
     for ep in range(args.Nepoch):
         #no latent space to sample from
@@ -282,7 +290,15 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 tr_minibatch = tr_minibatch.repeat([N_,1,1])
                 tr_minibatch = torch.stack([tr_minibatch[n,t0:t0+T_] for n,t0 in enumerate(t0s)]) # N*ns,T//2,d
                 
-            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _, _loss_per_class, _loss_per_patient, nlhood_dt= compute_loss(model, tr_minibatch, local_y, L, mask=local_mask, num_observations = len(trainset.dataset.file_paths))
+            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _, _loss_per_class, _loss_per_patient, nlhood_dt= compute_loss(
+                model, 
+                tr_minibatch, 
+                local_y, 
+                L, 
+                mask=local_mask, 
+                num_observations = len(trainset.dataset.file_paths),
+                out_channels=out_ecg_lead_idx
+            )
 
             optimizer.zero_grad()
             loss.backward() 
@@ -352,7 +368,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
             for valid_batch, valid_y, valid_mask in validset:
                 valid_batch = valid_batch.to(model.device)
-                dict_mse, dict_misc, _loss_per_class, _loss_per_patient = compute_mse(model, valid_batch, valid_y, T_train, mask=valid_mask)
+                dict_mse, dict_misc, _loss_per_class, _loss_per_patient = compute_mse(model, valid_batch, valid_y, T_train, mask=valid_mask, out_channels=out_ecg_lead_idx)
                 for key,val in dict_mse.items():
                     if key not in dict_valid_mses:
                         dict_valid_mses[key] = []
@@ -481,7 +497,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 # test_mse = {}
                 for test_batch, test_y, test_mask in testset:
                     test_batch = test_batch.to(model.device)
-                    dict_mse, dict_misc, _loss_per_class, _loss_per_patient = compute_mse(model, test_batch, test_y, T_train, L=1, task=args.task, mask=test_mask)
+                    dict_mse, dict_misc, _loss_per_class, _loss_per_patient = compute_mse(model, test_batch, test_y, T_train, L=1, task=args.task, mask=test_mask, out_channels=out_ecg_lead_idx)
                     for key,val in dict_mse.items():
                         if key not in dict_test_mses:
                             dict_test_mses[key] = []
@@ -606,21 +622,26 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 plot_config = {}
                 if args.task == 'ecg':
                     plot_config = {
-                        'exclude_leads': params['exclude_leads'],
+                        'exclude_leads': params['exclude_leads_out'],
                         'f': params['f'],
                         'run': run,
                     }
                 for _cls in train_plot_dict.keys():
                     if args.model == 'node' or args.model == 'hbnode':
-                        
-                        plot_results(plotter, \
-                                    train_plot_dict[_cls]['Xrec'], train_plot_dict[_cls]['batch'], valid_plot_dict[_cls]['Xrec'], valid_plot_dict[_cls]['batch'], \
-                                    {"plot":{'Loss(-elbo)': loss_meter, 'Nll' : nll_meter, 'KL-z0': kl_z0_meter, "train-MSE": tr_mse_meter}, "valid-MSE-rec": vl_mse_rec, "valid-MSE-for": vl_mse_for, "iteration": ep, "time": time_meter}, \
-                                    train_plot_dict[_cls]['ztL'],  valid_plot_dict[_cls]['ztL'],  train_plot_dict[_cls]['C'], valid_plot_dict[_cls]['C'], tr_fname=f'tr_{_cls}', val_fname=f'val_{_cls}', **plot_config)
+                        try:
+                            plot_results(plotter, \
+                                        train_plot_dict[_cls]['Xrec'], train_plot_dict[_cls]['batch'], valid_plot_dict[_cls]['Xrec'], valid_plot_dict[_cls]['batch'], \
+                                        {"plot":{'Loss(-elbo)': loss_meter, 'Nll' : nll_meter, 'KL-z0': kl_z0_meter, "train-MSE": tr_mse_meter}, "valid-MSE-rec": vl_mse_rec, "valid-MSE-for": vl_mse_for, "iteration": ep, "time": time_meter}, \
+                                        train_plot_dict[_cls]['ztL'],  valid_plot_dict[_cls]['ztL'],  train_plot_dict[_cls]['C'], valid_plot_dict[_cls]['C'], tr_fname=f'tr_{_cls}', val_fname=f'val_{_cls}', **plot_config)
+                        except Exception as e:
+                            logger.error(f"Error occurred while plotting for class {_cls}: {e}")
                     elif args.model == 'sonode':
-                        plot_results(plotter, \
-                                    train_plot_dict[_cls]['Xrec'], train_plot_dict[_cls]['batch'], valid_plot_dict[_cls]['Xrec'], valid_plot_dict[_cls]['batch'],\
-                                    {"plot":{"Loss" : loss_meter, "valid-MSE-rec": vl_mse_rec, "valid-MSE-for":vl_mse_for}, "time" : time_meter, "iteration": ep}, **plot_config)
+                        try:
+                            plot_results(plotter, \
+                                            train_plot_dict[_cls]['Xrec'], train_plot_dict[_cls]['batch'], valid_plot_dict[_cls]['Xrec'], valid_plot_dict[_cls]['batch'],\
+                                            {"plot":{"Loss" : loss_meter, "valid-MSE-rec": vl_mse_rec, "valid-MSE-for":vl_mse_for}, "time" : time_meter, "iteration": ep}, **plot_config)
+                        except Exception as e:
+                            logger.error(f"Error occurred while plotting for class {_cls}: {e}")
 
 
     logger.info('Epoch:{:4d}/{:4d} | time: {} | train_elbo: {:8.2f} | train_mse: {:5.3f} | valid_mse_rec: {:5.3f}) | valid_mse_for: {:5.3f})  | best_valid_mse: {:5.3f})'.\

@@ -138,14 +138,20 @@ class MoNODE(nn.Module):
             InvMatrix,c,m = None, None, None
 
         #sample trajectories
+        out_shape = [L, N, T]
+        if self.vae.decoder.dec_out_dim:
+            out_shape.append(self.vae.decoder.dec_out_dim)
+        else:
+            out_shape.extend(X.shape[2:])
+
         if self.aug:
             mL = m.reshape((L,N,self.Nobj,-1)) #L,N,Nobj,q
             ztL  = self.sample_augmented_trajectories(z0, mL, T, L) # L,N,T,Nobj, 2q
             ztL = ztL.reshape(L,N,T,-1) # L,T,N, nobj*2q
-            Xrec = self.build_decoding(ztL, [L,N,T,*X.shape[2:]], c)
+            Xrec = self.build_decoding(ztL, out_shape, c)
         else:
             ztL = self.sample_trajectories(z0,T,L) # L,T,N,nobj,q
             ztL = ztL.reshape(L,N,T,-1) # L,T,N, nobj*q
-            Xrec = self.build_decoding(ztL, [L,N,T,*X.shape[2:]], c)
+            Xrec = self.build_decoding(ztL, out_shape, c)
         
         return Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), InvMatrix, c, m

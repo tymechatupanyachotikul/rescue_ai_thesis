@@ -55,7 +55,7 @@ def get_data_params(root_dir, dataset, sample_type, beat_type, task, exclude_lea
 			'file_paths': [],
 			'class': [], 
 			'run_id': [],
-			'exclude_leads': exclude_leads
+			'exclude_leads_in': exclude_leads
 		}
 
 		for file_path in os.listdir(base_dir):
@@ -86,7 +86,7 @@ def __load_data(args, dtype, dataset=None):
 	folder_path = os.path.join(args.data_root,args.task)
 
 	io_utils.makedirs(folder_path)
-	train_params, valid_params, test_params = get_data_params(args.dataset_root, params[dataset]['dataset'], params[dataset]['sample_type'], params[dataset]['beat_type'], dataset, params[dataset]['exclude_leads'])
+	train_params, valid_params, test_params = get_data_params(args.dataset_root, params[dataset]['dataset'], params[dataset]['sample_type'], params[dataset]['beat_type'], dataset, params[dataset]['exclude_leads_in'])
 
 	return __build_dataset(args.num_workers, args.batch_size, train_params, valid_params, test_params, dtype, params[dataset]['dataset'], use_cache=params[dataset]['use_cache']), params
 
@@ -220,7 +220,7 @@ def __build_dataset(num_workers, batch_size, train_params, valid_params, test_pa
 		train_params['run_id'], 
 		dtype, 
 		dataset,
-		train_params['exclude_leads'],
+		train_params['exclude_leads_in'],
 		shared_cache=train_cache
 	)
 	trainset  = data.DataLoader(trainset, **tr_params)
@@ -241,7 +241,7 @@ def __build_dataset(num_workers, batch_size, train_params, valid_params, test_pa
 		valid_params['run_id'], 
 		dtype, 
 		dataset,
-		valid_params['exclude_leads'], 
+		valid_params['exclude_leads_in'], 
 		shared_cache=valid_cache
 	)
 	validset  = data.DataLoader(validset, **vl_params)
@@ -263,7 +263,7 @@ def __build_dataset(num_workers, batch_size, train_params, valid_params, test_pa
 		test_params['run_id'], 
 		dtype, 
 		dataset,
-		test_params['exclude_leads'], 
+		test_params['exclude_leads_in'], 
 		shared_cache=test_cache
 	)
 	testset   = data.DataLoader(testset, **te_params)

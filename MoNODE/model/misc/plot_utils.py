@@ -343,7 +343,7 @@ def plot_latent_traj(Q, Nplot=10, show=False, fname='latents.png'): #TODO adjust
         return
     elif q>2:
         Q = Q.reshape(L*N*T,q)
-        U,S,V = torch.pca_lowrank(Q, q=min(q,10))
+        U,S,V = torch.pca_lowrank(Q, q=min(q,8))
         Qpca = Q @ V[:,:2] 
         Qpca = Qpca.reshape(L,N,T,2).detach().cpu().numpy() # L,N,T,2
         S = S / S.sum()

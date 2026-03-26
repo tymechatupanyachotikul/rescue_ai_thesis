@@ -170,9 +170,10 @@ if __name__ == '__main__':
     ########### model ###########
     if args.task == 'ecg':
         config = {
-            'inp_dim': 12 - len(params[args.task]['exclude_leads']),
+            'inp_dim': 12 - len(params[args.task]['exclude_leads_in']),
             'w_dt': args.sobolev_weight,
             'l_w': args.l_w,
+            'out_dim': 12 - len(params[args.task]['exclude_leads_out'])
         }
     model = build_model(args, device, dtype, **config)
     model.to(device)

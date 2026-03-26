@@ -110,7 +110,7 @@ def build_mov_mnist_cnn_dec(n_filt, n_in):
 class VAE(nn.Module):
 
     def __init__(self, task, cnn_filt_enc=8, cnn_filt_de=8, dec_H=100, rnn_hidden=10, dec_act='relu', 
-                 ode_latent_dim=8, content_dim=0, T_in=10, device='cpu', order=1, enc_H=50, inp_dim=None, w_dt=0, l_w=0):
+                 ode_latent_dim=8, content_dim=0, T_in=10, device='cpu', order=1, enc_H=50, inp_dim=None, w_dt=0, l_w=0, out_dim=None):
         super(VAE, self).__init__()
 
         ### build encoder
@@ -134,6 +134,10 @@ class VAE(nn.Module):
             lhood_distribution = 'normal'
 
             if inp_dim:
+                if out_dim is not None:
+                    out_dim = out_dim
+                else:
+                    out_dim = inp_dim
                 data_dim = inp_dim
             elif task=='sin':
                 data_dim = 1
@@ -141,8 +145,7 @@ class VAE(nn.Module):
                 data_dim = 2
             elif 'mocap' in task:
                 data_dim = 50
-            elif 'ecg' in task:
-                data_dim = 12 
+                
             if rnn_hidden==-1:
                 self.encoder = IdentityEncoder()
                 self.decoder = IdentityDecoder(data_dim)
@@ -150,7 +153,7 @@ class VAE(nn.Module):
                     self.encoder_v = IdentityEncoder()
             else:
                 self.encoder = EncoderRNN(data_dim, rnn_hidden=rnn_hidden, enc_out_dim=ode_latent_dim, out_distr='normal', H=enc_H).to(device)
-                self.decoder = Decoder(task, ode_latent_dim+content_dim, H=dec_H, distribution=lhood_distribution, dec_out_dim=data_dim, act=dec_act, w_dt=w_dt, l_w=l_w).to(device)
+                self.decoder = Decoder(task, ode_latent_dim+content_dim, H=dec_H, distribution=lhood_distribution, dec_out_dim=out_dim, act=dec_act, w_dt=w_dt, l_w=l_w).to(device)
                 if order==2:
                     self.encoder_v = EncoderRNN(data_dim, rnn_hidden=rnn_hidden, enc_out_dim=ode_latent_dim, out_distr='normal', H=enc_H).to(device)
                     self.prior = Normal(torch.zeros(ode_latent_dim*order).to(device), torch.ones(ode_latent_dim*order).to(device))
@@ -361,6 +364,7 @@ class Decoder(nn.Module):
     def __init__(self, task, dec_inp_dim, n_filt=8, H=100, distribution='bernoulli', dec_out_dim=None, act='relu', w_dt=0, l_w=0):
         super(Decoder, self).__init__()
         self.distribution = distribution
+        self.dec_out_dim = dec_out_dim
         if task=='rot_mnist' or task=='rot_mnist_ou':
             self.net = build_rot_mnist_cnn_dec(n_filt, dec_inp_dim)
         elif task=='mov_mnist':
