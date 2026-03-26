@@ -128,7 +128,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     ######### setup output directory and logger ###########
     args.save = os.path.join(os.path.abspath(os.path.dirname(__file__)), \
-        args.save+args.task+'/'+args.model+'/'+datetime.now().strftime('%d_%m_%Y-%H:%M-')+str(args.exp_id), '')
+        args.save+args.task+'/'+args.model+'/'+datetime.now().strftime('%d_%m_%Y-%H:%M:%S-')+str(args.exp_id), '')
     
     ############################
     io_utils.makedirs(args.save)
@@ -178,7 +178,7 @@ if __name__ == '__main__':
     model.to(device)
     model.to(dtype)
     print(f'Number of model parameters : {sum(p.numel() for p in model.parameters())}')
-    
+
     logger.info('********** Built {} model with dynamics modulator dim {} and  content variable dim {}**********'.format(args.model, args.modulator_dim, args.content_dim))
     logger.info('********** Number of parameters: {} **********'.format(count_params(model)))
     logger.info('********** Augmented Dynamics: {} **********'.format(model.aug))
