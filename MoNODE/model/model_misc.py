@@ -268,6 +268,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             T_ += ep_inc_v
         loss_per_class = defaultdict(list)
         loss_per_patient = defaultdict(list)
+
         for itr, (local_batch, local_y, local_mask) in enumerate(trainset):
             tr_minibatch = local_batch.to(model.device) # N,T,...
             if args.task=='sin' or args.task=='spiral' or args.task=='lv' or 'mocap' in args.task: #slowly increase sequence length
@@ -434,7 +435,6 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 )
             })
 
-            print(f'val loss per class : {val_loss_per_class}')
             table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in val_loss_per_class.items()],
                                 columns=["class", "mse"])
 
@@ -554,7 +554,6 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                         title="MSE per Lead"
                     )
                 })
-                print(f'test loss per class : {test_loss_per_class}')
                 table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in test_loss_per_class.items()],
                                 columns=["class", "mse"])
 
@@ -580,8 +579,30 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 })
 
             if ep % args.plot_every==0 or (ep+1) == args.Nepoch:
-                Xrec_tr, ztL_tr, _, _, C_tr, _, _ = model(tr_minibatch, L=args.plotL, T_custom=args.forecast_tr*tr_minibatch.shape[1])
-                Xrec_vl, ztL_vl, _, _, C_vl, _, _ = model(valid_batch,  L=args.plotL, T_custom=args.forecast_vl*valid_batch.shape[1])
+                plot_tr_batch = trainset.dataset.get_class_samples(k=1)
+                plot_valid_batch = validset.dataset.get_class_samples(k=1)
+
+                train_plot_dict = {}
+                valid_plot_dict = {}
+
+                for _cls, tr_batch in plot_tr_batch.items():
+                    Xrec_tr, ztL_tr, _, _, C_tr, _, _ = model(tr_batch.to(model.device), L=args.plotL)
+                    train_plot_dict[_cls] = {
+                        'Xrec': Xrec_tr.cpu().detach(),
+                        'ztL': ztL_tr.cpu().detach(),
+                        'C': C_tr.cpu().detach(),
+                        'batch': tr_batch.cpu().detach()
+                    }
+                
+                for _cls, valid_batch in plot_valid_batch.items():
+                    Xrec_vl, ztL_vl, _, _, C_vl, _, _ = model(valid_batch.to(model.device),  L=args.plotL)
+                    valid_plot_dict[_cls] = {
+                        'Xrec': Xrec_vl.cpu().detach(),
+                        'ztL': ztL_vl.cpu().detach(),
+                        'C': C_vl.cpu().detach(),
+                        'batch': valid_batch.cpu().detach()
+                    }
+
                 plot_config = {}
                 if args.task == 'ecg':
                     plot_config = {
@@ -589,16 +610,17 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                         'f': params['f'],
                         'run': run,
                     }
-                if args.model == 'node' or args.model == 'hbnode':
-                    plot_results(plotter, \
-                                Xrec_tr, tr_minibatch, Xrec_vl, valid_batch, \
-                                {"plot":{'Loss(-elbo)': loss_meter, 'Nll' : nll_meter, 'KL-z0': kl_z0_meter, "train-MSE": tr_mse_meter}, "valid-MSE-rec": vl_mse_rec, "valid-MSE-for": vl_mse_for, "iteration": ep, "time": time_meter}, \
-                                ztL_tr,  ztL_vl,  C_tr, C_vl, **plot_config)
-                
-                elif args.model == 'sonode':
-                    plot_results(plotter, \
-                                Xrec_tr, tr_minibatch, Xrec_vl, valid_batch,\
-                                {"plot":{"Loss" : loss_meter, "valid-MSE-rec": vl_mse_rec, "valid-MSE-for":vl_mse_for}, "time" : time_meter, "iteration": ep}, **plot_config)
+                for _cls in train_plot_dict.keys():
+                    if args.model == 'node' or args.model == 'hbnode':
+                        
+                        plot_results(plotter, \
+                                    train_plot_dict[_cls]['Xrec'], train_plot_dict[_cls]['batch'], valid_plot_dict[_cls]['Xrec'], valid_plot_dict[_cls]['batch'], \
+                                    {"plot":{'Loss(-elbo)': loss_meter, 'Nll' : nll_meter, 'KL-z0': kl_z0_meter, "train-MSE": tr_mse_meter}, "valid-MSE-rec": vl_mse_rec, "valid-MSE-for": vl_mse_for, "iteration": ep, "time": time_meter}, \
+                                    train_plot_dict[_cls]['ztL'],  valid_plot_dict[_cls]['ztL'],  train_plot_dict[_cls]['C'], valid_plot_dict[_cls]['C'], tr_fname=f'tr_{_cls}', val_fname=f'val_{_cls}', **plot_config)
+                    elif args.model == 'sonode':
+                        plot_results(plotter, \
+                                    train_plot_dict[_cls]['Xrec'], train_plot_dict[_cls]['batch'], valid_plot_dict[_cls]['Xrec'], valid_plot_dict[_cls]['batch'],\
+                                    {"plot":{"Loss" : loss_meter, "valid-MSE-rec": vl_mse_rec, "valid-MSE-for":vl_mse_for}, "time" : time_meter, "iteration": ep}, **plot_config)
 
 
     logger.info('Epoch:{:4d}/{:4d} | time: {} | train_elbo: {:8.2f} | train_mse: {:5.3f} | valid_mse_rec: {:5.3f}) | valid_mse_for: {:5.3f})  | best_valid_mse: {:5.3f})'.\

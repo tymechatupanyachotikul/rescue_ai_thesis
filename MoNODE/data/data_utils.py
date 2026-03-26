@@ -2,6 +2,7 @@ import os
 import yaml
 import json
 import torch
+import random
 from   torch.utils import data
 from torch.nn.utils.rnn import pad_sequence
 from model.misc import io_utils
@@ -146,6 +147,31 @@ class ECGDataset(data.Dataset):
 		
 		y = (self.labels[idx], self.run_id[idx]) if self.labels is not None else 0
 		return X, y
+	
+	def get_class_samples(self, k=3):
+
+		all_classes = set(self.labels)
+		classes_dict = {}
+		for _cls in all_classes:
+			idx = [i for i, val in enumerate(self.labels) if val == _cls]
+			idx = random.sample(idx, k=k)
+
+			samples = []
+			for i in idx:
+				if self.cache is not None and i in self.cache:
+					samples.append(self.cache[i])
+				else:
+					X = torch.load(self.file_paths[i]).to(dtype=self.dtype)
+					if self.permute_lead:
+						X = X[:, self.idx_map]
+					
+					if self.include_idx is not None:
+						X = X[:, self.include_idx]
+					samples.append(X)
+			
+			classes_dict[_cls] = pad_sequence(samples, batch_first=True, padding_value=0.0)
+		
+		return classes_dict
 	
 
 def pad_collate(batch):

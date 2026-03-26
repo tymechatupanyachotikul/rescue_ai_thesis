@@ -177,7 +177,8 @@ if __name__ == '__main__':
     model = build_model(args, device, dtype, **config)
     model.to(device)
     model.to(dtype)
-
+    print(f'Number of model parameters : {sum(p.numel() for p in model.parameters())}')
+    
     logger.info('********** Built {} model with dynamics modulator dim {} and  content variable dim {}**********'.format(args.model, args.modulator_dim, args.content_dim))
     logger.info('********** Number of parameters: {} **********'.format(count_params(model)))
     logger.info('********** Augmented Dynamics: {} **********'.format(model.aug))

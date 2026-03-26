@@ -15,19 +15,19 @@ palette_tab = list(mcolors.TABLEAU_COLORS.keys())
 
 def plot_results(plotter, \
                  tr_rec, trainset, vl_rec, validset, trace_params, \
-                 ztl_tr=None, ztl_vl=None, C_tr=None, C_vl=None, **kwargs):
+                 ztl_tr=None, ztl_vl=None, C_tr=None, C_vl=None, tr_fname='tr', val_fname='val', **kwargs):
 
     train_kwargs = {**kwargs, 'flag': 'train'}
     valid_kwargs = {**kwargs, 'flag': 'val'}
 
-    plotter.plot_fit(trainset, tr_rec, 'tr', trace_params['iteration'], **train_kwargs)
-    plotter.plot_fit(validset,  vl_rec, 'valid', trace_params['iteration'], **valid_kwargs)
+    plotter.plot_fit(trainset, tr_rec, tr_fname, trace_params['iteration'], **train_kwargs)
+    plotter.plot_fit(validset,  vl_rec, val_fname, trace_params['iteration'], **valid_kwargs)
 
     if ztl_tr is not None:
-        plotter.plot_latent(ztl_tr, 'tr', trace_params['iteration'])
+        plotter.plot_latent(ztl_tr, tr_fname, trace_params['iteration'])
         #delta_z_tr = ztl_tr[0, 0, :, 1:] - ztl_tr[0, 0, :, :-1]
     if ztl_vl is not None:
-        plotter.plot_latent(ztl_vl, 'valid', trace_params['iteration'])
+        plotter.plot_latent(ztl_vl, val_fname, trace_params['iteration'])
         #delta_z_vl = ztl_vl[0, 0, :, 1:] - ztl_vl[0, 0, :, :-1]
     
     if C_tr is not None:
