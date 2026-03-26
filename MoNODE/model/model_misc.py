@@ -590,7 +590,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                     train_plot_dict[_cls] = {
                         'Xrec': Xrec_tr.cpu().detach(),
                         'ztL': ztL_tr.cpu().detach(),
-                        'C': C_tr.cpu().detach(),
+                        'C': C_tr.cpu().detach() if C_tr is not None else None,
                         'batch': tr_batch.cpu().detach()
                     }
                 
@@ -599,7 +599,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                     valid_plot_dict[_cls] = {
                         'Xrec': Xrec_vl.cpu().detach(),
                         'ztL': ztL_vl.cpu().detach(),
-                        'C': C_vl.cpu().detach(),
+                        'C': C_vl.cpu().detach() if C_vl is not None else None,
                         'batch': valid_batch.cpu().detach()
                     }
 
