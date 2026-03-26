@@ -86,15 +86,6 @@ class MoNODE(nn.Module):
         return XrecL
 
     def forward(self, X, L=1, T_custom=None, mask=None):
-        
-        X = torch.nan_to_num(X, nan=0.0)
-        nan_mask = torch.isnan(X)
-        if nan_mask.any():
-            nan_per_sample = nan_mask.reshape(x.shape[0], -1).sum(dim=-1)  # (N,)
-            for i, count in enumerate(nan_per_sample):
-                if count > 0:
-                    print(f"Sample {i}: {count.item()} NaN values out of {X.shape[1] * X.shape[2]} total")
-
         try:
             self.inv_enc.last_layer_gp.build_cache()
         except:
