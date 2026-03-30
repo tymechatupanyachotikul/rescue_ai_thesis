@@ -132,7 +132,7 @@ def find_anomoly_ecg(data_split_csv, save_dir):
 
     for file_path in df['data_path']:
         ecg = pd.read_csv(file_path, header=None).to_numpy()
-        max_amplitude_per_lead = np.max(np.abs(ecg, axis=1))
+        max_amplitude_per_lead = np.max(np.abs(ecg), axis=1)
 
         if np.any(max_amplitude_per_lead > 5):
             anomalous_files.append((file_path, np.max(max_amplitude_per_lead)))
