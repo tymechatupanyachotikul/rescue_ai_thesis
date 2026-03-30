@@ -2,6 +2,8 @@ import os
 import json 
 import numpy as np 
 import argparse
+import pandas as pd 
+from collections import defaultdict 
 
 def analysis(args):
 
@@ -119,10 +121,37 @@ def analysis(args):
     # np.save(os.path.join(out_dir, 'ecg_sim.npy'), sim_matrix)
 
 
+def find_anomoly_ecg(data_split_csv, save_dir):
+
+    df = pd.read_csv(data_split_csv)
+    split = data_split_csv.split('/')[-1].split('_')[1]
+    segment_type = data_split_csv.split('/')[-1].split('_')[2].split('.')[0]
+    anomalous_files = []
+    max_v_dist_per_lead = defaultdict(list)
+    DEFAULT_LEADS = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
+
+    for file_path in df['file_path']:
+        ecg = pd.read_csv(file_path, header=None).to_numpy()
+        max_amplitude_per_lead = np.max(np.abs(ecg, axis=1))
+
+        if np.any(max_amplitude_per_lead > 5):
+            anomalous_files.append((file_path, np.max(max_amplitude_per_lead)))
+
+        max_amplitude_per_lead = max_amplitude_per_lead.to_list()
+        for lead_idx, amplitude in enumerate(max_amplitude_per_lead):
+            max_v_dist_per_lead[DEFAULT_LEADS[lead_idx]].append(amplitude)
+    
+    with open(os.path.join(save_dir, f'anomoly_analysis_{split}_{segment_type}.json'), 'w') as f:
+        json.dump({
+            'anomalous_files': anomalous_files,
+            'max_v_dist_per_lead': max_v_dist_per_lead
+        }, f, indent=4)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze MedalCare-XL ventricular parameters and ECG similarity.")
     parser.add_argument("--root_dir", type=str, required=True, help="Path to the dataset directory containing class folders.")
     parser.add_argument("--out_dir", type=str, default="./output", help="Directory to save the results.")
     
     args = parser.parse_args()
-    analysis(args)
+    find_anomoly_ecg(args.root_dir, args.out_dir)
