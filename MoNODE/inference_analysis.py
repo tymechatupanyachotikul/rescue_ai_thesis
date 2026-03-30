@@ -228,7 +228,8 @@ if __name__ == '__main__':
                 'mse':            mse_per_sample[i].item(),
                 'mse_per_lead':   mse_per_lead[i].cpu().tolist(),       # (D,)
                 'original_ecg':   test_batch[i].cpu(),                  # (T, D)
-                'reconstructed_ecg': Xrec_mean[i].cpu(),                # (T, D)
+                'reconstructed_ecg': Xrec_mean[i].cpu(),  
+                'mask':           test_mask[i].cpu(),               # (T, D)
             })
 
         for cls in set(classes):
