@@ -92,13 +92,14 @@ def __load_data(args, dtype, dataset=None):
 
 
 class ECGDataset(data.Dataset):
-	def __init__(self, file_paths, labels, run_id, dtype, dataset, exclude_leads=[], shared_cache=None):
+	def __init__(self, file_paths, labels, run_id, dtype, dataset, exclude_leads=[], shared_cache=None, return_file_path=False):
 		self.file_paths = file_paths
 		self.labels = labels
 		self.run_id = run_id
 		self.exclude_leads = exclude_leads
 		self.cache = shared_cache
 		self.dtype = dtype
+		self.return_file_path = return_file_path
 
 		self.lead_idx = {
 			'I': 0, 
@@ -145,7 +146,11 @@ class ECGDataset(data.Dataset):
 			if self.cache is not None and idx not in self.cache:
 				self.cache[idx] = X
 		
-		y = (self.labels[idx], self.run_id[idx]) if self.labels is not None else 0
+		if self.return_file_path:
+			y = (self.labels[idx], self.run_id[idx], self.file_paths[idx]) if self.labels is not None else 0
+		else:
+			y = (self.labels[idx], self.run_id[idx]) if self.labels is not None else 0
+
 		return X, y
 	
 	def get_class_samples(self, k=3):
