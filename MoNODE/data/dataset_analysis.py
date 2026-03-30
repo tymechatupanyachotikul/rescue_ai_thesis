@@ -137,7 +137,7 @@ def find_anomoly_ecg(data_split_csv, save_dir):
         if np.any(max_amplitude_per_lead > 5):
             anomalous_files.append((file_path, np.max(max_amplitude_per_lead)))
 
-        max_amplitude_per_lead = max_amplitude_per_lead.to_list()
+        max_amplitude_per_lead = max_amplitude_per_lead.tolist()
         for lead_idx, amplitude in enumerate(max_amplitude_per_lead):
             max_v_dist_per_lead[DEFAULT_LEADS[lead_idx]].append(amplitude)
     
