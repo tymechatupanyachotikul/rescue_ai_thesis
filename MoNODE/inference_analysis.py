@@ -327,8 +327,17 @@ if __name__ == '__main__':
     with open(os.path.join(save_directory, 'test_results_meta.json'), 'w') as f:
         json.dump(meta, f, indent=2)
 
+    max_len = max(r['original_ecg'].shape[0] for r in sample_results)
+
+    def pad_to(tensor, max_len):
+        T, D = tensor.shape
+        if T < max_len:
+            pad = torch.zeros(max_len - T, D)
+            tensor = torch.cat([tensor, pad], dim=0)
+        return tensor
+
     torch.save({
-        'original_ecg':      torch.stack([r['original_ecg'] for r in sample_results]),
-        'reconstructed_ecg': torch.stack([r['reconstructed_ecg'] for r in sample_results]),
-        'mask':              torch.stack([r['mask'] for r in sample_results]),
+        'original_ecg':      torch.stack([pad_to(r['original_ecg'], max_len) for r in sample_results]),
+        'reconstructed_ecg': torch.stack([pad_to(r['reconstructed_ecg'], max_len) for r in sample_results]),
+        'mask':              torch.stack([pad_to(r['mask'].unsqueeze(-1).float(), max_len).squeeze(-1) for r in sample_results]),
     }, os.path.join(save_directory, 'test_results_tensors.pt'))
