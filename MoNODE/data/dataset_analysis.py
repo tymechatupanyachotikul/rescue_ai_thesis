@@ -130,7 +130,7 @@ def find_anomoly_ecg(data_split_csv, save_dir):
     max_v_dist_per_lead = defaultdict(list)
     DEFAULT_LEADS = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
 
-    for file_path in df['file_path']:
+    for file_path in df['data_path']:
         ecg = pd.read_csv(file_path, header=None).to_numpy()
         max_amplitude_per_lead = np.max(np.abs(ecg, axis=1))
 
