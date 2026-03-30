@@ -215,18 +215,22 @@ def clean_dataset():
     with open(os.path.join('/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/metadata', 'removed_files_atrial.json'), 'w') as f:
         json.dump(remove_dict, f, indent=4)
 
-def remove_files():
-    with open(os.path.join('/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/metadata', 'removed_files_ventricular.json'), 'r') as f:
+def remove_files(seg_type):
+    with open(os.path.join('/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/metadata', f'removed_files_{seg_type}.json'), 'r') as f:
         remove_dict = json.load(f)
     
     for split, files in remove_dict.items():
         print(f'------------------ {split.upper()} ------------------')
+        count = 0
         for file in files:
             if os.path.exists(file):
                 os.remove(file)
+                count += 1
                 print(f"Removed: {file}")
             else:
                 print(f"File not found (skipped): {file}")
+        
+        print(f"Total files removed in {split}/{seg_type}: {count}\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze MedalCare-XL ventricular parameters and ECG similarity.")
@@ -235,4 +239,6 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     #find_anomoly_ecg(args.root_dir, args.out_dir)
-    clean_dataset()
+    #clean_dataset()
+    remove_files('atrial')
+    remove_files('ventricular')
