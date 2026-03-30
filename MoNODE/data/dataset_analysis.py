@@ -149,9 +149,10 @@ def find_anomoly_ecg(data_split_csv, save_dir):
         }, f, indent=4)
 
 def clean_dataset():
-
-    train_remove = ['S66_000097_iab', 'S74_000037_LCX_03_ant', 'S68_000052_RCA_03', 'S74_000086_RCA_03', 'S68_000028_RCA_10', 'S68_000095_RCA_10', 'S74_000046_RCA_10', 'S68_000077_LAD_10', 'S68_000080_LAD_10', 'S68_000014_LAD_10', 'S68_000014_LAD_03', 'S74_000076_LAD_03', 'S74_000032_LAD_03', 'S74_000036_LCX_10_ant', 'S73_000037_avblock', 'S66_000041_lbbb']
-    test_remove = ['S64_000047_LCX_03_ant', 'S62_000042_LCX_03_post', 'S64_000023_RCA_03', 'S64_000035_RCA_10', 'S64_000073_LAD_10']
+    train_remove = ['S66_000097_iab', 'S74_000037_LCX_03_ant', 'S68_000095_RCA_10', 'S74_000076_LAD_03', 'S74_000036_LCX_10_ant', 'S73_000098_avblock', 'S73_000037_avblock']
+    #train_remove = ['S66_000097_iab', 'S74_000037_LCX_03_ant', 'S68_000052_RCA_03', 'S74_000086_RCA_03', 'S68_000028_RCA_10', 'S68_000095_RCA_10', 'S74_000046_RCA_10', 'S68_000077_LAD_10', 'S68_000080_LAD_10', 'S68_000014_LAD_10', 'S68_000014_LAD_03', 'S74_000076_LAD_03', 'S74_000032_LAD_03', 'S74_000036_LCX_10_ant', 'S73_000037_avblock', 'S66_000041_lbbb']
+    #test_remove = ['S64_000047_LCX_03_ant', 'S62_000042_LCX_03_post', 'S64_000023_RCA_03', 'S64_000035_RCA_10', 'S64_000073_LAD_10']
+    test_remove = []
     val_remove = []
 
     train_remove = set(train_remove)
@@ -161,15 +162,15 @@ def clean_dataset():
     remove_info = {
         'train': {
             'remove_files': train_remove,
-            'dir': '/projects/prjs1890/MedalCare-XL/segments/train/ventricular/median'
+            'dir': '/projects/prjs1890/MedalCare-XL/segments/train/atrial/median'
         }, 
         'valid': {
             'remove_files': val_remove,
-            'dir': '/projects/prjs1890/MedalCare-XL/segments/valid/ventricular/median'
+            'dir': '/projects/prjs1890/MedalCare-XL/segments/valid/atrial/median'
         },
         'test': {
             'remove_files': test_remove,
-            'dir': '/projects/prjs1890/MedalCare-XL/segments/test/ventricular/median'
+            'dir': '/projects/prjs1890/MedalCare-XL/segments/test/atrial/median'
         }
     }
 
@@ -211,7 +212,7 @@ def clean_dataset():
                 print(*(f"\t{f}" for f in files), sep="\n")
             print()
 
-    with open(os.path.join('/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/metadata', 'removed_files_ventricular.json'), 'w') as f:
+    with open(os.path.join('/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/metadata', 'removed_files_atrial.json'), 'w') as f:
         json.dump(remove_dict, f, indent=4)
 
 def remove_files():
