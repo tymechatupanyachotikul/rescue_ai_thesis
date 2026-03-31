@@ -3,6 +3,7 @@ from datetime import datetime
 import torch
 from torch.distributions import kl_divergence as kl
 from torch.nn.utils.rnn import pad_sequence
+import torch.nn.functional as F
 
 from model.misc import log_utils 
 from model.misc.plot_utils import plot_results
@@ -24,7 +25,7 @@ def elbo(model, X, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L, mask=None):
     kl_z0 = kl(q, model.vae.prior).sum(-1) #N
 
     #Reconstruction log-likelihood
-    lhood, lhood_v = model.vae.decoder.log_prob(X,Xrec,L) #L,N,T,d,nc,nc
+    lhood = model.vae.decoder.log_prob(X,Xrec,L) #L,N,T,d,nc,nc
 
     if mask is not None:
         mask_exp = mask.unsqueeze(0).to(lhood.device)                             # [1,N,T]
@@ -32,25 +33,25 @@ def elbo(model, X, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L, mask=None):
             mask_exp = mask_exp.unsqueeze(-1)                      # [1,N,T,1,...]
         mask_exp = mask_exp.expand_as(lhood).float()               # [L,N,T,...]
 
-        lhood   = lhood   * mask_exp
-        if lhood_v is not None:
-            mask_exp_v = mask.unsqueeze(0).to(lhood_v.device)
-            for _ in range(lhood_v.ndim - mask_exp_v.ndim):
-                mask_exp_v = mask_exp_v.unsqueeze(-1)
-            lhood_v = lhood_v * mask_exp_v.expand_as(lhood_v).float()
+        # lhood   = lhood   * mask_exp
+        # if lhood_v is not None:
+        #     mask_exp_v = mask.unsqueeze(0).to(lhood_v.device)
+        #     for _ in range(lhood_v.ndim - mask_exp_v.ndim):
+        #         mask_exp_v = mask_exp_v.unsqueeze(-1)
+        #     lhood_v = lhood_v * mask_exp_v.expand_as(lhood_v).float()
 
         idx      = list(np.arange(X.ndim + 1))                    # [0,1,2,...]
         lhood    = lhood.sum(idx[2:])                              # [L,N]  summed over T,...
         lhood    = lhood.mean(0)                                   # [N]    mean over L
 
-        lhood_v = lhood_v.sum(idx[2:]).mean(0) if lhood_v is not None else torch.zeros_like(lhood)    # [N]
+        # lhood_v = lhood_v.sum(idx[2:]).mean(0) if lhood_v is not None else torch.zeros_like(lhood)    # [N]
 
     else:
         idx   = list(np.arange(X.ndim+1)) # 0,1,2,...
         lhood = lhood.sum(idx[2:]).mean(0) #N
-        lhood_v = lhood_v.sum(idx[2:]).mean(0) if lhood_v is not None else torch.zeros_like(lhood)
+        # lhood_v = lhood_v.sum(idx[2:]).mean(0) if lhood_v is not None else torch.zeros_like(lhood)
 
-    return lhood.mean(), lhood_v.mean(), kl_z0.mean() 
+    return lhood.mean(), kl_z0.mean() 
 
 
 def contrastive_loss(C):
@@ -183,14 +184,31 @@ def compute_loss(model, data, y, L, num_observations, mask=None, out_channels=No
         return loss, 0.0, 0.0, Xrec, ztL, mse, c, m
     
     elif model.model =='node' or model.model == 'hbnode':
-        lhood, lhood_dt, kl_z0 = elbo(model, data, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L, mask=mask)
+        lhood, kl_z0 = elbo(model, data, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L, mask=mask)
         
-        lhood = (lhood + lhood_dt) * num_observations
+        lhood = lhood * num_observations
         kl_z0 = kl_z0 * num_observations
-        loss  = - lhood + kl_z0
+
+        sobolov_loss = compute_sobolov(data, Xrec, weight=model.vae.decoder.w_dt, mask=mask) * num_observations
+        loss  = - lhood + kl_z0 + sobolov_loss
+        
         mse   = compute_masked_mse((Xrec-data)**2, mask=mask)
-        return loss, -lhood, kl_z0, Xrec, ztL, mse, c, m, loss_per_class, loss_per_patient, -lhood_dt * num_observations
+        return loss, -lhood, kl_z0, Xrec, ztL, mse, c, m, loss_per_class, loss_per_patient, sobolov_loss
     
+
+def compute_sobolov(X, Xrec, weight, mask=None):
+    Xhat_dt = torch.diff(Xrec, dim=2, prepend=Xrec[:, :, :1])
+    X_dt = torch.diff(X, dim=1, prepend=X[:, :1, :])
+    X_dt = X_dt.unsqueeze(0).expand_as(Xhat_dt)
+
+    if mask is not None:
+        mask_exp = mask.unsqueeze(0).unsqueeze(-1).expand_as(Xhat_dt).float()
+        sobolev_diff = torch.abs(Xhat_dt - X_dt) * mask_exp
+        sobolev_penalty = sobolev_diff.sum() / (mask_exp.sum() + 1e-8)
+    else:
+        sobolev_penalty = F.l1_loss(Xhat_dt, X_dt)
+
+    return sobolev_penalty * weight
 
 def freeze_pars(par_list):
     for par in par_list:
@@ -274,7 +292,6 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
         if (ep != 0) and (ep % ep_inc_c == 0):
             T_ += ep_inc_v
-            print(f'Increasing T to {T_} for training...')
         loss_per_class = defaultdict(list)
         loss_per_patient = defaultdict(list)
 
@@ -291,7 +308,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 tr_minibatch = tr_minibatch.repeat([N_,1,1])
                 tr_minibatch = torch.stack([tr_minibatch[n,t0:t0+T_] for n,t0 in enumerate(t0s)]) # N*ns,T//2,d
                 
-            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _, _loss_per_class, _loss_per_patient, nlhood_dt= compute_loss(
+            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _, _loss_per_class, _loss_per_patient, sobolov_loss = compute_loss(
                 model, 
                 tr_minibatch, 
                 local_y, 
@@ -328,8 +345,8 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 'train/mse': tr_mse.item(),
                 'train/nll': nlhood.item(),
                 'train/kl_z0': kl_z0.item(),
-                'train/nll_dt': nlhood_dt.item(), 
-                'train/nll_dt_ratio': nlhood_dt.item()/nlhood.item()
+                'train/nll_dt': sobolov_loss.item(), 
+                'train/nll_dt_ratio': sobolov_loss.item() / nlhood.item()
             })
         
         table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in loss_per_class.items()],
