@@ -204,10 +204,12 @@ def compute_sobolov(X, Xrec, weight, mask=None):
     if mask is not None:
         mask_exp = mask.unsqueeze(0).unsqueeze(-1).expand_as(Xhat_dt).float().to(device=Xhat_dt.device)
         sobolev_diff = torch.abs(Xhat_dt - X_dt) * mask_exp
-        sobolev_penalty = sobolev_diff.sum() / (mask_exp.sum() + 1e-8)
-    else:
-        sobolev_penalty = F.l1_loss(Xhat_dt, X_dt)
 
+        sobolev_sum_per_sample = sobolev_diff.sum(dim=(2, 3)) # Shape: [L, N]
+        sobolev_penalty = sobolev_sum_per_sample.mean()
+    else:
+        sobolev_diff = torch.abs(Xhat_dt - X_dt)
+        sobolev_penalty = sobolev_diff.sum(dim=(2, 3)).mean()
     return sobolev_penalty * weight
 
 def freeze_pars(par_list):
