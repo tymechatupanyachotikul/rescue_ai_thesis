@@ -6,6 +6,7 @@ import argparse
 import pandas as pd 
 from collections import defaultdict 
 import shutil
+import random 
 
 def analysis(args):
 
@@ -194,6 +195,55 @@ def clean_dataset():
     with open(os.path.join('/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/metadata', 'removed_files_atrial.json'), 'w') as f:
         json.dump(remove_dict, f, indent=4)
 
+def adjust_dataset():
+    classes = ['avblock', 'fam', 'iab', 'lae', 'lbbb', 'rbbb', 'sinus']
+    cls_count = defaultdict(int)
+    file_dict = defaultdict(list)
+    for split in ['train', 'valid', 'test']:
+        root_dir = f'/projects/prjs1890/MedalCare-XL/segments/{split}/ventricular/median'
+        before_count = 0
+        for file in os.listdir(root_dir):
+            file_path = os.path.join(root_dir, file)
+            if file_path.endswith('.pth'):
+                data_cls = file.split('_')[-1].split('.')[0]
+                if data_cls in classes:
+                    cls_count[data_cls] += 1 
+                    before_count += 1
+                    file_dict[data_cls].append(file_path)
+    
+        for _cls, count in cls_count.items():
+            print(f"Class {_cls}: {count} samples")
+
+        num_sinus_cls = (max(cls_count['lbbb'], cls_count['rbbb']) * 2 ) // 5 
+
+        sinus_classes = ['avblock', 'fam', 'iab', 'lae', 'sinus']
+        new_dir = os.path.join(root_dir, 'adjusted_removed')
+        os.makedirs(new_dir, exist_ok=True)
+
+        for _cls in sinus_classes:
+            files = file_dict[_cls]
+            random.shuffle(files)
+            for file in files[num_sinus_cls:]:
+                shutil.move(file_path, new_dir)
+        
+        final_cls_count = defaultdict(int)
+        total_size = 0
+        for file in os.listdir(root_dir):
+            file_path = os.path.join(root_dir, file)
+            if file_path.endswith('.pth'):
+                data_cls = file.split('_')[-1].split('.')[0]
+                if data_cls in sinus_classes:
+                    final_cls_count['sinus'] += 1
+                else:
+                    final_cls_count[data_cls] += 1
+                
+                total_size += 1 
+        
+        print(f"Final class distribution after adjustment (split {split}):")
+        for cls, count in final_cls_count.items():
+            print(f"  {cls}: {count}")
+        print(f"Total files after adjustment: {total_size} ({before_count})")
+
 def remove_files(seg_type):
     with open(os.path.join('/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/metadata', f'removed_files_{seg_type}.json'), 'r') as f:
         remove_dict = json.load(f)
@@ -218,5 +268,6 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     #find_anomoly_ecg(args.root_dir, args.out_dir)
-    clean_dataset()
-    remove_files('atrial')
+    #clean_dataset()
+    #remove_files('atrial')
+    adjust_dataset()
