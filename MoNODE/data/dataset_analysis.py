@@ -150,7 +150,7 @@ def find_anomoly_ecg(data_split_csv, save_dir):
         }, f, indent=4)
 
 def clean_dataset():
-    with open('/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/metadata/remove_info_ventricular.json', 'r') as f:
+    with open('/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/metadata/remove_info_atrial.json', 'r') as f:
         remove_info = json.load(f)
 
     remove_dict = {
