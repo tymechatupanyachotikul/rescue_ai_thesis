@@ -191,7 +191,7 @@ def clean_dataset():
                 print(*(f"\t{f}" for f in files), sep="\n")
             print()
 
-    with open(os.path.join('/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/metadata', 'removed_files_ventricular.json'), 'w') as f:
+    with open(os.path.join('/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/metadata', 'removed_files_atrial.json'), 'w') as f:
         json.dump(remove_dict, f, indent=4)
 
 def remove_files(seg_type):
