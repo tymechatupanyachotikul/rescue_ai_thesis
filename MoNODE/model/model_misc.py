@@ -5,10 +5,11 @@ from torch.distributions import kl_divergence as kl
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
 
-from model.misc import log_utils 
+from model.misc import log_utils
 from model.misc.plot_utils import plot_results
 import wandb
 from collections import defaultdict
+from data.data_utils import ClassMSETracker, make_loader  # difficulty-weighted sampler
 
 def elbo(model, X, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L, mask=None):
     ''' Input:
@@ -249,6 +250,10 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
     ############## build the optimizer ############
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
+    # --- Difficulty-weighted sampler: build tracker once using all training class names ---
+    _class_names = list(set(trainset.dataset.labels))
+    tracker = ClassMSETracker(_class_names, alpha=0.7)
+
     ########## Training loop ###########
     start_time=datetime.now()
     global_itr = 0
@@ -320,8 +325,16 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 out_channels=out_ecg_lead_idx
             )
 
+            # --- Difficulty-weighted sampler: compute per-sample MSE and feed tracker ---
+            with torch.no_grad():
+                _x_mse = tr_minibatch[:, :, out_ecg_lead_idx] if out_ecg_lead_idx is not None else tr_minibatch
+                # Xrec_tr is [L, N, T, D]; average over MC samples then over (T, D) -> [N]
+                _per_sample_mse = ((Xrec_tr.detach().mean(0) - _x_mse) ** 2).mean(dim=(1, 2))
+            for _si, (_cls_s, _) in enumerate(local_y):
+                tracker.update(_cls_s, _per_sample_mse[_si].item())
+
             optimizer.zero_grad()
-            loss.backward() 
+            loss.backward()
             log_gradients(model, run)
 
             optimizer.step()
@@ -351,6 +364,12 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 'train/nll_dt_ratio': sobolov_loss.item() / nlhood.item()
             })
         
+        # --- Difficulty-weighted sampler: update EMA and rebuild loader for next epoch ---
+        tracker.end_epoch()
+        trainset = make_loader(trainset.dataset, tracker, args.batch_size, args.num_workers)
+        # Log EMA MSE per class so weight evolution is visible in wandb
+        run.log({'sampler/ema_mse': tracker.ema_mse})
+
         table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in loss_per_class.items()],
                                 columns=["class", "mse"])
 

@@ -3,6 +3,8 @@ import yaml
 import json
 import torch
 import random
+import numpy as np
+from collections import defaultdict
 from   torch.utils import data
 from torch.nn.utils.rnn import pad_sequence
 from model.misc import io_utils
@@ -191,6 +193,76 @@ def pad_collate(batch):
 	mask = (T_idx < lengths.unsqueeze(1)).to(padded_sequences.device)
 
 	return padded_sequences, labels, mask
+
+class ClassMSETracker:
+	"""Tracks per-class reconstruction MSE and maintains an EMA so the training
+	DataLoader can up-sample harder classes each epoch.
+
+	alpha controls how much weight is given to the current epoch (1-alpha) vs
+	the running average (alpha).  Higher alpha = slower adaptation.
+	"""
+
+	def __init__(self, class_names, alpha=0.7):
+		self.alpha = alpha
+		self.class_names = list(class_names)
+		# Uniform initialisation; converges to real values after the first epoch
+		self.ema_mse = {cls: 1.0 for cls in self.class_names}
+		self._buffer = defaultdict(list)   # raw per-sample MSE values within current epoch
+
+	def update(self, class_name, mse_val):
+		"""Record one sample's MSE; call once per sample after every batch."""
+		self._buffer[class_name].append(float(mse_val))
+
+	def end_epoch(self):
+		"""Fold buffered per-class means into the EMA and clear the buffer.
+		Call once at the end of every training epoch."""
+		for cls in self.class_names:
+			if self._buffer[cls]:
+				epoch_mean = float(np.mean(self._buffer[cls]))
+				self.ema_mse[cls] = (
+					self.alpha * self.ema_mse[cls] + (1.0 - self.alpha) * epoch_mean
+				)
+		self._buffer = defaultdict(list)
+
+	def sampling_weights(self, labels):
+		"""Return a normalised weight tensor (one entry per dataset sample).
+
+		Weights are proportional to ema_mse so harder classes are sampled more.
+		Clamped so max(w) <= 3 * min(w) to prevent any single class dominating.
+		"""
+		weights = torch.tensor(
+			[self.ema_mse.get(cls, 1.0) for cls in labels], dtype=torch.float
+		)
+		# Clamp: no class sampled more than 3x the easiest class
+		w_min = weights.min().clamp(min=1e-8)
+		weights = weights.clamp(max=3.0 * w_min)
+		return weights / weights.sum()
+
+
+def make_loader(dataset, tracker, batch_size, num_workers=0):
+	"""Build a DataLoader whose sampler is driven by tracker's per-class EMA MSE.
+
+	Call once per epoch (after tracker.end_epoch()) to refresh sampling probabilities.
+	Returns a new DataLoader wrapping the same ECGDataset object.
+	"""
+	weights = tracker.sampling_weights(dataset.labels)   # one weight per sample
+	sampler = data.WeightedRandomSampler(
+		weights=weights,
+		num_samples=len(dataset),
+		replacement=True,
+	)
+	loader_params = {
+		'batch_size': min(batch_size, len(dataset)),
+		'sampler': sampler,            # sampler and shuffle=True are mutually exclusive
+		'num_workers': num_workers,
+		'drop_last': True,
+		'collate_fn': pad_collate,
+		'pin_memory': True,
+		'persistent_workers': num_workers > 0,
+		'prefetch_factor': 2 if num_workers > 0 else None,
+	}
+	return data.DataLoader(dataset, **loader_params)
+
 
 def __build_dataset(num_workers, batch_size, train_params, valid_params, test_params, dtype, dataset, use_cache=True, shuffle=True):
 	# Data generators
