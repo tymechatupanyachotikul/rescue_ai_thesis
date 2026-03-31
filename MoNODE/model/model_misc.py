@@ -262,7 +262,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             'V6': 11
         }
 
-        custom_channel = [lead for lead, idx in lead_idx.items() if lead not in exclude_leads]
+        custom_channel = [lead for lead, idx in lead_idx.items() if lead not in params['exclude_leads_out']]
         out_ecg_lead_idx = [idx for lead, idx in lead_idx.items() if lead not in params['exclude_leads_out']]
 
     for ep in range(args.Nepoch):
