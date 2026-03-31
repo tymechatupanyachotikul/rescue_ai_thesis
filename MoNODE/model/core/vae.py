@@ -398,7 +398,6 @@ class Decoder(nn.Module):
         XL = X.repeat([L]+[1]*X.ndim) # L,N,T,nc,d,d or L,N,T,d
         assert XL.numel()==Xhat.numel()
         Xhat = Xhat.reshape(XL.shape)
-        log_p_dt = None
         if self.distribution == 'bernoulli':
             try:
                 log_p = torch.log(Xhat)*XL + torch.log(1-Xhat)*(1-XL) # L,N,T,nc,d,d
@@ -406,28 +405,28 @@ class Decoder(nn.Module):
                 log_p = torch.log(EPSILON+Xhat)*XL + torch.log(EPSILON+1-Xhat)*(1-XL) # L,N,T,nc,d,d
         elif self.distribution == 'normal':
             std = self.sp(self.out_logsig)
-            std_dt = self.sp(self.out_logsig_dt)
+            #std_dt = self.sp(self.out_logsig_dt)
             log_p = torch.distributions.Normal(XL,std).log_prob(Xhat)
-            XL_dt   = torch.diff(XL, dim=2, prepend=XL[:, :, :1])
-            w = 1.0 + self.l_w * torch.abs(XL_dt)
-            log_p = log_p * w
+            #XL_dt   = torch.diff(XL, dim=2, prepend=XL[:, :, :1])
+            #w = 1.0 + self.l_w * torch.abs(XL_dt)
+            #log_p = log_p * w
 
-            if self.w_dt > 0:
-                Xhat_dt = torch.diff(Xhat, dim=2, prepend=Xhat[:, :, :1])
+            # if self.w_dt > 0:
+            #     Xhat_dt = torch.diff(Xhat, dim=2, prepend=Xhat[:, :, :1])
 
-                non_static = (XL_dt.abs() > 1e-5).float()
+            #     non_static = (XL_dt.abs() > 1e-5).float()
 
-                std_dt = torch.clamp(std_dt, min=0.01, max=5.0)
-                log_p_dt = torch.distributions.Normal(XL_dt, std_dt).log_prob(Xhat_dt) 
-                log_p_dt = log_p_dt * non_static * self.w_dt
+            #     std_dt = torch.clamp(std_dt, min=0.01, max=5.0)
+            #     log_p_dt = torch.distributions.Normal(XL_dt, std_dt).log_prob(Xhat_dt) 
+            #     log_p_dt = log_p_dt * non_static * self.w_dt
 
-                if (log_p_dt > 0).any():
-                    print(f"Positive log_p_dt detected!")
-                    print(f"Max log_p_dt: {log_p_dt.max().item()}")
-                    print(f"std_dt range: [{std_dt.min().item()}, {std_dt.max().item()}]")
-                    print(f"Diff range: [{(XL_dt - Xhat_dt).abs().min().item()}, {(XL_dt - Xhat_dt).abs().max().item()}]")
+            #     if (log_p_dt > 0).any():
+            #         print(f"Positive log_p_dt detected!")
+            #         print(f"Max log_p_dt: {log_p_dt.max().item()}")
+            #         print(f"std_dt range: [{std_dt.min().item()}, {std_dt.max().item()}]")
+            #         print(f"Diff range: [{(XL_dt - Xhat_dt).abs().min().item()}, {(XL_dt - Xhat_dt).abs().max().item()}]")
                 
         else:
             raise ValueError('Currently only bernoulli dist implemented')
 
-        return log_p, log_p_dt
+        return log_p
