@@ -415,8 +415,11 @@ class Decoder(nn.Module):
             if self.w_dt > 0:
                 Xhat_dt = torch.diff(Xhat, dim=2, prepend=Xhat[:, :, :1])
 
-                std_dt = torch.clamp(std_dt, min=0.2)
-                log_p_dt = torch.distributions.Normal(XL_dt, std_dt).log_prob(Xhat_dt) * self.w_dt
+                non_static = (XL_dt.abs() > 1e-5).float()
+
+                std_dt = torch.clamp(std_dt, min=0.01, max=5.0)
+                log_p_dt = torch.distributions.Normal(XL_dt, std_dt).log_prob(Xhat_dt) 
+                log_p_dt = log_p_dt * non_static * self.w_dt
 
                 if (log_p_dt > 0).any():
                     print(f"Positive log_p_dt detected!")
