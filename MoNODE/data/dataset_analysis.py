@@ -197,19 +197,21 @@ def clean_dataset():
 
 def adjust_dataset():
     classes = ['avblock', 'fam', 'iab', 'lae', 'lbbb', 'rbbb', 'sinus']
-    cls_count = defaultdict(int)
-    file_dict = defaultdict(list)
-    for split in ['train', 'valid', 'test']:
+    
+    for split in ['valid', 'test']:
         root_dir = f'/projects/prjs1890/MedalCare-XL/segments/{split}/ventricular/median'
         before_count = 0
+        cls_count = defaultdict(int)
+        file_dict = defaultdict(list)
+
         for file in os.listdir(root_dir):
             file_path = os.path.join(root_dir, file)
             if file_path.endswith('.pth'):
                 data_cls = file.split('_')[-1].split('.')[0]
                 if data_cls in classes:
                     cls_count[data_cls] += 1 
-                    before_count += 1
                     file_dict[data_cls].append(file_path)
+                before_count += 1
     
         for _cls, count in cls_count.items():
             print(f"Class {_cls}: {count} samples")
