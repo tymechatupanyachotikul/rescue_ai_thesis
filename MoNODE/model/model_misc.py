@@ -132,7 +132,10 @@ def compute_mse(model, data, y_data, T_train, L=1, mask=None, task=None, out_cha
 
                 for cls in list(set(classes)):
                     idx = [i for i, val in enumerate(y_data) if val[0] == cls]
-                    loss_per_class[cls] = torch.mean((Xrec[:, idx, :, :] - data[idx, :, :])**2).item()
+                    loss_per_class[cls] = compute_masked_mse(
+                        (Xrec[:, idx, :, :] - data[idx, :, :])**2,
+                        mask=mask[idx] if mask is not None else None
+                    ).item()
                 
                 for patient_id in list(set(patient_ids)):
                     idx = [i for i, val in enumerate(patient_ids) if val[1] == patient_id]
