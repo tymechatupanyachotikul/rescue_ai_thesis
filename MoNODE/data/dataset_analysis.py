@@ -203,7 +203,7 @@ def remove_files(seg_type):
         count = 0
         for file in files:
             if os.path.exists(file):
-                shutil.move(file, f'/projects/prjs1890/MedalCare-XL/segments/{split}/anomalies')
+                shutil.move(file, f'/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/{split}/{seg_type}/median/')
                 count += 1
                 print(f"Removed: {file}")
             else:
