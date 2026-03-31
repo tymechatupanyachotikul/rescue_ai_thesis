@@ -417,6 +417,12 @@ class Decoder(nn.Module):
 
                 std_dt = torch.clamp(std_dt, min=0.2)
                 log_p_dt = torch.distributions.Normal(XL_dt, std_dt).log_prob(Xhat_dt) * self.w_dt
+
+                if (log_p_dt > 0).any():
+                    print(f"Positive log_p_dt detected!")
+                    print(f"Max log_p_dt: {log_p_dt.max().item()}")
+                    print(f"std_dt range: [{std_dt.min().item()}, {std_dt.max().item()}]")
+                    print(f"Diff range: [{(XL_dt - Xhat_dt).abs().min().item()}, {(XL_dt - Xhat_dt).abs().max().item()}]")
                 
         else:
             raise ValueError('Currently only bernoulli dist implemented')
