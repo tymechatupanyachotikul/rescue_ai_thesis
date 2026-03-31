@@ -274,6 +274,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
         if (ep != 0) and (ep % ep_inc_c == 0):
             T_ += ep_inc_v
+            print(f'Increasing T to {T_} for training...')
         loss_per_class = defaultdict(list)
         loss_per_patient = defaultdict(list)
 
