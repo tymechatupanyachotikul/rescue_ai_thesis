@@ -202,7 +202,7 @@ def compute_sobolov(X, Xrec, weight, mask=None):
     X_dt = X_dt.unsqueeze(0).expand_as(Xhat_dt)
 
     if mask is not None:
-        mask_exp = mask.unsqueeze(0).unsqueeze(-1).expand_as(Xhat_dt).float()
+        mask_exp = mask.unsqueeze(0).unsqueeze(-1).expand_as(Xhat_dt).float().to(device=Xhat_dt.device)
         sobolev_diff = torch.abs(Xhat_dt - X_dt) * mask_exp
         sobolev_penalty = sobolev_diff.sum() / (mask_exp.sum() + 1e-8)
     else:
