@@ -224,7 +224,7 @@ def adjust_dataset():
             files = file_dict[_cls]
             random.shuffle(files)
             for file in files[num_sinus_cls:]:
-                shutil.move(file_path, new_dir)
+                shutil.move(file, new_dir)
         
         final_cls_count = defaultdict(int)
         total_size = 0
