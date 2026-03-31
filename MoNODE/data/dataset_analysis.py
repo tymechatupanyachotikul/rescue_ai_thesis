@@ -219,4 +219,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     #find_anomoly_ecg(args.root_dir, args.out_dir)
     clean_dataset()
-    remove_files('ventricular')
+    remove_files('atrial')
