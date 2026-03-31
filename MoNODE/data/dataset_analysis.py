@@ -5,6 +5,7 @@ import numpy as np
 import argparse
 import pandas as pd 
 from collections import defaultdict 
+import shutil
 
 def analysis(args):
 
@@ -149,30 +150,8 @@ def find_anomoly_ecg(data_split_csv, save_dir):
         }, f, indent=4)
 
 def clean_dataset():
-    train_remove = ['S66_000097_iab', 'S74_000037_LCX_03_ant', 'S68_000095_RCA_10', 'S74_000076_LAD_03', 'S74_000036_LCX_10_ant', 'S73_000098_avblock', 'S73_000037_avblock']
-    #train_remove = ['S66_000097_iab', 'S74_000037_LCX_03_ant', 'S68_000052_RCA_03', 'S74_000086_RCA_03', 'S68_000028_RCA_10', 'S68_000095_RCA_10', 'S74_000046_RCA_10', 'S68_000077_LAD_10', 'S68_000080_LAD_10', 'S68_000014_LAD_10', 'S68_000014_LAD_03', 'S74_000076_LAD_03', 'S74_000032_LAD_03', 'S74_000036_LCX_10_ant', 'S73_000037_avblock', 'S66_000041_lbbb']
-    #test_remove = ['S64_000047_LCX_03_ant', 'S62_000042_LCX_03_post', 'S64_000023_RCA_03', 'S64_000035_RCA_10', 'S64_000073_LAD_10']
-    test_remove = []
-    val_remove = []
-
-    train_remove = set(train_remove)
-    val_remove = set(val_remove)
-    test_remove = set(test_remove)
-
-    remove_info = {
-        'train': {
-            'remove_files': train_remove,
-            'dir': '/projects/prjs1890/MedalCare-XL/segments/train/atrial/median'
-        }, 
-        'valid': {
-            'remove_files': val_remove,
-            'dir': '/projects/prjs1890/MedalCare-XL/segments/valid/atrial/median'
-        },
-        'test': {
-            'remove_files': test_remove,
-            'dir': '/projects/prjs1890/MedalCare-XL/segments/test/atrial/median'
-        }
-    }
+    with open('/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/metadata/remove_info_ventricular.json', 'r') as f:
+        remove_info = json.load(f)
 
     remove_dict = {
         'train': [],
@@ -182,7 +161,7 @@ def clean_dataset():
     for split, info in remove_info.items():
         print(f'------------------ {split.upper()} ------------------')
         
-        remove_set = info['remove_files']
+        remove_set = set(info['remove_files'])
         target_dir = info['dir']
         
         if not remove_set:
@@ -212,7 +191,7 @@ def clean_dataset():
                 print(*(f"\t{f}" for f in files), sep="\n")
             print()
 
-    with open(os.path.join('/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/metadata', 'removed_files_atrial.json'), 'w') as f:
+    with open(os.path.join('/projects/prjs1890/MedalCare-XL/removed_anomoly_segments/metadata', 'removed_files_ventricular.json'), 'w') as f:
         json.dump(remove_dict, f, indent=4)
 
 def remove_files(seg_type):
@@ -224,7 +203,7 @@ def remove_files(seg_type):
         count = 0
         for file in files:
             if os.path.exists(file):
-                os.remove(file)
+                shutil.move(file, f'/projects/prjs1890/MedalCare-XL/segments/{split}/anomalies')
                 count += 1
                 print(f"Removed: {file}")
             else:
@@ -239,6 +218,5 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     #find_anomoly_ecg(args.root_dir, args.out_dir)
-    #clean_dataset()
-    remove_files('atrial')
+    clean_dataset()
     remove_files('ventricular')
