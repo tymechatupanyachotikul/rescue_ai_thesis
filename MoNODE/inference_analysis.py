@@ -137,7 +137,9 @@ def _collect_sample_results(dataloader, model, args, class_filter=None):
     """
     results = []
     loss_per_class = defaultdict(list)
-    dataloader.dataset.return_file_path = True
+    # For a plain DataLoader the dataset is ECGDataset; for a Subset it's one level deeper
+    ecg_dataset = getattr(dataloader.dataset, 'dataset', dataloader.dataset)
+    ecg_dataset.return_file_path = True
 
     with torch.no_grad():
         for batch, batch_y, mask in dataloader:
