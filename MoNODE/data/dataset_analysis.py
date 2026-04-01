@@ -278,9 +278,10 @@ def _plot_distribution(counts_per_split, seg_type, out_path):
     # Colour palette — one muted colour per split
     palette = {'train': '#4C72B0', 'valid': '#55A868', 'test': '#C44E52'}
 
+    per_panel_width = min(max(6, len(all_classes) * 1.1), 400)
     fig, axes = plt.subplots(
         1, n_splits,
-        figsize=(max(6, len(all_classes) * 1.1) * n_splits, 6),
+        figsize=(per_panel_width * n_splits, 6),
         sharey=False,
     )
     if n_splits == 1:
@@ -340,7 +341,7 @@ def _plot_distribution(counts_per_split, seg_type, out_path):
 def get_dataset_distribution(seg_type, out_path):
 
     ventricular_classes = ['lbbb', 'rbbb', 'mi']
-    atrial_classes = ['avblock', 'fam', 'iab']
+    atrial_classes = ['avblock', 'fam', 'iab', 'lae']
 
     if seg_type == 'ventricular':
         sinus_classes = ['sinus'] + atrial_classes
