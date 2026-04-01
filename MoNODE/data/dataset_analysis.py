@@ -1,12 +1,14 @@
 import os
 import json
-import re 
-import numpy as np 
+import re
+import numpy as np
 import argparse
-import pandas as pd 
-from collections import defaultdict 
+import pandas as pd
+from collections import defaultdict
 import shutil
-import random 
+import random
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 
 def analysis(args):
 
@@ -263,6 +265,115 @@ def remove_files(seg_type):
         
         print(f"Total files removed in {split}/{seg_type}: {count}\n")
 
+def _plot_distribution(counts_per_split, seg_type, out_path):
+    """Bar charts — one panel per split — showing per-class sample frequency."""
+    splits = [s for s in ['train', 'valid', 'test'] if s in counts_per_split]
+    n_splits = len(splits)
+
+    # Collect all classes that appear across any split, sorted alphabetically
+    all_classes = sorted({cls for split in splits for cls in counts_per_split[split]})
+    x = np.arange(len(all_classes))
+    bar_width = 0.55
+
+    # Colour palette — one muted colour per split
+    palette = {'train': '#4C72B0', 'valid': '#55A868', 'test': '#C44E52'}
+
+    fig, axes = plt.subplots(
+        1, n_splits,
+        figsize=(max(6, len(all_classes) * 1.1) * n_splits, 6),
+        sharey=False,
+    )
+    if n_splits == 1:
+        axes = [axes]
+
+    fig.patch.set_facecolor('#F8F8F8')
+
+    for ax, split in zip(axes, splits):
+        counts = [counts_per_split[split].get(cls, 0) for cls in all_classes]
+        colour = palette[split]
+
+        bars = ax.bar(x, counts, width=bar_width, color=colour, alpha=0.88,
+                      linewidth=0.6, edgecolor='white', zorder=3)
+
+        # Value labels on top of each bar
+        for bar, count in zip(bars, counts):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max(counts) * 0.012,
+                f'{count:,}',
+                ha='center', va='bottom',
+                fontsize=8.5, color='#333333', fontweight='medium',
+            )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(all_classes, rotation=35, ha='right', fontsize=10)
+        ax.set_title(split.capitalize(), fontsize=13, fontweight='bold',
+                     color='#222222', pad=10)
+        ax.set_xlabel('Class', fontsize=11, labelpad=6)
+        ax.set_ylabel('Number of samples', fontsize=11, labelpad=6)
+
+        # Grid, spine styling
+        ax.set_facecolor('#FFFFFF')
+        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f'{int(v):,}'))
+        ax.yaxis.grid(True, linestyle='--', linewidth=0.6, color='#CCCCCC', zorder=0)
+        ax.set_axisbelow(True)
+        for spine in ['top', 'right']:
+            ax.spines[spine].set_visible(False)
+        for spine in ['left', 'bottom']:
+            ax.spines[spine].set_color('#BBBBBB')
+
+        # Add a bit of headroom so labels don't get clipped
+        ax.set_ylim(0, max(counts) * 1.15 if counts else 1)
+
+    fig.suptitle(
+        f'Dataset class distribution — {seg_type}',
+        fontsize=15, fontweight='bold', color='#111111', y=1.01,
+    )
+    plt.tight_layout()
+    os.makedirs(out_path, exist_ok=True)
+    save_file = os.path.join(out_path, f'class_distribution_{seg_type}.png')
+    fig.savefig(save_file, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
+    plt.close(fig)
+    print(f"Saved distribution plot to {save_file}")
+
+
+def get_dataset_distribution(seg_type, out_path):
+
+    ventricular_classes = ['lbbb', 'rbbb', 'mi']
+    atrial_classes = ['avblock', 'fam', 'iab']
+
+    if seg_type == 'ventricular':
+        sinus_classes = ['sinus'] + atrial_classes
+    else:
+        sinus_classes = ['sinus'] + ventricular_classes
+
+    counts_per_split = {}
+
+    for split in ['train', 'valid', 'test']:
+        root_dir = f'/projects/prjs1890/MedalCare-XL/segments/{split}/{seg_type}/median'
+        cls_count = defaultdict(int)
+
+        for file in os.listdir(root_dir):
+            file_path = os.path.join(root_dir, file)
+            if file_path.endswith('.pth'):
+                data_cls = file.split('_')[-1].split('.')[0]
+                if data_cls not in ventricular_classes + sinus_classes:
+                    if seg_type == 'ventricular':
+                        data_cls = '_'.join(file.split('_')[-2:]).split('.')[0]
+                    else:
+                        data_cls = 'mi'
+
+                if data_cls in sinus_classes:
+                    cls_count['sinus'] += 1
+                else:
+                    cls_count[data_cls] += 1
+
+        counts_per_split[split] = dict(cls_count)
+        for _cls, count in cls_count.items():
+            print(f"Class {_cls}: {count} samples in split {split}")
+
+    _plot_distribution(counts_per_split, seg_type, out_path)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze MedalCare-XL ventricular parameters and ECG similarity.")
     parser.add_argument("--root_dir", type=str, required=True, help="Path to the dataset directory containing class folders.")
@@ -272,4 +383,7 @@ if __name__ == "__main__":
     #find_anomoly_ecg(args.root_dir, args.out_dir)
     #clean_dataset()
     #remove_files('atrial')
-    adjust_dataset()
+    #adjust_dataset()
+
+    get_dataset_distribution('atrial', args.out_dir)
+    get_dataset_distribution('ventricular', args.out_dir)
