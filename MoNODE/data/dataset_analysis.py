@@ -358,7 +358,7 @@ def get_dataset_distribution(seg_type, out_path):
             file_path = os.path.join(root_dir, file)
             if file_path.endswith('.pth'):
                 data_cls = file.split('_')[-1].split('.')[0]
-                if data_cls not in ventricular_classes + sinus_classes:
+                if data_cls not in ventricular_classes + sinus_classes + atrial_classes:
                     if seg_type == 'ventricular':
                         data_cls = '_'.join(file.split('_')[-2:]).split('.')[0]
                     else:
@@ -387,4 +387,4 @@ if __name__ == "__main__":
     #adjust_dataset()
 
     get_dataset_distribution('atrial', args.out_dir)
-    get_dataset_distribution('ventricular', args.out_dir)
+    #get_dataset_distribution('ventricular', args.out_dir)
