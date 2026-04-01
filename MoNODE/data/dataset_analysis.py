@@ -402,7 +402,7 @@ def find_zero_signals(root_dir, out_dir, filename, near_zero_threshold=1e-5, nea
                 continue
 
             values = tensor.numpy()
-
+            values = np.nan_to_num(values, nan=0.0)  
             if np.all(values == 0):
                 all_zero_files.append(fpath)
             elif (np.abs(values) < near_zero_threshold).mean() > near_zero_fraction:
