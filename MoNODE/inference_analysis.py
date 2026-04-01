@@ -129,6 +129,61 @@ parser.add_argument('--model_path', type=str,
 parser.add_argument('--analysis_latent', required=False, default=False, action='store_true',
                     help="Whether to do latent space analysis")
 
+def _collect_sample_results(dataloader, model, args, class_filter=None):
+    """Run inference over a dataloader and collect per-sample results.
+
+    Args:
+        class_filter: optional set of class names to keep. None = keep all.
+    """
+    results = []
+    loss_per_class = defaultdict(list)
+    dataloader.dataset.return_file_path = True
+
+    with torch.no_grad():
+        for batch, batch_y, mask in dataloader:
+            batch = batch.to(model.device)
+            mask  = mask.to(model.device)
+
+            Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), C, c, m = model(batch, args.plotL, mask=mask)
+
+            Xrec_mean = Xrec.mean(0)                           # (N, T, D)
+            se        = (Xrec_mean - batch) ** 2               # (N, T, D)
+            mask_exp  = mask.unsqueeze(-1).float()             # (N, T, 1)
+            n_valid   = mask_exp.sum(dim=1).clamp(min=1)       # (N, 1)
+            mse_per_lead   = (se * mask_exp).sum(dim=1) / n_valid   # (N, D)
+            mse_per_sample = mse_per_lead.mean(dim=-1)         # (N,)
+
+            classes     = [item[0] for item in batch_y]
+            patient_ids = [item[1] for item in batch_y]
+            filenames   = [item[2] for item in batch_y]
+
+            for i in range(batch.shape[0]):
+                if class_filter is not None and classes[i] not in class_filter:
+                    continue
+                results.append({
+                    'filename':          filenames[i],
+                    'class':             classes[i],
+                    'patient_id':        patient_ids[i],
+                    'mse':               mse_per_sample[i].item(),
+                    'mse_per_lead':      mse_per_lead[i].cpu().tolist(),
+                    'original_ecg':      batch[i].cpu(),
+                    'reconstructed_ecg': Xrec_mean[i].cpu(),
+                    'mask':              mask[i].cpu(),
+                })
+
+            for cls in set(classes):
+                if class_filter is not None and cls not in class_filter:
+                    continue
+                idx = [j for j, v in enumerate(classes) if v == cls]
+                cls_mask    = mask_exp[idx]
+                cls_se      = se[idx]
+                cls_n_valid = cls_mask.sum(dim=1).clamp(min=1)
+                cls_mse     = (cls_se * cls_mask).sum(dim=1) / cls_n_valid
+                loss_per_class[cls].append(cls_mse.mean().item())
+
+    return results, loss_per_class
+
+
 def get_latent_trajectory(Q, method='pca'):
     [T,q] = Q.shape 
 
@@ -192,58 +247,16 @@ if __name__ == '__main__':
     X_all = []
     X_true_all = []
 
-    loss_per_class = defaultdict(list)
-    sample_results = []
-    testset.dataset.return_file_path = True  # Ensure file paths are included in the dataset output
-    for test_batch, test_y, test_mask in testset:
-        test_batch = test_batch.to(model.device)
-        test_mask  = test_mask.to(model.device)
-        
-        Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), C, c, m = model(test_batch, args.plotL, mask=test_mask)
-        
-        # se shape: (L, N, T, D)
-        Xrec_mean = Xrec.mean(0)  # (N, T, D) - average over L samples
-        se = (Xrec_mean - test_batch) ** 2  # (N, T, D)
+    sample_results, loss_per_class = _collect_sample_results(testset, model, args)
 
-        # mask: (N, T) -> (N, T, 1)
-        mask_exp = test_mask.unsqueeze(-1).float()  # (N, T, 1)
-        n_valid  = mask_exp.sum(dim=1)              # (N, 1) - valid timesteps per sample
-
-        # per-sample, per-lead MSE: (N, D)
-        mse_per_lead = (se * mask_exp).sum(dim=1) / n_valid.clamp(min=1)
-
-        # per-sample scalar MSE: (N,)
-        mse_per_sample = mse_per_lead.mean(dim=-1)
-
-        classes     = [item[0] for item in test_y]
-        patient_ids = [item[1] for item in test_y]
-        filenames   = [item[2] for item in test_y]  # adjust index based on your test_y structure
-
-        # store per-sample results
-        for i in range(test_batch.shape[0]):
-            sample_results.append({
-                'filename':       filenames[i],
-                'class':          classes[i],
-                'patient_id':     patient_ids[i],
-                'mse':            mse_per_sample[i].item(),
-                'mse_per_lead':   mse_per_lead[i].cpu().tolist(),       # (D,)
-                'original_ecg':   test_batch[i].cpu(),                  # (T, D)
-                'reconstructed_ecg': Xrec_mean[i].cpu(),  
-                'mask':           test_mask[i].cpu(),               # (T, D)
-            })
-
-        for cls in set(classes):
-            idx = [i for i, val in enumerate(classes) if val == cls]
-            cls_mask = mask_exp[idx]                          # (n_cls, T, 1)
-            cls_se   = se[idx]                                # (n_cls, T, D)
-            cls_n_valid = cls_mask.sum(dim=1).clamp(min=1)   # (n_cls, 1)
-            cls_mse  = (cls_se * cls_mask).sum(dim=1) / cls_n_valid  # (n_cls, D)
-            loss_per_class[cls].append(cls_mse.mean().item())
-
-
-        if analysis_latent:
-            X, _zt, _, _, C_vl, _, _ = model(test_batch,  L=args.plotL)
-            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _, _loss_per_class, nlhood_dt= compute_loss(model, test_batch, test_y, 1, num_observations = trainset.dataset.shape[0])
+    if analysis_latent:
+        assert trainset is not None
+        n_train = trainset.dataset.shape[0]
+        testset.dataset.return_file_path = True
+        for test_batch, test_y, test_mask in testset:
+            test_batch = test_batch.to(model.device)
+            X, _zt, _, _, C_vl, _, _ = model(test_batch, L=args.plotL)
+            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _, _loss_per_class, nlhood_dt = compute_loss(model, test_batch, test_y, 1, num_observations=n_train)
             zt.append(_zt[0, :, :, :])
             X_all.append(X)
             X_true_all.append(test_batch)
@@ -251,6 +264,7 @@ if __name__ == '__main__':
 
             if cur_samples >= total_samples:
                 break
+    
     
     if analysis_latent:
         zt = torch.cat(zt, dim=0)
@@ -320,25 +334,39 @@ if __name__ == '__main__':
                 writer.grab_frame()
     save_directory = os.path.join(os.path.dirname(args.model_path), 'analysis_results')
     os.makedirs(save_directory, exist_ok=True)
-    
-    meta = [{k: v for k, v in r.items()
-         if k not in ('original_ecg', 'reconstructed_ecg', 'mask')}
-        for r in sample_results]
 
-    with open(os.path.join(save_directory, 'test_results_meta.json'), 'w') as f:
-        json.dump(meta, f, indent=2)
-
-    max_len = max(r['original_ecg'].shape[0] for r in sample_results)
-
-    def pad_to(tensor, max_len):
+    def pad_to(tensor, length):
         T, D = tensor.shape
-        if T < max_len:
-            pad = torch.zeros(max_len - T, D)
-            tensor = torch.cat([tensor, pad], dim=0)
+        if T < length:
+            tensor = torch.cat([tensor, torch.zeros(length - T, D)], dim=0)
         return tensor
 
-    torch.save({
-        'original_ecg':      torch.stack([pad_to(r['original_ecg'], max_len) for r in sample_results]),
-        'reconstructed_ecg': torch.stack([pad_to(r['reconstructed_ecg'], max_len) for r in sample_results]),
-        'mask':              torch.stack([pad_to(r['mask'].unsqueeze(-1).float(), max_len).squeeze(-1) for r in sample_results]),
-    }, os.path.join(save_directory, 'test_results_tensors.pt'))
+    def save_results(results, prefix):
+        meta = [{k: v for k, v in r.items()
+                 if k not in ('original_ecg', 'reconstructed_ecg', 'mask')}
+                for r in results]
+        with open(os.path.join(save_directory, f'{prefix}_results_meta.json'), 'w') as f:
+            json.dump(meta, f, indent=2)
+        max_len = max(r['original_ecg'].shape[0] for r in results)
+        torch.save({
+            'original_ecg':      torch.stack([pad_to(r['original_ecg'], max_len) for r in results]),
+            'reconstructed_ecg': torch.stack([pad_to(r['reconstructed_ecg'], max_len) for r in results]),
+            'mask':              torch.stack([pad_to(r['mask'].unsqueeze(-1).float(), max_len).squeeze(-1) for r in results]),
+        }, os.path.join(save_directory, f'{prefix}_results_tensors.pt'))
+
+    save_results(sample_results, 'test')
+
+    TRAIN_CLASS_FILTER = {'lbbb', 'rbbb'}
+    train_dataset = trainset.dataset
+    filtered_indices = [i for i, lbl in enumerate(train_dataset.labels) if lbl in TRAIN_CLASS_FILTER]
+    filtered_subset  = torch.utils.data.Subset(train_dataset, filtered_indices)
+    filtered_loader  = torch.utils.data.DataLoader(
+        filtered_subset,
+        batch_size=trainset.batch_size,
+        shuffle=False,
+        num_workers=trainset.num_workers,
+        collate_fn=trainset.collate_fn,
+        pin_memory=trainset.pin_memory,
+    )
+    train_results, _ = _collect_sample_results(filtered_loader, model, args)
+    save_results(train_results, 'train')
