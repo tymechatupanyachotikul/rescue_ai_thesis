@@ -396,13 +396,12 @@ def find_zero_signals(root_dir, out_dir, filename, near_zero_threshold=1e-5, nea
             fpath = os.path.join(dirpath, fname)
             total += 1
             try:
-                tensor = torch.load(fpath, map_location='cpu', weights_only=True).float()
+                values = torch.load(fpath).to('cpu').numpy()
+                values = np.nan_to_num(values, nan=0.0)  # Replace NaNs with zeros for plotting
             except Exception as e:
                 print(f"Could not load {fpath}: {e}")
                 continue
 
-            values = tensor.numpy()
-            values = np.nan_to_num(values, nan=0.0)  
             if np.all(values == 0):
                 all_zero_files.append(fpath)
             elif (np.abs(values) < near_zero_threshold).mean() > near_zero_fraction:
