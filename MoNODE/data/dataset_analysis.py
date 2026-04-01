@@ -1,5 +1,6 @@
 import os
 import json
+import torch
 import re
 import numpy as np
 import argparse
@@ -9,6 +10,7 @@ import shutil
 import random
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+import torch
 
 def analysis(args):
 
@@ -375,6 +377,62 @@ def get_dataset_distribution(seg_type, out_path):
 
     _plot_distribution(counts_per_split, seg_type, out_path)
 
+def find_zero_signals(root_dir, out_dir, filename, near_zero_threshold=1e-5, near_zero_fraction=0.75):
+    """
+    Scan all .pth files under root_dir and flag:
+      - 'all_zero'   : every value in the tensor is exactly 0
+      - 'mostly_zero': > near_zero_fraction of values are below near_zero_threshold (abs)
+    Saves counts and filenames to a JSON in out_dir.
+    """
+
+    all_zero_files   = []
+    mostly_zero_files = []
+    total = 0
+
+    for dirpath, _, filenames in os.walk(root_dir):
+        for fname in filenames:
+            if not fname.endswith('.pth'):
+                continue
+            fpath = os.path.join(dirpath, fname)
+            total += 1
+            try:
+                tensor = torch.load(fpath, map_location='cpu', weights_only=True).float()
+            except Exception as e:
+                print(f"Could not load {fpath}: {e}")
+                continue
+
+            values = tensor.numpy()
+
+            if np.all(values == 0):
+                all_zero_files.append(fpath)
+            elif (np.abs(values) < near_zero_threshold).mean() > near_zero_fraction:
+                mostly_zero_files.append(fpath)
+
+    result = {
+        'total_files_scanned': total,
+        'near_zero_threshold': near_zero_threshold,
+        'near_zero_fraction':  near_zero_fraction,
+        'all_zero': {
+            'count': len(all_zero_files),
+            'files': all_zero_files,
+        },
+        'mostly_zero': {
+            'count': len(mostly_zero_files),
+            'files': mostly_zero_files,
+        },
+    }
+
+    print(f"Scanned {total} files:")
+    print(f"  All-zero:    {len(all_zero_files)}")
+    print(f"  Mostly-zero: {len(mostly_zero_files)}")
+
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, filename)
+    with open(out_path, 'w') as f:
+        json.dump(result, f, indent=2)
+    print(f"Saved report to {out_path}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze MedalCare-XL ventricular parameters and ECG similarity.")
     parser.add_argument("--root_dir", type=str, required=True, help="Path to the dataset directory containing class folders.")
@@ -386,5 +444,12 @@ if __name__ == "__main__":
     #remove_files('atrial')
     #adjust_dataset()
 
-    get_dataset_distribution('atrial', args.out_dir)
+    #get_dataset_distribution('atrial', args.out_dir)
     #get_dataset_distribution('ventricular', args.out_dir)
+
+    out_dir = '/home/tchatupanyacho/results'
+    for split in ['train', 'valid', 'test']:
+        for seg_type in ['ventricular', 'atrial']:
+            root_dir = f'/projects/prjs1890/MedalCare-XL/segments/{split}/{seg_type}/median'
+            filename = f'zero_signal_analysis_{split}_{seg_type}.json'
+            find_zero_signals(root_dir, out_dir, filename)
