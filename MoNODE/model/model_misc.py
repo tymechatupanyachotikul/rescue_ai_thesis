@@ -296,6 +296,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
         custom_channel = [lead for lead, idx in lead_idx.items() if lead not in params['exclude_leads_out']]
         out_ecg_lead_idx = [idx for lead, idx in lead_idx.items() if lead not in params['exclude_leads_out']]
 
+    print(f'Training set size: {len(trainset.dataset.file_paths)}, Validation set size: {len(validset.dataset.file_paths)}, Test set size: {len(testset.dataset.file_paths)}')
     for ep in range(args.Nepoch):
         #no latent space to sample from
         if args.model == 'sonode':
