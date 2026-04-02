@@ -288,7 +288,7 @@ if __name__ == "__main__":
     argparser.add_argument("--plot_dir", type=str, help="Path to the directory where plots will be saved", default='/home/tchatupanyacho/rescue_ai_thesis/results/plots')
     args = argparser.parse_args()
 
-    dataset = 'medalcare-xl' if 'medalcare-xl' in args.input_path else os.path.basename(args.input_path).split('_')[0]
+    dataset = 'medalcare-xl' if 'medalcare-xl' in args.input_path else 'ukbb' if 'ukbb' in args.input_path else os.path.basename(args.input_path).split('_')[0]
 
     if dataset == 'medalcare-xl':
         segment_type = os.path.splitext(args.input_path)[0].split('_')[-1]
