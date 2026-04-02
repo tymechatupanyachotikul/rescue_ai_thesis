@@ -313,7 +313,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             tr_minibatch = local_batch.to(model.device) # N,T,...
             if itr == 0:
                 print(f"Train batch shape: {tr_minibatch.shape}")
-                
+
             if args.task=='sin' or args.task=='spiral' or args.task=='lv' or 'mocap' in args.task: #slowly increase sequence length
                 [N,T] = tr_minibatch.shape[:2]
 
@@ -396,10 +396,14 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             })
 
         if mse_per_lead_accum:
+            print(f'MSE per lead accum shape: {np.array(mse_per_lead_accum).shape}')
+
             mean_mse_per_lead = np.stack(mse_per_lead_accum).mean(axis=0)  # (D,)
+            print(f'Mean MSE per lead shape: {mean_mse_per_lead.shape}')
+            
             lead_labels = custom_channel if custom_channel else list(range(len(mean_mse_per_lead)))
             table = wandb.Table(
-                data=[[str(lead), float(v)] for lead, v in zip(lead_labels, mean_mse_per_lead)],
+                data=[[str(lead), v] for lead, v in zip(lead_labels, mean_mse_per_lead.tolist())],
                 columns=["lead", "mse"]
             )
             run.log({
