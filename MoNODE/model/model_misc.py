@@ -201,7 +201,7 @@ def compute_loss(model, data, y, L, num_observations, mask=None, out_channels=No
         se = (Xrec - data) ** 2  # (L, N, T, D)
         mse = compute_masked_mse(se, mask=mask)
         # Per-lead MSE: reduce over L, N, T → (D,)
-        mse_per_lead = compute_masked_mse(se, mask=mask, dims=(1, 2))
+        mse_per_lead = compute_masked_mse(se, mask=mask, dims=(0, 1, 2))
         return loss, -lhood, kl_z0, Xrec, ztL, mse, c, m, loss_per_class, loss_per_patient, sobolov_loss, mse_per_lead
 
 
