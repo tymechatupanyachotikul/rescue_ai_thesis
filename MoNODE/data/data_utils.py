@@ -3,9 +3,11 @@ import yaml
 import json
 import torch
 import random
+import numpy as np
 from   torch.utils import data
 from torch.nn.utils.rnn import pad_sequence
 from model.misc import io_utils
+from scipy.signal import medfilt, iirnotch, filtfilt, butter, resample
 
 DEFAULT_LEADS = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
 MIMIC_IV_LEADS = ['I', 'II', 'III', 'aVF', 'aVR', 'aVL', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
@@ -15,6 +17,50 @@ LEADS_DICT = {
     'uk_biobank': DEFAULT_LEADS,
     'mimic-iv': MIMIC_IV_LEADS
 }
+
+def filter_bandpass(signal, fs):
+	"""
+	Bandpass filter
+	:param signal: 2D numpy array of shape (channels, time)
+	:param fs: sampling frequency
+	:return: filtered signal
+	"""
+	is_tensor = isinstance(signal, torch.Tensor)
+
+	if is_tensor:
+		device = signal.device
+		signal = signal.detach().cpu().numpy()
+
+	transposed = signal.shape[0] > signal.shape[1]
+	if transposed:
+		signal = signal.T
+
+	# Remove power-line interference
+	b, a = iirnotch(50, 30, fs)
+	filtered_signal = np.zeros_like(signal)
+	for c in range(signal.shape[0]):
+		filtered_signal[c] = filtfilt(b, a, signal[c])
+
+	# Simple bandpass filter
+	b, a = butter(N=4, Wn=[0.67, 40], btype='bandpass', fs=fs)
+	for c in range(signal.shape[0]):
+		filtered_signal[c] = filtfilt(b, a, filtered_signal[c])
+
+	# Remove baseline wander
+	baseline = np.zeros_like(filtered_signal)
+	for c in range(filtered_signal.shape[0]):
+		kernel_size = int(0.4 * fs) + 1
+		if kernel_size % 2 == 0:
+			kernel_size += 1  # Ensure kernel size is odd
+		baseline[c] = medfilt(filtered_signal[c], kernel_size=kernel_size)
+	filter_ecg = filtered_signal - baseline
+
+	if transposed:
+		filter_ecg = filter_ecg.T
+	if is_tensor:
+		return torch.from_numpy(filter_ecg).to(device)
+	
+	return filter_ecg
 
 def load_data(args, dtype):
 	if args.task in ['rot_mnist', 'rot_mnist_ou', 'mov_mnist', 'sin', 'lv', 'spiral', 'bb', 'mocap', 'mocap_shift', 'ecg'] :
@@ -100,13 +146,13 @@ def __load_data(args, dtype, dataset=None):
 class ECGDataset(data.Dataset):
 	def __init__(self, file_paths, labels, run_id, dtype, dataset, exclude_leads=[], shared_cache=None, return_file_path=False):
 		self.file_paths = file_paths
-		self.labels = labels
+		self.labels = labels if self.labels else None
 		self.run_id = run_id
 		self.exclude_leads = exclude_leads
 		self.cache = shared_cache
 		self.dtype = dtype
 		self.return_file_path = return_file_path
-
+		
 		self.lead_idx = {
 			'I': 0, 
 			'II': 1,
@@ -148,7 +194,8 @@ class ECGDataset(data.Dataset):
 			
 			if self.include_idx is not None:
 				X = X[:, self.include_idx]
-				
+			if self.dataset.lower() != 'medalcare-xl':
+				X = filter_bandpass(X, 500) 
 			if self.cache is not None and idx not in self.cache:
 				self.cache[idx] = X
 		
