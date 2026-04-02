@@ -152,6 +152,7 @@ class ECGDataset(data.Dataset):
 		self.cache = shared_cache
 		self.dtype = dtype
 		self.return_file_path = return_file_path
+		self.dataset = dataset
 		
 		self.lead_idx = {
 			'I': 0, 
