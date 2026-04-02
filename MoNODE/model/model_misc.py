@@ -87,7 +87,7 @@ def compute_masked_mse(se, mask=None,dims=None):
 
     return mse 
 
-def compute_mse(model, data, y_data, T_train, L=1, mask=None, task=None, out_channels=None):
+def compute_mse(model, data, y_data, T_train, L=1, mask=None, task=None, out_channels=None, has_label=True):
 
     T_start = 0
     T_max = 0
@@ -123,29 +123,30 @@ def compute_mse(model, data, y_data, T_train, L=1, mask=None, task=None, out_cha
                 loss_per_class = {}
                 loss_per_patient = {}
 
-                classes = [] 
-                patient_ids = [] 
+                if has_label:
+                    classes = [] 
+                    patient_ids = [] 
 
-                for (_cls, patient_id) in y_data:
-                    classes.append(_cls)
-                    patient_ids.append(patient_id)
+                    for (_cls, patient_id) in y_data:
+                        classes.append(_cls)
+                        patient_ids.append(patient_id)
 
-                for cls in list(set(classes)):
-                    idx = [i for i, val in enumerate(y_data) if val[0] == cls]
-                    loss_per_class[cls] = compute_masked_mse(
-                        (Xrec[:, idx, :, :] - data[idx, :, :])**2,
-                        mask=mask[idx] if mask is not None else None
-                    ).item()
-                
-                for patient_id in list(set(patient_ids)):
-                    idx = [i for i, val in enumerate(patient_ids) if val[1] == patient_id]
-                    loss_per_patient[patient_id] = torch.mean((Xrec[:, idx, :, :] - data[idx, :, :])**2).item()
+                    for cls in list(set(classes)):
+                        idx = [i for i, val in enumerate(y_data) if val[0] == cls]
+                        loss_per_class[cls] = compute_masked_mse(
+                            (Xrec[:, idx, :, :] - data[idx, :, :])**2,
+                            mask=mask[idx] if mask is not None else None
+                        ).item()
+                    
+                    for patient_id in list(set(patient_ids)):
+                        idx = [i for i, val in enumerate(patient_ids) if val[1] == patient_id]
+                        loss_per_patient[patient_id] = torch.mean((Xrec[:, idx, :, :] - data[idx, :, :])**2).item()
 
 
     return dict_mse, dict_misc, loss_per_class, loss_per_patient
 
 
-def compute_loss(model, data, y, L, num_observations, mask=None, out_channels=None):
+def compute_loss(model, data, y, L, num_observations, mask=None, out_channels=None, calculate_y=True):
     """
     Compute loss for optimization
     @param model: mo/node  
@@ -167,37 +168,42 @@ def compute_loss(model, data, y, L, num_observations, mask=None, out_channels=No
     classes = []
     run_ids = []
 
-    for (cls, run_id) in y:
-        classes.append(cls)
-        run_ids.append(run_id)
+    if calculate_y:
+        for (cls, run_id) in y:
+            classes.append(cls)
+            run_ids.append(run_id)
 
-    for cls in list(set(classes)):
-        idx = [i for i, val in enumerate(classes) if val == cls]
-        loss_per_class[cls] = compute_masked_mse((Xrec[:, idx, :, :] - data[idx, :, :])**2,  mask=mask[idx]).cpu().detach().numpy()
+        for cls in list(set(classes)):
+            idx = [i for i, val in enumerate(classes) if val == cls]
+            loss_per_class[cls] = compute_masked_mse((Xrec[:, idx, :, :] - data[idx, :, :])**2,  mask=mask[idx]).cpu().detach().numpy()
 
-    for run_id in list(set(run_ids)):
-        idx = [i for i, val in enumerate(run_ids) if val == run_id]
-        loss_per_patient[run_id] = compute_masked_mse((Xrec[:, idx, :, :] - data[idx, :, :])**2,  mask=mask[idx]).cpu().detach().numpy()
+        for run_id in list(set(run_ids)):
+            idx = [i for i, val in enumerate(run_ids) if val == run_id]
+            loss_per_patient[run_id] = compute_masked_mse((Xrec[:, idx, :, :] - data[idx, :, :])**2,  mask=mask[idx]).cpu().detach().numpy()
 
     #compute loss
     if model.model =='sonode':
-        mse = compute_masked_mse((Xrec-data)**2, mask=mask)
-
-        loss = mse 
-        return loss, 0.0, 0.0, Xrec, ztL, mse, c, m
+        se  = (Xrec - data) ** 2
+        mse = compute_masked_mse(se, mask=mask)
+        mse_per_lead = compute_masked_mse(se, mask=mask, dims=(0, 1, 2))
+        loss = mse
+        return loss, 0.0, 0.0, Xrec, ztL, mse, c, m, loss_per_class, loss_per_patient, 0.0, mse_per_lead
     
     elif model.model =='node' or model.model == 'hbnode':
         lhood, kl_z0 = elbo(model, data, Xrec, s0_mu, s0_logv, v0_mu, v0_logv,L, mask=mask)
-        
+
         lhood = lhood * num_observations
         kl_z0 = kl_z0 * num_observations
 
         sobolov_loss = compute_sobolov(data, Xrec, weight=model.vae.decoder.w_dt, mask=mask) * num_observations
         loss  = - lhood + kl_z0 + sobolov_loss
-        
-        mse   = compute_masked_mse((Xrec-data)**2, mask=mask)
-        return loss, -lhood, kl_z0, Xrec, ztL, mse, c, m, loss_per_class, loss_per_patient, sobolov_loss
-    
+
+        se = (Xrec - data) ** 2  # (L, N, T, D)
+        mse = compute_masked_mse(se, mask=mask)
+        # Per-lead MSE: reduce over L, N, T → (D,)
+        mse_per_lead = compute_masked_mse(se, mask=mask, dims=(1, 2))
+        return loss, -lhood, kl_z0, Xrec, ztL, mse, c, m, loss_per_class, loss_per_patient, sobolov_loss, mse_per_lead
+
 
 def compute_sobolov(X, Xrec, weight, mask=None):
     Xhat_dt = torch.diff(Xrec, dim=2, prepend=Xrec[:, :, :1])
@@ -268,6 +274,8 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
     custom_channel = None
     out_ecg_lead_idx = None
+
+    has_label = params['dataset'].lower() == 'medalcare-xl'
     if args.task == 'ecg':
         exclude_leads = params['exclude_leads_in']
         lead_idx = {
@@ -299,6 +307,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             T_ += ep_inc_v
         loss_per_class = defaultdict(list)
         loss_per_patient = defaultdict(list)
+        mse_per_lead_accum = []
 
         for itr, (local_batch, local_y, local_mask) in enumerate(trainset):
             tr_minibatch = local_batch.to(model.device) # N,T,...
@@ -313,15 +322,17 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 tr_minibatch = tr_minibatch.repeat([N_,1,1])
                 tr_minibatch = torch.stack([tr_minibatch[n,t0:t0+T_] for n,t0 in enumerate(t0s)]) # N*ns,T//2,d
                 
-            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _, _loss_per_class, _loss_per_patient, sobolov_loss = compute_loss(
-                model, 
-                tr_minibatch, 
-                local_y, 
-                L, 
-                mask=local_mask, 
+            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _, _loss_per_class, _loss_per_patient, sobolov_loss, _mse_per_lead = compute_loss(
+                model,
+                tr_minibatch,
+                local_y,
+                L,
+                mask=local_mask,
                 num_observations = len(trainset.dataset.file_paths),
-                out_channels=out_ecg_lead_idx
+                out_channels=out_ecg_lead_idx,
+                calculate_y=has_label
             )
+            mse_per_lead_accum.append(_mse_per_lead.detach().cpu().numpy())
 
             optimizer.zero_grad()
             loss.backward() 
@@ -337,11 +348,12 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 kl_z0_meter.update(kl_z0.item(), global_itr)
             global_itr +=1
 
-            for _cls, cls_mse in _loss_per_class.items():
-                loss_per_class[_cls].append(cls_mse)
+            if has_label:
+                for _cls, cls_mse in _loss_per_class.items():
+                    loss_per_class[_cls].append(cls_mse)
 
-            for run_id, patient_mse in _loss_per_patient.items():
-                loss_per_patient[run_id].append(patient_mse)
+                for run_id, patient_mse in _loss_per_patient.items():
+                    loss_per_patient[run_id].append(patient_mse)
 
             time_val = datetime.now()-start_time
             run.log({
@@ -350,36 +362,49 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 'train/mse': tr_mse.item(),
                 'train/nll': nlhood.item(),
                 'train/kl_z0': kl_z0.item(),
-                'train/nll_dt': sobolov_loss.item(), 
-                'train/nll_dt_ratio': sobolov_loss.item() / nlhood.item()
+                'train/nll_dt': float(sobolov_loss),
+                'train/nll_dt_ratio': float(sobolov_loss) / (float(nlhood) + 1e-8)
             })
         
-        table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in loss_per_class.items()],
-                                columns=["class", "mse"])
+        if has_label:
+            table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in loss_per_class.items()],
+                                    columns=["class", "mse"])
 
-        run.log({
-            "train/mse_per_class": wandb.plot.bar(
-                table, 
-                "class", 
-                "mse", 
-                title="MSE per class"
+            run.log({
+                "train/mse_per_class": wandb.plot.bar(
+                    table, 
+                    "class", 
+                    "mse", 
+                    title="MSE per class"
+                )
+            })
+
+            
+            table = wandb.Table(data=[[patient_id, np.mean(patient_loss)] for patient_id, patient_loss in loss_per_patient.items()],
+                                    columns=["patient_id", "mse"])
+
+            run.log({
+                "train/mse_per_patient": wandb.plot.bar(
+                    table, 
+                    "patient_id", 
+                    "mse", 
+                    title="MSE per patient"
+                )
+            })
+
+        if mse_per_lead_accum:
+            mean_mse_per_lead = np.stack(mse_per_lead_accum).mean(axis=0)  # (D,)
+            lead_labels = custom_channel if custom_channel else list(range(len(mean_mse_per_lead)))
+            table = wandb.Table(
+                data=[[str(lead), float(v)] for lead, v in zip(lead_labels, mean_mse_per_lead)],
+                columns=["lead", "mse"]
             )
-        })
-
-        table = wandb.Table(data=[[patient_id, np.mean(patient_loss)] for patient_id, patient_loss in loss_per_patient.items()],
-                                columns=["patient_id", "mse"])
-
-        run.log({
-            "train/mse_per_patient": wandb.plot.bar(
-                table, 
-                "patient_id", 
-                "mse", 
-                title="MSE per patient"
-            )
-        })
+            run.log({
+                "train/mse_per_lead": wandb.plot.bar(table, "lead", "mse", title="Train MSE per lead")
+            })
 
         with torch.no_grad():
-            
+
             dict_valid_mses = {}
             dict_valid_misc = {
                 'mse_t': [],
@@ -391,7 +416,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
             for valid_batch, valid_y, valid_mask in validset:
                 valid_batch = valid_batch.to(model.device)
-                dict_mse, dict_misc, _loss_per_class, _loss_per_patient = compute_mse(model, valid_batch, valid_y, T_train, mask=valid_mask, out_channels=out_ecg_lead_idx)
+                dict_mse, dict_misc, _loss_per_class, _loss_per_patient = compute_mse(model, valid_batch, valid_y, T_train, mask=valid_mask, out_channels=out_ecg_lead_idx, has_label=has_label)
                 for key,val in dict_mse.items():
                     if key not in dict_valid_mses:
                         dict_valid_mses[key] = []
@@ -462,29 +487,30 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 )
             })
             
-            table = wandb.Table(data=[[patient_id, np.mean(patient_loss)] for patient_id, patient_loss in val_loss_per_patient.items()],
-                                columns=["patient_id", "mse"])
+            if has_label:
+                table = wandb.Table(data=[[patient_id, np.mean(patient_loss)] for patient_id, patient_loss in val_loss_per_patient.items()],
+                                    columns=["patient_id", "mse"])
 
-            run.log({
-                "val/mse_per_patient": wandb.plot.bar(
-                    table, 
-                    "patient_id", 
-                    "mse", 
-                    title="MSE per patient"
-                )
-            })
+                run.log({
+                    "val/mse_per_patient": wandb.plot.bar(
+                        table, 
+                        "patient_id", 
+                        "mse", 
+                        title="MSE per patient"
+                    )
+                })
 
-            table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in val_loss_per_class.items()],
-                                columns=["class", "mse"])
+                table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in val_loss_per_class.items()],
+                                    columns=["class", "mse"])
 
-            run.log({
-                "val/mse_per_class": wandb.plot.bar(
-                    table, 
-                    "class", 
-                    "mse", 
-                    title="MSE per class"
-                )
-            })
+                run.log({
+                    "val/mse_per_class": wandb.plot.bar(
+                        table, 
+                        "class", 
+                        "mse", 
+                        title="MSE per class"
+                    )
+                })
 
             logger.info('Epoch:{:4d}/{:4d} | tr_loss:{:8.2f}({:8.2f}) | valid_mse T={} :{:5.3f} | valid_mse T={} :{:5.3f} '.\
                     format(ep, args.Nepoch, loss_meter.val, loss_meter.avg, T_rec, valid_mse_rec, T_for, valid_mse_for)) 
@@ -520,7 +546,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 # test_mse = {}
                 for test_batch, test_y, test_mask in testset:
                     test_batch = test_batch.to(model.device)
-                    dict_mse, dict_misc, _loss_per_class, _loss_per_patient = compute_mse(model, test_batch, test_y, T_train, L=1, task=args.task, mask=test_mask, out_channels=out_ecg_lead_idx)
+                    dict_mse, dict_misc, _loss_per_class, _loss_per_patient = compute_mse(model, test_batch, test_y, T_train, L=1, task=args.task, mask=test_mask, out_channels=out_ecg_lead_idx, has_label=has_label)
                     for key,val in dict_mse.items():
                         if key not in dict_test_mses:
                             dict_test_mses[key] = []
@@ -593,29 +619,31 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                         title="MSE per Lead"
                     )
                 })
-                table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in test_loss_per_class.items()],
-                                columns=["class", "mse"])
 
-                run.log({
-                    "test/mse_per_class": wandb.plot.bar(
-                        table, 
-                        "class", 
-                        "mse", 
-                        title="MSE per class"
-                    )
-                })
+                if has_label:
+                    table = wandb.Table(data=[[_cls, np.mean(cls_loss)] for _cls, cls_loss in test_loss_per_class.items()],
+                                    columns=["class", "mse"])
 
-                table = wandb.Table(data=[[patient_id, np.mean(patient_loss)] for patient_id, patient_loss in test_loss_per_patient.items()],
-                                columns=["patient_id", "mse"])
+                    run.log({
+                        "test/mse_per_class": wandb.plot.bar(
+                            table, 
+                            "class", 
+                            "mse", 
+                            title="MSE per class"
+                        )
+                    })
 
-                run.log({
-                    "test/mse_per_patient": wandb.plot.bar(
-                        table, 
-                        "patient_id", 
-                        "mse", 
-                        title="MSE per patient"
-                    )
-                })
+                    table = wandb.Table(data=[[patient_id, np.mean(patient_loss)] for patient_id, patient_loss in test_loss_per_patient.items()],
+                                    columns=["patient_id", "mse"])
+
+                    run.log({
+                        "test/mse_per_patient": wandb.plot.bar(
+                            table, 
+                            "patient_id", 
+                            "mse", 
+                            title="MSE per patient"
+                        )
+                    })
 
             if ep % args.plot_every==0 or (ep+1) == args.Nepoch:
                 plot_tr_batch = trainset.dataset.get_class_samples(k=1)

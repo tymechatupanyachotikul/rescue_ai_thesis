@@ -60,12 +60,18 @@ def get_data_params(root_dir, dataset, sample_type, beat_type, task, exclude_lea
 
 		for file_path in os.listdir(base_dir):
 			if file_path.endswith('.pth'):
-				split_info['file_paths'].append(os.path.join(base_dir, file_path))
+				if dataset.lower() == 'medalcare-xl':
+					split_info['file_paths'].append(os.path.join(base_dir, file_path))
 
-				path_split = file_path.split('_')
-				split_info['run_id'].append(path_split[1])
-				split_info['class'].append('_'.join(path_split[3:]).split('.')[0])
-		
+					path_split = file_path.split('_')
+					split_info['run_id'].append(path_split[1])
+					split_info['class'].append('_'.join(path_split[3:]).split('.')[0])
+				else:
+					split_info['file_paths'].append(os.path.join(base_dir, file_path))
+
+					path_split = file_path.split('_')
+					split_info['run_id'].append(path_split[-1].split('.')[0])
+
 		split_dict[split] = split_info
 	
 	with open(data_param_path, 'w') as f:
@@ -153,9 +159,9 @@ class ECGDataset(data.Dataset):
 
 		return X, y
 	
-	def get_class_samples(self, k=3):
+	def get_class_samples(self, k=3, classes=None):
 
-		all_classes = set(self.labels)
+		all_classes = set(self.labels) if classes == None else classes
 		classes_dict = {}
 		for _cls in all_classes:
 			idx = [i for i, val in enumerate(self.labels) if val == _cls]
@@ -221,8 +227,8 @@ def __build_dataset(num_workers, batch_size, train_params, valid_params, test_pa
 	
 	trainset  = ECGDataset(
 		train_params['file_paths'], 
-		train_params['class'], 
-		train_params['run_id'], 
+		train_params.get('class', None), 
+		train_params.get('run_id', None), 
 		dtype, 
 		dataset,
 		train_params['exclude_leads_in'],
