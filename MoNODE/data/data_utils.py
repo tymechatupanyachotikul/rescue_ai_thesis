@@ -146,7 +146,7 @@ def __load_data(args, dtype, dataset=None):
 class ECGDataset(data.Dataset):
 	def __init__(self, file_paths, labels, run_id, dtype, dataset, exclude_leads=[], shared_cache=None, return_file_path=False):
 		self.file_paths = file_paths
-		self.labels = labels if self.labels else None
+		self.labels = labels if labels else None
 		self.run_id = run_id
 		self.exclude_leads = exclude_leads
 		self.cache = shared_cache
