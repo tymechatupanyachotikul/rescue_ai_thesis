@@ -129,6 +129,9 @@ parser.add_argument('--model_path', type=str,
 parser.add_argument('--analysis_latent', required=False, default=False, action='store_true',
                     help="Whether to do latent space analysis")
 
+LEAD_NAMES = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
+
+
 def _collect_sample_results(dataloader, model, args, class_filter=None):
     """Run inference over a dataloader and collect per-sample results.
 
@@ -372,3 +375,58 @@ if __name__ == '__main__':
     )
     train_results, _ = _collect_sample_results(filtered_loader, model, args)
     save_results(train_results, 'train')
+
+    # ── MSE heatmaps (classes × leads) ────────────────────────────────────────
+    def _mse_matrix(results):
+        """Return (classes, lead_names, matrix[n_cls, n_leads]) for a result list."""
+        classes    = sorted({r['class'] for r in results})
+        n_leads    = len(results[0]['mse_per_lead'])
+        lead_names = [LEAD_NAMES[i] if i < len(LEAD_NAMES) else f'L{i}' for i in range(n_leads)]
+        matrix     = np.array([
+            np.array([r['mse_per_lead'] for r in results if r['class'] == cls]).mean(axis=0)
+            for cls in classes
+        ])
+        return classes, lead_names, matrix
+
+    def _save_heatmap(matrix, row_labels, col_labels, title, filename, cmap='YlOrRd', vmin=None, vmax=None):
+        fig, ax = plt.subplots(figsize=(max(8, len(col_labels) * 0.8), max(4, len(row_labels) * 0.5)))
+        clim = {}
+        if vmin is not None:
+            clim['vmin'] = vmin
+        if vmax is not None:
+            clim['vmax'] = vmax
+        im = ax.imshow(matrix, aspect='auto', cmap=cmap, interpolation='nearest', **clim)
+        ax.set_xticks(range(len(col_labels)))
+        ax.set_xticklabels(col_labels, fontsize=10)
+        ax.set_yticks(range(len(row_labels)))
+        ax.set_yticklabels(row_labels, fontsize=10)
+        ax.set_xlabel('Lead', fontsize=11)
+        ax.set_ylabel('Class', fontsize=11)
+        ax.set_title(title, fontsize=13, fontweight='bold')
+        for i in range(len(row_labels)):
+            for j in range(len(col_labels)):
+                ax.text(j, i, f'{matrix[i, j]:.4f}', ha='center', va='center', fontsize=7)
+        fig.colorbar(im, ax=ax, pad=0.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_directory, filename), dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"Saved heatmap to {os.path.join(save_directory, filename)}")
+
+    test_classes,  lead_names, test_matrix  = _mse_matrix(sample_results)
+    train_classes, _,          train_matrix = _mse_matrix(train_results)
+
+    _save_heatmap(test_matrix,  test_classes,  lead_names, 'Masked MSE — test set (classes × leads)',  'mse_heatmap_test.png')
+    _save_heatmap(train_matrix, train_classes, lead_names, 'Masked MSE — train set (classes × leads)', 'mse_heatmap_train.png')
+
+    # Ratio heatmap — only for classes present in both sets
+    common_classes = [cls for cls in test_classes if cls in train_classes]
+    if common_classes:
+        test_rows  = np.array([test_matrix[test_classes.index(cls)]   for cls in common_classes])
+        train_rows = np.array([train_matrix[train_classes.index(cls)] for cls in common_classes])
+        ratio      = np.log2(test_rows / np.where(train_rows > 0, train_rows, np.nan))
+        abs_max    = np.nanmax(np.abs(ratio))
+        _save_heatmap(ratio, common_classes, lead_names,
+                      'log₂(MSE test / MSE train) — classes × leads\n'
+                      'red = test worse, blue = train worse',
+                      'mse_heatmap_ratio_test_vs_train.png',
+                      cmap='RdBu_r', vmin=-abs_max, vmax=abs_max)
