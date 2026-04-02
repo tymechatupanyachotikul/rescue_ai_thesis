@@ -132,6 +132,30 @@ parser.add_argument('--analysis_latent', required=False, default=False, action='
 LEAD_NAMES = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
 
 
+def _collect_mse_only(dataloader, model, args):
+    """Lightweight pass: collect only (class, mse_per_lead) — no ECG tensors stored."""
+    records = []
+    ecg_dataset = getattr(dataloader.dataset, 'dataset', dataloader.dataset)
+    ecg_dataset.return_file_path = False
+
+    with torch.no_grad():
+        for batch, batch_y, mask in dataloader:
+            batch    = batch.to(model.device)
+            mask     = mask.to(model.device)
+            Xrec, *_ = model(batch, args.plotL, mask=mask)
+            Xrec_mean = Xrec.mean(0)
+            se        = (Xrec_mean - batch) ** 2
+            mask_exp  = mask.unsqueeze(-1).float()
+            n_valid   = mask_exp.sum(dim=1).clamp(min=1)
+            mse_per_lead = (se * mask_exp).sum(dim=1) / n_valid  # (N, D)
+            classes   = [item[0] for item in batch_y]
+            for i, cls in enumerate(classes):
+                records.append({'class': cls, 'mse_per_lead': mse_per_lead[i].cpu().tolist()})
+
+    ecg_dataset.return_file_path = True
+    return records
+
+
 def _collect_sample_results(dataloader, model, args, class_filter=None):
     """Run inference over a dataloader and collect per-sample results.
 
@@ -412,14 +436,19 @@ if __name__ == '__main__':
         plt.close(fig)
         print(f"Saved heatmap to {os.path.join(save_directory, filename)}")
 
-    test_classes,  lead_names, test_matrix  = _mse_matrix(sample_results)
-    train_classes, _,          train_matrix = _mse_matrix(train_results)
+    print("Collecting full trainset MSE for heatmap...")
+    train_all_records = _collect_mse_only(trainset, model, args)
 
-    _save_heatmap(test_matrix,  test_classes,  lead_names, 'Masked MSE — test set (classes × leads)',  'mse_heatmap_test.png')
-    _save_heatmap(train_matrix, train_classes, lead_names, 'Masked MSE — train set (classes × leads)', 'mse_heatmap_train.png')
+    test_classes,      lead_names, test_matrix      = _mse_matrix(sample_results)
+    train_all_classes, _,          train_all_matrix = _mse_matrix(train_all_records)
+
+    _save_heatmap(test_matrix,      test_classes,      lead_names, 'Masked MSE — test set (classes × leads)',  'mse_heatmap_test.png')
+    _save_heatmap(train_all_matrix, train_all_classes, lead_names, 'Masked MSE — train set (classes × leads)', 'mse_heatmap_train.png')
 
     # Ratio heatmap — only for classes present in both sets
-    common_classes = [cls for cls in test_classes if cls in train_classes]
+    common_classes = [cls for cls in test_classes if cls in train_all_classes]
+    train_classes  = train_all_classes
+    train_matrix   = train_all_matrix
     if common_classes:
         test_rows  = np.array([test_matrix[test_classes.index(cls)]   for cls in common_classes])
         train_rows = np.array([train_matrix[train_classes.index(cls)] for cls in common_classes])
