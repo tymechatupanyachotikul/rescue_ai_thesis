@@ -153,7 +153,7 @@ class ECGDataset(data.Dataset):
 		self.dtype = dtype
 		self.return_file_path = return_file_path
 		self.dataset = dataset
-		
+
 		self.lead_idx = {
 			'I': 0, 
 			'II': 1,
@@ -195,8 +195,8 @@ class ECGDataset(data.Dataset):
 			
 			if self.include_idx is not None:
 				X = X[:, self.include_idx]
-			if self.dataset.lower() != 'medalcare-xl':
-				X = filter_bandpass(X, 500) 
+			# if self.dataset.lower() != 'medalcare-xl':
+			# 	X = filter_bandpass(X, 500) 
 			if self.cache is not None and idx not in self.cache:
 				self.cache[idx] = X
 		
@@ -208,29 +208,30 @@ class ECGDataset(data.Dataset):
 		return X, y
 	
 	def get_class_samples(self, k=3, classes=None):
-
-		all_classes = set(self.labels) if classes == None else classes
-		classes_dict = {}
-		for _cls in all_classes:
-			idx = [i for i, val in enumerate(self.labels) if val == _cls]
-			idx = random.sample(idx, k=k)
-
-			samples = []
-			for i in idx:
-				if self.cache is not None and i in self.cache:
-					samples.append(self.cache[i])
-				else:
-					X = torch.load(self.file_paths[i]).to(dtype=self.dtype)
-					if self.permute_lead:
-						X = X[:, self.idx_map]
-					
-					if self.include_idx is not None:
-						X = X[:, self.include_idx]
-					samples.append(X)
-			
-			classes_dict[_cls] = pad_sequence(samples, batch_first=True, padding_value=0.0)
 		
-		return classes_dict
+		if self.labels:
+			all_classes = set(self.labels) if classes == None else classes
+			classes_dict = {}
+			for _cls in all_classes:
+				idx = [i for i, val in enumerate(self.labels) if val == _cls]
+				idx = random.sample(idx, k=k)
+
+				samples = []
+				for i in idx:
+					if self.cache is not None and i in self.cache:
+						samples.append(self.cache[i])
+					else:
+						X = torch.load(self.file_paths[i]).to(dtype=self.dtype)
+						if self.permute_lead:
+							X = X[:, self.idx_map]
+						
+						if self.include_idx is not None:
+							X = X[:, self.include_idx]
+						samples.append(X)
+				
+				classes_dict[_cls] = pad_sequence(samples, batch_first=True, padding_value=0.0)
+		
+			return classes_dict
 	
 
 def pad_collate(batch):

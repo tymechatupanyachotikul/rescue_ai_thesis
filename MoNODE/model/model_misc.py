@@ -398,9 +398,9 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
         if mse_per_lead_accum:
             print(f'MSE per lead accum shape: {np.array(mse_per_lead_accum).shape}')
 
-            mean_mse_per_lead = np.stack(mse_per_lead_accum).mean(axis=0)  # (D,)
+            mean_mse_per_lead = np.stack(mse_per_lead_accum).mean(axis=0).squeeze()  # (D,)
             print(f'Mean MSE per lead shape: {mean_mse_per_lead.shape}')
-            
+
             lead_labels = custom_channel if custom_channel else list(range(len(mean_mse_per_lead)))
             table = wandb.Table(
                 data=[[str(lead), v] for lead, v in zip(lead_labels, mean_mse_per_lead.tolist())],
@@ -653,8 +653,8 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                     })
 
             if ep % args.plot_every==0 or (ep+1) == args.Nepoch:
-                plot_tr_batch = trainset.dataset.get_class_samples(k=1)
-                plot_valid_batch = validset.dataset.get_class_samples(k=1)
+                plot_tr_batch = trainset.dataset.get_class_samples(k=1) if has_label else {0: tr_minibatch}
+                plot_valid_batch = validset.dataset.get_class_samples(k=1) if has_label else {0: valid_batch}
 
                 train_plot_dict = {}
                 valid_plot_dict = {}
