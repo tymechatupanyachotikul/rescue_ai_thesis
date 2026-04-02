@@ -11,7 +11,8 @@ from model.misc.plot_utils import plot_ecg_out
 from model.model_misc import compute_loss
 from matplotlib.animation import FFMpegWriter
 from sklearn.manifold import TSNE
-from collections import defaultdict 
+from collections import defaultdict
+from scipy.spatial.distance import pdist
 
 SOLVERS   = ["euler", "bdf", "rk4", "midpoint", "adams", "explicit_adams", "fixed_adams", "dopri5"]
 TASKS     = ['rot_mnist', 'rot_mnist_ou', 'sin', 'bb', 'lv', 'mocap', 'mocap_shift', 'ecg']
@@ -459,3 +460,75 @@ if __name__ == '__main__':
                       'red = test worse, blue = train worse',
                       'mse_heatmap_ratio_test_vs_train.png',
                       cmap='RdBu_r', vmin=-abs_max, vmax=abs_max)
+
+    # ── Maximum Mean Discrepancy (test vs train, per class) ───────────────────
+    def _rbf_kernel(X, Y, sigma):
+        """RBF kernel matrix K(X, Y) with bandwidth sigma."""
+        # ||x - y||^2 = ||x||^2 + ||y||^2 - 2 x·y
+        XX = (X ** 2).sum(axis=1, keepdims=True)
+        YY = (Y ** 2).sum(axis=1, keepdims=True)
+        sq_dists = XX + YY.T - 2 * X @ Y.T
+        return np.exp(-sq_dists / (2 * sigma ** 2))
+
+    def _mmd(X, Y, sigma=1.0):
+        """Unbiased MMD² estimate between samples X and Y (n_samples × n_features)."""
+        n, m = len(X), len(Y)
+        Kxx = _rbf_kernel(X, X, sigma)
+        Kyy = _rbf_kernel(Y, Y, sigma)
+        Kxy = _rbf_kernel(X, Y, sigma)
+        # Unbiased: zero diagonal of same-set kernels
+        np.fill_diagonal(Kxx, 0)
+        np.fill_diagonal(Kyy, 0)
+        return (Kxx.sum() / (n * (n - 1))
+                + Kyy.sum() / (m * (m - 1))
+                - 2 * Kxy.mean())
+
+    def _features(results_list):
+        """Extract mse_per_lead as feature matrix (N, D)."""
+        return np.array([r['mse_per_lead'] for r in results_list])
+
+    # Choose sigma as median pairwise distance (median heuristic)
+    all_feats = _features(sample_results + train_results)
+    sigma = np.median(pdist(all_feats)) if len(all_feats) > 1 else 1.0
+
+    mmd_classes = sorted(set(r['class'] for r in sample_results) &
+                         set(r['class'] for r in train_results))
+    mmd_values  = {}
+    for cls in mmd_classes:
+        X = _features([r for r in sample_results if r['class'] == cls])
+        Y = _features([r for r in train_results  if r['class'] == cls])
+        if len(X) < 2 or len(Y) < 2:
+            print(f"Skipping MMD for class '{cls}': too few samples (test={len(X)}, train={len(Y)})")
+            continue
+        mmd_values[cls] = _mmd(X, Y, sigma)
+        print(f"MMD² [{cls}]: {mmd_values[cls]:.6f}  (test n={len(X)}, train n={len(Y)})")
+
+    if mmd_values:
+        classes_sorted = sorted(mmd_values)
+        vals = [mmd_values[c] for c in classes_sorted]
+
+        fig, ax = plt.subplots(figsize=(max(6, len(classes_sorted) * 0.9), 5))
+        bars = ax.bar(range(len(classes_sorted)), vals, color='#6366f1', alpha=0.85)
+        ax.set_xticks(range(len(classes_sorted)))
+        ax.set_xticklabels(classes_sorted, rotation=35, ha='right', fontsize=10)
+        ax.set_xlabel('Class', fontsize=11)
+        ax.set_ylabel('MMD²', fontsize=11)
+        ax.set_title('Maximum Mean Discrepancy² — test vs train per class\n'
+                     f'(RBF kernel, σ={sigma:.4f}, median heuristic)',
+                     fontsize=12, fontweight='bold', color='#1f2937')
+        for bar, val in zip(bars, vals):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.01,
+                    f'{val:.4f}', ha='center', va='bottom', fontsize=9)
+        ax.grid(True, axis='y', linestyle='--', linewidth=0.5, color='#e5e7eb', zorder=0)
+        ax.set_axisbelow(True)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        plt.tight_layout()
+        mmd_plot_path = os.path.join(save_directory, 'mmd_test_vs_train.png')
+        plt.savefig(mmd_plot_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"Saved MMD plot to {mmd_plot_path}")
+
+        with open(os.path.join(save_directory, 'mmd_results.json'), 'w') as f:
+            json.dump({'sigma': float(sigma), 'mmd2': mmd_values}, f, indent=2)
+        print(f"Saved MMD results to {os.path.join(save_directory, 'mmd_results.json')}")
