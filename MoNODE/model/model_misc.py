@@ -458,8 +458,8 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                     fields={
                         "x": "timestep",
                         "y": "mean",
-                        "lower": "lower",
-                        "upper": "upper"
+                        "lower_bound": "lower",
+                        "upper_bound": "upper"
                     }
                 )
             })
@@ -591,8 +591,8 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                         fields={
                             "x": "timestep",
                             "y": "mean",
-                            "lower": "lower",
-                            "upper": "upper"
+                            "lower_bound": "lower",
+                            "upper_bound": "upper"
                         }
                     )
                 })
