@@ -237,6 +237,7 @@ def _collect_sample_latents(dataloader, model, split, args):
     targets = phenotypes['targets'].cpu()
     columns = phenotypes['columns']
     not_found = 0
+    print(f'Dataset size : {len(dataloader.dataset.file_paths)}')
     with torch.no_grad():
         for batch, batch_y, mask in tqdm(dataloader, desc="Collecting latents"):
             batch = batch.to(model.device)
