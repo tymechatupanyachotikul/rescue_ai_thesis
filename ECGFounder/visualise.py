@@ -85,7 +85,7 @@ def save_umap_reduction(split, root_dir):
                     indices.append(i)
 
         is_binary = key.lower() in BINARY_LABELS
-        is_categorical = isinstance(out_labels, str)
+        is_categorical = isinstance(out_labels[0], str)
         plot_dir = os.path.join(root_dir, f'plots')
         os.makedirs(plot_dir, exist_ok=True)
 
@@ -234,3 +234,5 @@ def plot_split_umap(file_path):
 root_dir = '/gpfs/home6/tchatupanyacho/rescue_ai_thesis/MoNODE/results/ecg/node/01_04_2026-02:54:55-0/latents'
 for split in ['train', 'all']:
     save_umap_reduction(split, root_dir)
+
+    
