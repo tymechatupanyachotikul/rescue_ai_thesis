@@ -223,7 +223,8 @@ def _collect_sample_latents(dataloader, model, split, args):
     # For a plain DataLoader the dataset is ECGDataset; for a Subset it's one level deeper
     ecg_dataset = getattr(dataloader.dataset, 'dataset', dataloader.dataset)
     ecg_dataset.return_file_path = True
-    model.return_latent = True 
+    model.eval()
+    model.return_latent = True
 
     metadata_dict = [] 
     latent_tensors = {
