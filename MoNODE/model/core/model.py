@@ -171,6 +171,9 @@ class MoNODE(nn.Module):
             Xrec = self.build_decoding(ztL, out_shape, c)
         
         if self.return_latent:
-            return z0, m
+            if self.model == 'node' or self.model == 'hbnode':
+                return z0, m
+            elif self.model == 'vae':
+                return z0, None
         else:
             return Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), InvMatrix, c, m

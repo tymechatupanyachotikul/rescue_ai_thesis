@@ -39,6 +39,8 @@ parser.add_argument('--dataset_root', type=str, default='/projects/prjs1890/',
                     help="dataset location for ecg")
 parser.add_argument('--segment_type', choices=['atrial', 'ventricular'],
                     help="Segment type of heart beat", type=str)
+parser.add_argument('--dataset', type=str, default='medalcare-xl',  
+                    help="ECG dataset name")
 #de model
 parser.add_argument('--model', type=str, default='node', choices=MODELS,
                     help='node model type')
@@ -225,6 +227,7 @@ def _collect_sample_latents(dataloader, model, split, args):
     ecg_dataset.return_file_path = True
     model.eval()
     model.return_latent = True
+    dataset = args.dataset
 
     metadata_dict = [] 
     latent_tensors = {
@@ -246,31 +249,47 @@ def _collect_sample_latents(dataloader, model, split, args):
             z0, m = model(batch, args.plotL, mask=mask)
             z0 = z0.squeeze(0).squeeze(1)
             m = m.squeeze(0)
-            
-            print(f'z0 shape : {z0.shape}, m shape: {m.shape}')
-            patient_ids = [item[1] for item in batch_y]
-            filenames   = [item[2] for item in batch_y]
+            if dataset.lower() == 'medalcare-xl':
+                _cls = [item[0] for item in batch_y]
+                patient_ids = [item[1] for item in batch_y]
+                filenames   = [item[2] for item in batch_y]
+            else:
+                patient_ids = [item[1] for item in batch_y]
+                filenames   = [item[2] for item in batch_y]
 
             for i in range(batch.shape[0]):
-                try:
-                    eid_idx = eids.index(patient_ids[i])
-                    labels = {} 
-                    for j, col in enumerate(columns):    
-                        labels[col] = targets[eid_idx, j].item() 
+                if dataset == 'medalcare-xl':
+                    latent_tensors['z0'].append(z0[i].detach().cpu().numpy())
+                    latent_tensors['m'].append(m[i].detach().cpu().numpy())
 
                     metadata_dict.append({
                         'filename':          filenames[i],
                         'patient_id':        patient_ids[i],
-                        'labels':            labels
+                        'labels':             {
+                            'class': _cls[i],
+                            'patient_id': patient_ids[i],
+                        }
                     })
+                else:
+                    try:
+                        eid_idx = eids.index(patient_ids[i])
+                        labels = {} 
+                        for j, col in enumerate(columns):    
+                            labels[col] = targets[eid_idx, j].item() 
 
-                    latent_tensors['z0'].append(z0[i].detach().cpu().numpy())
-                    latent_tensors['m'].append(m[i].detach().cpu().numpy())
+                        metadata_dict.append({
+                            'filename':          filenames[i],
+                            'patient_id':        patient_ids[i],
+                            'labels':            labels
+                        })
 
-                except ValueError:
-                    print(f"Warning: patient_id {patient_ids[i]} not found in phenotypes. Skipping metadata for this sample.")
-                    not_found += 1 
-                    continue 
+                        latent_tensors['z0'].append(z0[i].detach().cpu().numpy())
+                        latent_tensors['m'].append(m[i].detach().cpu().numpy())
+
+                    except ValueError:
+                        print(f"Warning: patient_id {patient_ids[i]} not found in phenotypes. Skipping metadata for this sample.")
+                        not_found += 1 
+                        continue 
     
     print(f"Finished collecting latents. {not_found} patient_ids were not found in phenotypes and were skipped.")
     stacked_tensors = {k: np.stack(v, axis=0) for k, v in latent_tensors.items()}
@@ -345,6 +364,7 @@ if __name__ == '__main__':
 
     if analysis_latent:
         _collect_sample_latents(testset, model, 'test', args)
+        _collect_sample_latents(trainset, model, 'valid', args)
         _collect_sample_latents(trainset, model, 'train', args)
     else:
         sample_results, loss_per_class = _collect_sample_results(testset, model, args)

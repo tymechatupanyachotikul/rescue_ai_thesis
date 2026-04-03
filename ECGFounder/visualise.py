@@ -11,17 +11,35 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 
 def save_umap_reduction(split, root_dir):
-    with open(os.path.join(root_dir, f'latent_meta_dict_{split}.json'), 'r') as f:
-        meta_dict = json.load(f)
+    if split == 'all':
+        z0, m0 = [], []
+        labels = defaultdict(list)
+        for split in ['train', 'test', 'valid']:
+            with open(os.path.join(root_dir, f'latent_meta_dict_{split}.json'), 'r') as f:
+                meta_dict = json.load(f)
 
-    latents_info = np.load(os.path.join(root_dir, f'latent_tensors_{split}.npz'))
-    z0 = latents_info['z0']
-    m = latents_info['m']
-    labels = defaultdict(list)
+            latents_info = np.load(os.path.join(root_dir, f'latent_tensors_{split}.npz'))
+            _z0 = latents_info['z0']
+            _m = latents_info['m']
+            z0.append(_z0)
+            m0.append(_m)
+            for info in meta_dict:
+                for key, value in info['labels'].items():
+                    labels[key].append(value)
+        z0 = np.concatenate(z0, axis=0)
+        m = np.concatenate(m0, axis=0)
+    else:
+        with open(os.path.join(root_dir, f'latent_meta_dict_{split}.json'), 'r') as f:
+            meta_dict = json.load(f)
 
-    for info in meta_dict:
-        for key, value in info['labels'].items():
-            labels[key].append(value)
+        latents_info = np.load(os.path.join(root_dir, f'latent_tensors_{split}.npz'))
+        z0 = latents_info['z0']
+        m = latents_info['m']
+        labels = defaultdict(list)
+
+        for info in meta_dict:
+            for key, value in info['labels'].items():
+                labels[key].append(value)
 
     reducer = umap.UMAP(
         n_neighbors=30,
@@ -44,6 +62,10 @@ def save_umap_reduction(split, root_dir):
         embeddings[key] = reducer.fit_transform(latent)
     print(f'UMAP reduction completed')
 
+    embeddings_save_path = os.path.join(root_dir, f'umap_embeddings_{split}.npz')
+    np.savez(embeddings_save_path, **{k: v for k, v in embeddings.items()})
+    print(f'Embeddings saved: {embeddings_save_path}')
+
     BINARY_LABELS = {'afib', 'mi'}
 
     for key, value in labels.items():
@@ -56,8 +78,14 @@ def save_umap_reduction(split, root_dir):
             elif isinstance(v, (int, bool)):
                 out_labels.append(float(v))
                 indices.append(i)
+            elif isinstance(v, str):
+                # Optionally filter out explicit string "nan"s if they exist in your data
+                if v.lower() not in ['nan', 'none', '']:
+                    out_labels.append(v)
+                    indices.append(i)
 
         is_binary = key.lower() in BINARY_LABELS
+        is_categorical = isinstance(out_labels, str)
         plot_dir = os.path.join(root_dir, f'plots')
         os.makedirs(plot_dir, exist_ok=True)
 
@@ -67,8 +95,25 @@ def save_umap_reduction(split, root_dir):
 
             sns.set_context("talk")
             fig, ax = plt.subplots(figsize=(12, 9), dpi=150)
-
-            if is_binary:
+            if is_categorical:
+                out_labels_arr = np.array(out_labels)
+                unique_classes = np.unique(out_labels_arr)
+                
+                palette = sns.color_palette("husl", len(unique_classes))
+                
+                for cls_val, color in zip(unique_classes, palette):
+                    mask = out_labels_arr == cls_val
+                    ax.scatter(
+                        out_embedding[mask, 0],
+                        out_embedding[mask, 1],
+                        color=color,
+                        label=str(cls_val),
+                        s=15,
+                        alpha=0.7,
+                        edgecolors='none'
+                    )
+                ax.legend(title=key, markerscale=2, frameon=True, bbox_to_anchor=(1.04, 1), loc="upper left")
+            elif is_binary:
                 out_labels_arr = np.array(out_labels)
                 colors = ['#2196F3', '#F44336']
                 class_names = ['Negative (0)', 'Positive (1)']
@@ -186,6 +231,6 @@ def plot_split_umap(file_path):
 #     save_umap_reduction(['test'], save_dir)
             
 #plot_split_umap('/Users/tyme/Desktop/University/Thesis/rescue_ai/results/LVEF/embeddings/full_ft/test_train_embeddings.npz')
-root_dir = '/gpfs/home6/tchatupanyacho/rescue_ai_thesis/MoNODE/results/ecg/node/02_04_2026-23:56:22-0/latents'
-for split in ['train', 'test']:
+root_dir = '/gpfs/home6/tchatupanyacho/rescue_ai_thesis/MoNODE/results/ecg/node/01_04_2026-02:54:55-0/latents'
+for split in ['train', 'all']:
     save_umap_reduction(split, root_dir)
