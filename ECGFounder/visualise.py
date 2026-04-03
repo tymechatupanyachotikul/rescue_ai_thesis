@@ -11,6 +11,9 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 
 def save_umap_reduction(split, root_dir):
+    atrial_classes = ['avblock', 'fam', 'iab', 'lae']
+    ventricular_classes = ['mi', 'lbbb', 'rbbb']
+
     if split == 'all':
         z0, m0 = [], []
         labels = defaultdict(list)
@@ -25,6 +28,8 @@ def save_umap_reduction(split, root_dir):
             m0.append(_m)
             for info in meta_dict:
                 for key, value in info['labels'].items():
+                    if value in atrial_classes:
+                        value = 'sinus'
                     labels[key].append(value)
         z0 = np.concatenate(z0, axis=0)
         m = np.concatenate(m0, axis=0)
