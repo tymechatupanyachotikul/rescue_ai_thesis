@@ -201,7 +201,8 @@ class ECGDataset(data.Dataset):
 				self.cache[idx] = X
 		
 		if self.return_file_path:
-			y = (self.labels[idx], self.run_id[idx], self.file_paths[idx]) if self.labels is not None else 0
+			y = (self.labels[idx], self.run_id[idx], self.file_paths[idx]) if self.labels is not None \
+				else (0, self.run_id[idx], self.file_paths[idx])
 		else:
 			y = (self.labels[idx], self.run_id[idx]) if self.labels is not None else 0
 

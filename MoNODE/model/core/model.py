@@ -15,6 +15,7 @@ class MoNODE(nn.Module):
         self.Nobj = nobj
         self.model = model
         self.Tin = Tin
+        self.return_latent = False
 
     @property
     def device(self):
@@ -154,4 +155,7 @@ class MoNODE(nn.Module):
             ztL = ztL.reshape(L,N,T,-1) # L,T,N, nobj*q
             Xrec = self.build_decoding(ztL, out_shape, c)
         
-        return Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), InvMatrix, c, m
+        if self.return_latent:
+            return z0, m
+        else:
+            return Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), InvMatrix, c, m
