@@ -155,7 +155,6 @@ class MoNODE(nn.Module):
             ztL = ztL.reshape(L,N,T,-1) # L,T,N, nobj*q
             Xrec = self.build_decoding(ztL, out_shape, c)
         
-        print(f'return latent: {self.return_latent}')
         if self.return_latent:
             return z0, m
         else:

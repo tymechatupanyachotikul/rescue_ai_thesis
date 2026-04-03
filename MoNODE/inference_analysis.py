@@ -244,6 +244,9 @@ def _collect_sample_latents(dataloader, model, split, args):
             mask  = mask.to(model.device)
 
             z0, m = model(batch, args.plotL, mask=mask)
+            z0 = z0.squeeze(0).squeeze(1)
+            m = m.squeeze(0)
+            
             print(f'z0 shape : {z0.shape}, m shape: {m.shape}')
             patient_ids = [item[1] for item in batch_y]
             filenames   = [item[2] for item in batch_y]

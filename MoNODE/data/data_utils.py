@@ -87,7 +87,6 @@ def get_data_params(root_dir, dataset, sample_type, beat_type, task, exclude_lea
 
 	splits = ['train', 'valid', 'test']
 	data_param_path = os.path.join('data', task, f'{dataset}_{beat_type}_{sample_type}_data_params.json')
-	print(data_param_path)
 	if os.path.exists(data_param_path):
 		with open(data_param_path, 'r') as f:
 			split_dict = json.load(f)
