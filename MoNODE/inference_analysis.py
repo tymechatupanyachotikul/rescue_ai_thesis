@@ -12,6 +12,7 @@ from model.model_misc import compute_loss
 from matplotlib.animation import FFMpegWriter
 from sklearn.manifold import TSNE
 from collections import defaultdict
+from tqdm import tqdm
 from scipy.spatial.distance import pdist
 
 SOLVERS   = ["euler", "bdf", "rk4", "midpoint", "adams", "explicit_adams", "fixed_adams", "dopri5"]
@@ -214,6 +215,66 @@ def _collect_sample_results(dataloader, model, args, class_filter=None):
     return results, loss_per_class
 
 
+def _collect_sample_latents(dataloader, model, split, args):
+    """Run inference over a dataloader and collect per-sample latent.
+
+    """
+    save_directory = os.path.join(os.path.dirname(args.model_path), 'latents')
+    # For a plain DataLoader the dataset is ECGDataset; for a Subset it's one level deeper
+    ecg_dataset = getattr(dataloader.dataset, 'dataset', dataloader.dataset)
+    ecg_dataset.return_file_path = True
+    model.return_latent = True 
+
+    metadata_dict = [] 
+    latent_tensors = {
+        'z0': [],
+        'm': [],
+    }
+
+    phenotypes = torch.load('/projects/prjs1890/uk_biobank/phenotype_targets.pt')
+    eids = phenotypes['eid'].tolist()
+    targets = phenotypes['targets'].cpu()
+    columns = phenotypes['columns'].tolist()
+    not_found = 0
+    with torch.no_grad():
+        for batch, batch_y, mask in tqdm(dataloader, desc="Collecting latents"):
+            batch = batch.to(model.device)
+            mask  = mask.to(model.device)
+
+            z0, m = model(batch, args.plotL, mask=mask)
+
+            patient_ids = [item[1] for item in batch_y]
+            filenames   = [item[2] for item in batch_y]
+
+            for i in range(batch.shape[0]):
+                try:
+                    eid_idx = eids.index(patient_ids[i])
+                    labels = {} 
+                    for j, col in enumerate(columns):    
+                        labels[col] = targets[eid_idx, j].item() 
+
+                    metadata_dict.append({
+                        'filename':          filenames[i],
+                        'patient_id':        patient_ids[i],
+                        'labels':            labels
+                    })
+
+                    latent_tensors['z0'].append(z0[i].detach().cpu().numpy())
+                    latent_tensors['m'].append(m[i].detach().cpu().numpy())
+
+                except ValueError:
+                    print(f"Warning: patient_id {patient_ids[i]} not found in phenotypes. Skipping metadata for this sample.")
+                    not_found += 1 
+                    continue 
+    
+    print(f"Finished collecting latents. {not_found} patient_ids were not found in phenotypes and were skipped.")
+    stacked_tensors = {k: np.stack(v, axis=0) for k, v in latent_tensors.items()}
+    os.makedirs(save_directory, exist_ok=True)
+    with open(os.path.join(save_directory, f'latent_meta_dict_{split}.json'), 'w') as f:
+        json.dump(metadata_dict, f, indent=2)
+
+    np.savez(os.path.join(save_directory, f'latent_tensors_{split}.npz'), **stacked_tensors)
+
 def get_latent_trajectory(Q, method='pca'):
     [T,q] = Q.shape 
 
@@ -277,26 +338,12 @@ if __name__ == '__main__':
     X_all = []
     X_true_all = []
 
-    sample_results, loss_per_class = _collect_sample_results(testset, model, args)
-
     if analysis_latent:
-        assert trainset is not None
-        n_train = trainset.dataset.shape[0]
-        testset.dataset.return_file_path = True
-        for test_batch, test_y, test_mask in testset:
-            test_batch = test_batch.to(model.device)
-            X, _zt, _, _, C_vl, _, _ = model(test_batch, L=args.plotL)
-            loss, nlhood, kl_z0, Xrec_tr, ztL_tr, tr_mse, _, _, _loss_per_class, nlhood_dt = compute_loss(model, test_batch, test_y, 1, num_observations=n_train)
-            zt.append(_zt[0, :, :, :])
-            X_all.append(X)
-            X_true_all.append(test_batch)
-            cur_samples += _zt.shape[1]
+        _collect_sample_latents(testset, model, 'test', args)
+        _collect_sample_latents(trainset, model, 'train', args)
+    else:
+        sample_results, loss_per_class = _collect_sample_results(testset, model, args)
 
-            if cur_samples >= total_samples:
-                break
-    
-    
-    if analysis_latent:
         zt = torch.cat(zt, dim=0)
         if args.order == 2:
             zt = zt[:, :, : zt.shape[-1] // 2]
@@ -362,173 +409,173 @@ if __name__ == '__main__':
                 line3.set_data(t[:i], X_true_all[0][0, :i, 0].detach().cpu().numpy().flatten())
                 line4.set_data(t[:i], zt_v_norm[:i])
                 writer.grab_frame()
-    save_directory = os.path.join(os.path.dirname(args.model_path), 'analysis_results')
-    os.makedirs(save_directory, exist_ok=True)
+        save_directory = os.path.join(os.path.dirname(args.model_path), 'analysis_results')
+        os.makedirs(save_directory, exist_ok=True)
 
-    def pad_to(tensor, length):
-        T, D = tensor.shape
-        if T < length:
-            tensor = torch.cat([tensor, torch.zeros(length - T, D)], dim=0)
-        return tensor
+        def pad_to(tensor, length):
+            T, D = tensor.shape
+            if T < length:
+                tensor = torch.cat([tensor, torch.zeros(length - T, D)], dim=0)
+            return tensor
 
-    def save_results(results, prefix):
-        meta = [{k: v for k, v in r.items()
-                 if k not in ('original_ecg', 'reconstructed_ecg', 'mask')}
-                for r in results]
-        with open(os.path.join(save_directory, f'{prefix}_results_meta.json'), 'w') as f:
-            json.dump(meta, f, indent=2)
-        max_len = max(r['original_ecg'].shape[0] for r in results)
-        torch.save({
-            'original_ecg':      torch.stack([pad_to(r['original_ecg'], max_len) for r in results]),
-            'reconstructed_ecg': torch.stack([pad_to(r['reconstructed_ecg'], max_len) for r in results]),
-            'mask':              torch.stack([pad_to(r['mask'].unsqueeze(-1).float(), max_len).squeeze(-1) for r in results]),
-        }, os.path.join(save_directory, f'{prefix}_results_tensors.pt'))
+        def save_results(results, prefix):
+            meta = [{k: v for k, v in r.items()
+                    if k not in ('original_ecg', 'reconstructed_ecg', 'mask')}
+                    for r in results]
+            with open(os.path.join(save_directory, f'{prefix}_results_meta.json'), 'w') as f:
+                json.dump(meta, f, indent=2)
+            max_len = max(r['original_ecg'].shape[0] for r in results)
+            torch.save({
+                'original_ecg':      torch.stack([pad_to(r['original_ecg'], max_len) for r in results]),
+                'reconstructed_ecg': torch.stack([pad_to(r['reconstructed_ecg'], max_len) for r in results]),
+                'mask':              torch.stack([pad_to(r['mask'].unsqueeze(-1).float(), max_len).squeeze(-1) for r in results]),
+            }, os.path.join(save_directory, f'{prefix}_results_tensors.pt'))
 
-    save_results(sample_results, 'test')
+        save_results(sample_results, 'test')
 
-    TRAIN_CLASS_FILTER = {'lbbb', 'rbbb'}
-    train_dataset = trainset.dataset
-    filtered_indices = [i for i, lbl in enumerate(train_dataset.labels) if lbl in TRAIN_CLASS_FILTER]
-    filtered_subset  = torch.utils.data.Subset(train_dataset, filtered_indices)
-    filtered_loader  = torch.utils.data.DataLoader(
-        filtered_subset,
-        batch_size=trainset.batch_size,
-        shuffle=False,
-        num_workers=trainset.num_workers,
-        collate_fn=trainset.collate_fn,
-        pin_memory=trainset.pin_memory,
-    )
-    train_results, _ = _collect_sample_results(filtered_loader, model, args)
-    save_results(train_results, 'train')
+        TRAIN_CLASS_FILTER = {'lbbb', 'rbbb'}
+        train_dataset = trainset.dataset
+        filtered_indices = [i for i, lbl in enumerate(train_dataset.labels) if lbl in TRAIN_CLASS_FILTER]
+        filtered_subset  = torch.utils.data.Subset(train_dataset, filtered_indices)
+        filtered_loader  = torch.utils.data.DataLoader(
+            filtered_subset,
+            batch_size=trainset.batch_size,
+            shuffle=False,
+            num_workers=trainset.num_workers,
+            collate_fn=trainset.collate_fn,
+            pin_memory=trainset.pin_memory,
+        )
+        train_results, _ = _collect_sample_results(filtered_loader, model, args)
+        save_results(train_results, 'train')
 
-    # ── MSE heatmaps (classes × leads) ────────────────────────────────────────
-    def _mse_matrix(results):
-        """Return (classes, lead_names, matrix[n_cls, n_leads]) for a result list."""
-        classes    = sorted({r['class'] for r in results})
-        n_leads    = len(results[0]['mse_per_lead'])
-        lead_names = [LEAD_NAMES[i] if i < len(LEAD_NAMES) else f'L{i}' for i in range(n_leads)]
-        matrix     = np.array([
-            np.array([r['mse_per_lead'] for r in results if r['class'] == cls]).mean(axis=0)
-            for cls in classes
-        ])
-        return classes, lead_names, matrix
+        # ── MSE heatmaps (classes × leads) ────────────────────────────────────────
+        def _mse_matrix(results):
+            """Return (classes, lead_names, matrix[n_cls, n_leads]) for a result list."""
+            classes    = sorted({r['class'] for r in results})
+            n_leads    = len(results[0]['mse_per_lead'])
+            lead_names = [LEAD_NAMES[i] if i < len(LEAD_NAMES) else f'L{i}' for i in range(n_leads)]
+            matrix     = np.array([
+                np.array([r['mse_per_lead'] for r in results if r['class'] == cls]).mean(axis=0)
+                for cls in classes
+            ])
+            return classes, lead_names, matrix
 
-    def _save_heatmap(matrix, row_labels, col_labels, title, filename, cmap='YlOrRd', vmin=None, vmax=None):
-        fig, ax = plt.subplots(figsize=(max(8, len(col_labels) * 0.8), max(4, len(row_labels) * 0.5)))
-        clim = {}
-        if vmin is not None:
-            clim['vmin'] = vmin
-        if vmax is not None:
-            clim['vmax'] = vmax
-        im = ax.imshow(matrix, aspect='auto', cmap=cmap, interpolation='nearest', **clim)
-        ax.set_xticks(range(len(col_labels)))
-        ax.set_xticklabels(col_labels, fontsize=10)
-        ax.set_yticks(range(len(row_labels)))
-        ax.set_yticklabels(row_labels, fontsize=10)
-        ax.set_xlabel('Lead', fontsize=11)
-        ax.set_ylabel('Class', fontsize=11)
-        ax.set_title(title, fontsize=13, fontweight='bold')
-        for i in range(len(row_labels)):
-            for j in range(len(col_labels)):
-                ax.text(j, i, f'{matrix[i, j]:.4f}', ha='center', va='center', fontsize=7)
-        fig.colorbar(im, ax=ax, pad=0.02)
-        plt.tight_layout()
-        plt.savefig(os.path.join(save_directory, filename), dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        print(f"Saved heatmap to {os.path.join(save_directory, filename)}")
+        def _save_heatmap(matrix, row_labels, col_labels, title, filename, cmap='YlOrRd', vmin=None, vmax=None):
+            fig, ax = plt.subplots(figsize=(max(8, len(col_labels) * 0.8), max(4, len(row_labels) * 0.5)))
+            clim = {}
+            if vmin is not None:
+                clim['vmin'] = vmin
+            if vmax is not None:
+                clim['vmax'] = vmax
+            im = ax.imshow(matrix, aspect='auto', cmap=cmap, interpolation='nearest', **clim)
+            ax.set_xticks(range(len(col_labels)))
+            ax.set_xticklabels(col_labels, fontsize=10)
+            ax.set_yticks(range(len(row_labels)))
+            ax.set_yticklabels(row_labels, fontsize=10)
+            ax.set_xlabel('Lead', fontsize=11)
+            ax.set_ylabel('Class', fontsize=11)
+            ax.set_title(title, fontsize=13, fontweight='bold')
+            for i in range(len(row_labels)):
+                for j in range(len(col_labels)):
+                    ax.text(j, i, f'{matrix[i, j]:.4f}', ha='center', va='center', fontsize=7)
+            fig.colorbar(im, ax=ax, pad=0.02)
+            plt.tight_layout()
+            plt.savefig(os.path.join(save_directory, filename), dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f"Saved heatmap to {os.path.join(save_directory, filename)}")
 
-    print("Collecting full trainset MSE for heatmap...")
-    train_all_records = _collect_mse_only(trainset, model, args)
+        print("Collecting full trainset MSE for heatmap...")
+        train_all_records = _collect_mse_only(trainset, model, args)
 
-    test_classes,      lead_names, test_matrix      = _mse_matrix(sample_results)
-    train_all_classes, _,          train_all_matrix = _mse_matrix(train_all_records)
+        test_classes,      lead_names, test_matrix      = _mse_matrix(sample_results)
+        train_all_classes, _,          train_all_matrix = _mse_matrix(train_all_records)
 
-    _save_heatmap(test_matrix,      test_classes,      lead_names, 'Masked MSE — test set (classes × leads)',  'mse_heatmap_test.png')
-    _save_heatmap(train_all_matrix, train_all_classes, lead_names, 'Masked MSE — train set (classes × leads)', 'mse_heatmap_train.png')
+        _save_heatmap(test_matrix,      test_classes,      lead_names, 'Masked MSE — test set (classes × leads)',  'mse_heatmap_test.png')
+        _save_heatmap(train_all_matrix, train_all_classes, lead_names, 'Masked MSE — train set (classes × leads)', 'mse_heatmap_train.png')
 
-    # Ratio heatmap — only for classes present in both sets
-    common_classes = [cls for cls in test_classes if cls in train_all_classes]
-    train_classes  = train_all_classes
-    train_matrix   = train_all_matrix
-    if common_classes:
-        test_rows  = np.array([test_matrix[test_classes.index(cls)]   for cls in common_classes])
-        train_rows = np.array([train_matrix[train_classes.index(cls)] for cls in common_classes])
-        ratio      = np.log2(test_rows / np.where(train_rows > 0, train_rows, np.nan))
-        abs_max    = np.nanmax(np.abs(ratio))
-        _save_heatmap(ratio, common_classes, lead_names,
-                      'log₂(MSE test / MSE train) — classes × leads\n'
-                      'red = test worse, blue = train worse',
-                      'mse_heatmap_ratio_test_vs_train.png',
-                      cmap='RdBu_r', vmin=-abs_max, vmax=abs_max)
+        # Ratio heatmap — only for classes present in both sets
+        common_classes = [cls for cls in test_classes if cls in train_all_classes]
+        train_classes  = train_all_classes
+        train_matrix   = train_all_matrix
+        if common_classes:
+            test_rows  = np.array([test_matrix[test_classes.index(cls)]   for cls in common_classes])
+            train_rows = np.array([train_matrix[train_classes.index(cls)] for cls in common_classes])
+            ratio      = np.log2(test_rows / np.where(train_rows > 0, train_rows, np.nan))
+            abs_max    = np.nanmax(np.abs(ratio))
+            _save_heatmap(ratio, common_classes, lead_names,
+                        'log₂(MSE test / MSE train) — classes × leads\n'
+                        'red = test worse, blue = train worse',
+                        'mse_heatmap_ratio_test_vs_train.png',
+                        cmap='RdBu_r', vmin=-abs_max, vmax=abs_max)
 
-    # ── Maximum Mean Discrepancy (test vs train, per class) ───────────────────
-    def _rbf_kernel(X, Y, sigma):
-        """RBF kernel matrix K(X, Y) with bandwidth sigma."""
-        # ||x - y||^2 = ||x||^2 + ||y||^2 - 2 x·y
-        XX = (X ** 2).sum(axis=1, keepdims=True)
-        YY = (Y ** 2).sum(axis=1, keepdims=True)
-        sq_dists = XX + YY.T - 2 * X @ Y.T
-        return np.exp(-sq_dists / (2 * sigma ** 2))
+        # ── Maximum Mean Discrepancy (test vs train, per class) ───────────────────
+        def _rbf_kernel(X, Y, sigma):
+            """RBF kernel matrix K(X, Y) with bandwidth sigma."""
+            # ||x - y||^2 = ||x||^2 + ||y||^2 - 2 x·y
+            XX = (X ** 2).sum(axis=1, keepdims=True)
+            YY = (Y ** 2).sum(axis=1, keepdims=True)
+            sq_dists = XX + YY.T - 2 * X @ Y.T
+            return np.exp(-sq_dists / (2 * sigma ** 2))
 
-    def _mmd(X, Y, sigma=1.0):
-        """Unbiased MMD² estimate between samples X and Y (n_samples × n_features)."""
-        n, m = len(X), len(Y)
-        Kxx = _rbf_kernel(X, X, sigma)
-        Kyy = _rbf_kernel(Y, Y, sigma)
-        Kxy = _rbf_kernel(X, Y, sigma)
-        # Unbiased: zero diagonal of same-set kernels
-        np.fill_diagonal(Kxx, 0)
-        np.fill_diagonal(Kyy, 0)
-        return (Kxx.sum() / (n * (n - 1))
-                + Kyy.sum() / (m * (m - 1))
-                - 2 * Kxy.mean())
+        def _mmd(X, Y, sigma=1.0):
+            """Unbiased MMD² estimate between samples X and Y (n_samples × n_features)."""
+            n, m = len(X), len(Y)
+            Kxx = _rbf_kernel(X, X, sigma)
+            Kyy = _rbf_kernel(Y, Y, sigma)
+            Kxy = _rbf_kernel(X, Y, sigma)
+            # Unbiased: zero diagonal of same-set kernels
+            np.fill_diagonal(Kxx, 0)
+            np.fill_diagonal(Kyy, 0)
+            return (Kxx.sum() / (n * (n - 1))
+                    + Kyy.sum() / (m * (m - 1))
+                    - 2 * Kxy.mean())
 
-    def _features(results_list):
-        """Extract mse_per_lead as feature matrix (N, D)."""
-        return np.array([r['mse_per_lead'] for r in results_list])
+        def _features(results_list):
+            """Extract mse_per_lead as feature matrix (N, D)."""
+            return np.array([r['mse_per_lead'] for r in results_list])
 
-    # Choose sigma as median pairwise distance (median heuristic)
-    all_feats = _features(sample_results + train_results)
-    sigma = np.median(pdist(all_feats)) if len(all_feats) > 1 else 1.0
+        # Choose sigma as median pairwise distance (median heuristic)
+        all_feats = _features(sample_results + train_results)
+        sigma = np.median(pdist(all_feats)) if len(all_feats) > 1 else 1.0
 
-    mmd_classes = sorted(set(r['class'] for r in sample_results) &
-                         set(r['class'] for r in train_results))
-    mmd_values  = {}
-    for cls in mmd_classes:
-        X = _features([r for r in sample_results if r['class'] == cls])
-        Y = _features([r for r in train_results  if r['class'] == cls])
-        if len(X) < 2 or len(Y) < 2:
-            print(f"Skipping MMD for class '{cls}': too few samples (test={len(X)}, train={len(Y)})")
-            continue
-        mmd_values[cls] = _mmd(X, Y, sigma)
-        print(f"MMD² [{cls}]: {mmd_values[cls]:.6f}  (test n={len(X)}, train n={len(Y)})")
+        mmd_classes = sorted(set(r['class'] for r in sample_results) &
+                            set(r['class'] for r in train_results))
+        mmd_values  = {}
+        for cls in mmd_classes:
+            X = _features([r for r in sample_results if r['class'] == cls])
+            Y = _features([r for r in train_results  if r['class'] == cls])
+            if len(X) < 2 or len(Y) < 2:
+                print(f"Skipping MMD for class '{cls}': too few samples (test={len(X)}, train={len(Y)})")
+                continue
+            mmd_values[cls] = _mmd(X, Y, sigma)
+            print(f"MMD² [{cls}]: {mmd_values[cls]:.6f}  (test n={len(X)}, train n={len(Y)})")
 
-    if mmd_values:
-        classes_sorted = sorted(mmd_values)
-        vals = [mmd_values[c] for c in classes_sorted]
+        if mmd_values:
+            classes_sorted = sorted(mmd_values)
+            vals = [mmd_values[c] for c in classes_sorted]
 
-        fig, ax = plt.subplots(figsize=(max(6, len(classes_sorted) * 0.9), 5))
-        bars = ax.bar(range(len(classes_sorted)), vals, color='#6366f1', alpha=0.85)
-        ax.set_xticks(range(len(classes_sorted)))
-        ax.set_xticklabels(classes_sorted, rotation=35, ha='right', fontsize=10)
-        ax.set_xlabel('Class', fontsize=11)
-        ax.set_ylabel('MMD²', fontsize=11)
-        ax.set_title('Maximum Mean Discrepancy² — test vs train per class\n'
-                     f'(RBF kernel, σ={sigma:.4f}, median heuristic)',
-                     fontsize=12, fontweight='bold', color='#1f2937')
-        for bar, val in zip(bars, vals):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.01,
-                    f'{val:.4f}', ha='center', va='bottom', fontsize=9)
-        ax.grid(True, axis='y', linestyle='--', linewidth=0.5, color='#e5e7eb', zorder=0)
-        ax.set_axisbelow(True)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        plt.tight_layout()
-        mmd_plot_path = os.path.join(save_directory, 'mmd_test_vs_train.png')
-        plt.savefig(mmd_plot_path, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        print(f"Saved MMD plot to {mmd_plot_path}")
+            fig, ax = plt.subplots(figsize=(max(6, len(classes_sorted) * 0.9), 5))
+            bars = ax.bar(range(len(classes_sorted)), vals, color='#6366f1', alpha=0.85)
+            ax.set_xticks(range(len(classes_sorted)))
+            ax.set_xticklabels(classes_sorted, rotation=35, ha='right', fontsize=10)
+            ax.set_xlabel('Class', fontsize=11)
+            ax.set_ylabel('MMD²', fontsize=11)
+            ax.set_title('Maximum Mean Discrepancy² — test vs train per class\n'
+                        f'(RBF kernel, σ={sigma:.4f}, median heuristic)',
+                        fontsize=12, fontweight='bold', color='#1f2937')
+            for bar, val in zip(bars, vals):
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.01,
+                        f'{val:.4f}', ha='center', va='bottom', fontsize=9)
+            ax.grid(True, axis='y', linestyle='--', linewidth=0.5, color='#e5e7eb', zorder=0)
+            ax.set_axisbelow(True)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            plt.tight_layout()
+            mmd_plot_path = os.path.join(save_directory, 'mmd_test_vs_train.png')
+            plt.savefig(mmd_plot_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f"Saved MMD plot to {mmd_plot_path}")
 
-        with open(os.path.join(save_directory, 'mmd_results.json'), 'w') as f:
-            json.dump({'sigma': float(sigma), 'mmd2': mmd_values}, f, indent=2)
-        print(f"Saved MMD results to {os.path.join(save_directory, 'mmd_results.json')}")
+            with open(os.path.join(save_directory, 'mmd_results.json'), 'w') as f:
+                json.dump({'sigma': float(sigma), 'mmd2': mmd_values}, f, indent=2)
+            print(f"Saved MMD results to {os.path.join(save_directory, 'mmd_results.json')}")
