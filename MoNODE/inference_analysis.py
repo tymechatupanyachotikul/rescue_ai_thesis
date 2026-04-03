@@ -233,9 +233,9 @@ def _collect_sample_latents(dataloader, model, split, args):
     }
 
     phenotypes = torch.load('/projects/prjs1890/uk_biobank/phenotype_targets.pt')
-    eids = phenotypes['eids'].tolist()
+    eids = phenotypes['eids']
     targets = phenotypes['targets'].cpu()
-    columns = phenotypes['columns'].tolist()
+    columns = phenotypes['columns']
     not_found = 0
     with torch.no_grad():
         for batch, batch_y, mask in tqdm(dataloader, desc="Collecting latents"):
