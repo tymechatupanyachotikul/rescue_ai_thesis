@@ -19,7 +19,9 @@ class MoNODE(nn.Module):
 
     @property
     def device(self):
-        return self.flow.device
+        if self.flow is not None:
+            return self.flow.device
+        return next(self.vae.parameters()).device
     
     @property
     def dtype(self):
@@ -44,12 +46,15 @@ class MoNODE(nn.Module):
             Xrec =  ztL[:,:,:,:ztL.shape[-1]//2] #Only position is used for reconstructions, N, T, 1
             return Xrec 
         
-        elif self.model == 'node' or self.model =='hbnode':
+        elif self.model == 'node' or self.model == 'hbnode':
             if self.order == 1:
                 stL = ztL
             elif self.order == 2:
                 q = ztL.shape[-1]//2
                 stL = ztL[:,:,:,:q] # L,N,T,q Only the position is decoded
+
+        elif self.model == 'vae':
+            stL = ztL  # L,N,T,q — z expanded across time, no velocity component
 
         if c is not None:
             cT = torch.stack([c]*ztL.shape[2],-2) # L,N,T,q
@@ -123,12 +128,18 @@ class MoNODE(nn.Module):
                     z0 = torch.concat([z0,v0],dim=-1)  #L, N, 1, 2q
 
       
-        elif self.model =='sonode':
+        elif self.model == 'sonode':
             #compute velocity and concatenate to position
             s0_mu, s0_logv,v0_mu, v0_logv = None, None, None, None
             v0 = self.vae(in_data) #N, dim
             x0 = in_data[:,0,:] #N, dim
             z0 = torch.stack((x0, v0),dim=1).reshape(1,N,self.Nobj,X.shape[-1]*2) #L, N, 1, 2*dim
+
+        elif self.model == 'vae':
+            s0_mu, s0_logv = self.vae.encoder(in_data, mask=mask)  # N,q
+            z0 = self.vae.encoder.sample(s0_mu, s0_logv, L=L)      # N,q or L,N,q
+            z0 = z0.unsqueeze(0) if z0.ndim == 2 else z0            # L,N,q
+            v0_mu, v0_logv = None, None
 
         #encode content (invariance), pass whole sequence length 
         if self.is_inv:
@@ -145,7 +156,11 @@ class MoNODE(nn.Module):
         else:
             out_shape.extend(X.shape[2:])
 
-        if self.aug:
+        if self.model == 'vae':
+            # No ODE: broadcast z across time axis
+            ztL = z0.unsqueeze(2).expand(-1, -1, T, -1).contiguous()  # L,N,T,q
+            Xrec = self.build_decoding(ztL, out_shape, c)
+        elif self.aug:
             mL = m.reshape((L,N,self.Nobj,-1)) #L,N,Nobj,q
             ztL  = self.sample_augmented_trajectories(z0, mL, T, L) # L,N,T,Nobj, 2q
             ztL = ztL.reshape(L,N,T,-1) # L,T,N, nobj*2q

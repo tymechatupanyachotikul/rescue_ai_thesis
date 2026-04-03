@@ -109,8 +109,8 @@ def build_mov_mnist_cnn_dec(n_filt, n_in):
 
 class VAE(nn.Module):
 
-    def __init__(self, task, cnn_filt_enc=8, cnn_filt_de=8, dec_H=100, rnn_hidden=10, dec_act='relu', 
-                 ode_latent_dim=8, content_dim=0, T_in=10, device='cpu', order=1, enc_H=50, inp_dim=None, w_dt=0, l_w=0, out_dim=None):
+    def __init__(self, task, cnn_filt_enc=8, cnn_filt_de=8, dec_H=100, rnn_hidden=10, dec_act='relu',
+                 ode_latent_dim=8, content_dim=0, T_in=10, device='cpu', order=1, enc_H=50, inp_dim=None, w_dt=0, l_w=0, out_dim=None, use_rnn_decoder=False):
         super(VAE, self).__init__()
 
         ### build encoder
@@ -153,7 +153,10 @@ class VAE(nn.Module):
                     self.encoder_v = IdentityEncoder()
             else:
                 self.encoder = EncoderRNN(data_dim, rnn_hidden=rnn_hidden, enc_out_dim=ode_latent_dim, out_distr='normal', H=enc_H).to(device)
-                self.decoder = Decoder(task, ode_latent_dim+content_dim, H=dec_H, distribution=lhood_distribution, dec_out_dim=out_dim, act=dec_act, w_dt=w_dt, l_w=l_w).to(device)
+                if use_rnn_decoder:
+                    self.decoder = RNNDecoder(ode_latent_dim+content_dim, rnn_hidden=rnn_hidden, dec_H=dec_H, data_dim=out_dim, act=dec_act).to(device)
+                else:
+                    self.decoder = Decoder(task, ode_latent_dim+content_dim, H=dec_H, distribution=lhood_distribution, dec_out_dim=out_dim, act=dec_act, w_dt=w_dt, l_w=l_w).to(device)
                 if order==2:
                     self.encoder_v = EncoderRNN(data_dim, rnn_hidden=rnn_hidden, enc_out_dim=ode_latent_dim, out_distr='normal', H=enc_H).to(device)
                     self.prior = Normal(torch.zeros(ode_latent_dim*order).to(device), torch.ones(ode_latent_dim*order).to(device))
@@ -360,6 +363,64 @@ class IdentityDecoder(nn.Module):
         return 'Identity decoder'
 
 
+class RNNDecoder(nn.Module):
+    """VAE-RNN decoder: z0 seeds the GRU hidden state; GRU runs for T steps
+    with z0 repeated as input; MLP projects each hidden state to the signal.
+    Implements the same forward/log_prob interface as Decoder."""
+
+    def __init__(self, latent_dim, rnn_hidden, dec_H, data_dim, act='relu'):
+        super().__init__()
+        self.rnn_hidden = rnn_hidden
+        self.data_dim = data_dim
+        self.dec_out_dim = data_dim  # match Decoder.dec_out_dim interface
+        self.w_dt = 0               # match Decoder interface (unused for VAE)
+        self.distribution = 'normal'
+
+        # Project z0 → initial GRU hidden state (mirrors encoder's rnn_hidden_to_latent)
+        self.z_to_h = nn.Sequential(
+            nn.Linear(latent_dim, dec_H),
+            nn.ReLU(True),
+            nn.Linear(dec_H, rnn_hidden),
+        )
+        # GRU: z0 repeated T times as input, learns temporal structure via hidden state
+        self.gru = nn.GRU(latent_dim, rnn_hidden, batch_first=True)
+        # MLP output head: same depth/style as existing Decoder MLP
+        self.mlp = MLP(rnn_hidden, data_dim, L=2, H=dec_H, act=act)
+        # Learned output std (matches Decoder.out_logsig interface for elbo log_prob)
+        self.sp = nn.Softplus()
+        self.out_logsig = nn.Parameter(torch.zeros(data_dim))
+        self.out_logsig_dt = nn.Parameter(torch.zeros(data_dim))  # unused; kept for compat
+
+    def forward(self, stL, _dims):
+        """
+        stL  : (L, N, T, q)  — z0 expanded across T (from model.py VAE branch)
+        _dims: unused; kept to match Decoder.forward signature
+        Returns: (L, N, T, D)
+        """
+        L, _, T, _ = stL.shape
+        z0 = stL[:, :, 0, :]                              # (L, N, q)
+        h0 = self.z_to_h(z0)                 # (L, N, rnn_hidden)
+        
+        outputs = []
+        for l in range(L):
+            inp = z0[l].unsqueeze(1).expand(-1, T, -1)    # (N, T, q)
+            out, _ = self.gru(inp, h0[l].unsqueeze(0))    # (N, T, rnn_hidden)
+            xrec = self.mlp(out)                           # (N, T, D)
+            outputs.append(xrec)
+        return torch.stack(outputs)                        # (L, N, T, D)
+
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
+    def log_prob(self, X, Xhat, L=1):
+        """Gaussian log-likelihood — matches Decoder.log_prob interface."""
+        XL = X.repeat([L] + [1] * X.ndim)   # L, N, T, D
+        Xhat = Xhat.reshape(XL.shape)
+        std = self.sp(self.out_logsig)
+        return torch.distributions.Normal(XL, std).log_prob(Xhat)
+
+
 class Decoder(nn.Module):
     def __init__(self, task, dec_inp_dim, n_filt=8, H=100, distribution='bernoulli', dec_out_dim=None, act='relu', w_dt=0, l_w=0):
         super(Decoder, self).__init__()
@@ -430,3 +491,57 @@ class Decoder(nn.Module):
             raise ValueError('Currently only bernoulli dist implemented')
 
         return log_p
+
+
+# ---------------------------------------------------------------------------
+# Sanity check: run with  python -m model.core.vae  from MoNODE/
+# ---------------------------------------------------------------------------
+if __name__ == '__main__':
+    print("=== VAE-RNN sanity check ===")
+
+    N, T, D_in, D_out = 4, 200, 12, 8
+    latent_dim = 32
+    rnn_hidden = 64
+    dec_H = 128
+
+    vae = VAE(
+        task='ecg',
+        ode_latent_dim=latent_dim,
+        rnn_hidden=rnn_hidden,
+        dec_H=dec_H,
+        enc_H=64,
+        inp_dim=D_in,
+        out_dim=D_out,
+        use_rnn_decoder=True,
+        device='cpu',
+    )
+
+    n_params = sum(p.numel() for p in vae.parameters() if p.requires_grad)
+    print(f"  Trainable parameters: {n_params:,}")
+
+    x = torch.randn(N, T, D_in)
+    mask = torch.ones(N, T, dtype=torch.bool)
+    mu, log_sig = vae.encoder(x, mask=mask)
+    assert mu.shape == (N, latent_dim),      f"mu shape {mu.shape}"
+    assert log_sig.shape == (N, latent_dim), f"log_sig shape {log_sig.shape}"
+    print(f"  Encoder  OK — mu: {tuple(mu.shape)}, log_sig: {tuple(log_sig.shape)}")
+
+    L = 1
+    z0 = vae.encoder.sample(mu, log_sig, L=L)
+    z0 = z0.unsqueeze(0) if z0.ndim == 2 else z0
+    stL = z0.unsqueeze(2).expand(-1, -1, T, -1)   # (L, N, T, latent_dim)
+    Xrec = vae.decoder(stL, [L, N, T, D_out])
+    assert Xrec.shape == (L, N, T, D_out), f"Xrec shape {Xrec.shape}"
+    print(f"  Decoder  OK — Xrec: {tuple(Xrec.shape)}")
+
+    x_out = x[:, :, :D_out]
+    lp = vae.decoder.log_prob(x_out, Xrec, L=L)
+    assert lp.shape == (L, N, T, D_out), f"log_prob shape {lp.shape}"
+    print(f"  log_prob OK — shape: {tuple(lp.shape)}")
+
+    # KL: log_sig here is std (softplus output), so log_var = 2*log(std)
+    kl = -0.5 * (1 + 2 * torch.log(log_sig) - mu.pow(2) - log_sig.pow(2)).mean()
+    assert not torch.isnan(kl), "KL is NaN"
+    print(f"  KL loss  OK — value: {kl.item():.4f}")
+
+    print("=== All checks passed ===")

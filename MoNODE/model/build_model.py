@@ -31,26 +31,30 @@ def build_model(args, device, dtype, **kwargs):
         D_in += args.modulator_dim
 
     # latent ode 
-    if args.model == 'node' or args.model =='sonode':
+    if args.model == 'node' or args.model == 'sonode':
         if args.model == 'node':
-            de = MLP(D_in, D_out, L=args.de_L, H=args.de_H, act='softplus') 
+            de = MLP(D_in, D_out, L=args.de_L, H=args.de_H, act='softplus')
         elif args.model == 'sonode':
             de = MLP(D_in, D_out, L=args.de_L, H=args.de_H, act='elu')
-    
+
         flow = Flow(diffeq=de, order=args.order, solver=args.solver, use_adjoint=args.use_adjoint)
 
-    elif args.model=='hbnode':
+    elif args.model == 'hbnode':
         de = MLP(D_in, D_out, L=args.de_L, H=args.de_H, act='softplus')
         odefunc = HBNODE_BASE(de, corr=0, corrf=True)
-    
+
         flow = Flow(diffeq=None, solver=args.solver, use_adjoint=args.use_adjoint)
         flow.odefunc = odefunc
 
+    elif args.model == 'vae':
+        flow = None  # no ODE integration
+
     # encoder & decoder
-    if args.model == 'node' or args.model == 'hbnode':
-        vae = VAE(task=args.task, cnn_filt_enc=args.cnn_filt_enc, cnn_filt_de = args.cnn_filt_de, ode_latent_dim=args.ode_latent_dim//args.order, 
-            dec_act=args.dec_act, rnn_hidden=args.rnn_hidden, dec_H=args.dec_H, enc_H = args.enc_H,
-            content_dim=args.content_dim, T_in=args.T_in, order=args.order, device=device, **kwargs).to(dtype)
+    if args.model in ('node', 'hbnode', 'vae'):
+        vae = VAE(task=args.task, cnn_filt_enc=args.cnn_filt_enc, cnn_filt_de=args.cnn_filt_de, ode_latent_dim=args.ode_latent_dim//args.order,
+            dec_act=args.dec_act, rnn_hidden=args.rnn_hidden, dec_H=args.dec_H, enc_H=args.enc_H,
+            content_dim=args.content_dim, T_in=args.T_in, order=args.order, device=device,
+            use_rnn_decoder=(args.model == 'vae'), **kwargs).to(dtype)
     elif args.model == 'sonode':
         if args.sonode_v == 'MLP':
             vae = SONODE_init_velocity(dim=args.ode_latent_dim//2, nhidden=args.dec_H, Tin=args.T_in) #improved SONODE

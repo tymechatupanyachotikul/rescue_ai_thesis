@@ -12,7 +12,7 @@ import wandb
 
 SOLVERS   = ["euler", "bdf", "rk4", "midpoint", "adams", "explicit_adams", "fixed_adams", "dopri5"]
 TASKS     = ['rot_mnist', 'rot_mnist_ou', 'sin', 'bb', 'lv', 'mocap', 'mocap_shift', 'ecg']
-MODELS     = ['node', 'sonode', 'hbnode']
+MODELS     = ['node', 'sonode', 'hbnode', 'vae']
 GRADIENT_ESTIMATION = ['no_adjoint', 'adjoint', 'ac_adjoint']
 parser = argparse.ArgumentParser('MoNODE')
 np.seterr(all='raise')
@@ -87,7 +87,9 @@ parser.add_argument('--dec_act', type=str, default='relu',
 parser.add_argument('--enc_H', type=int, default=50,
                     help="Encoder hidden dimensionality for GRU unit") 
 parser.add_argument('--sonode_v', type=str, default='MLP', choices=['MLP','RNN'],
-                    help="velocity encoder for SONODE") 
+                    help="velocity encoder for SONODE")
+parser.add_argument('--beta', type=float, default=1.0,
+                    help="Beta weight on KL divergence for VAE training")
 
 #training 
 parser.add_argument('--Nepoch', type=int, default=600,
