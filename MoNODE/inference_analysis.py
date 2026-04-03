@@ -233,7 +233,7 @@ def _collect_sample_latents(dataloader, model, split, args):
     }
 
     phenotypes = torch.load('/projects/prjs1890/uk_biobank/phenotype_targets.pt')
-    eids = phenotypes['eid'].tolist()
+    eids = phenotypes['eids'].tolist()
     targets = phenotypes['targets'].cpu()
     columns = phenotypes['columns'].tolist()
     not_found = 0
