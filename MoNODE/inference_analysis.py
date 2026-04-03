@@ -221,7 +221,7 @@ def _collect_sample_latents(dataloader, model, split, args):
     """
     save_directory = os.path.join(os.path.dirname(args.model_path), 'latents')
     # For a plain DataLoader the dataset is ECGDataset; for a Subset it's one level deeper
-    ecg_dataset = getattr(dataloader.dataset, 'dataset', dataloader.dataset)
+    ecg_dataset = dataloader.dataset
     ecg_dataset.return_file_path = True
     model.eval()
     model.return_latent = True
