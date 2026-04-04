@@ -295,7 +295,7 @@ def _collect_sample_latents(dataloader, model, split, args):
                         continue 
     
     print(f"Finished collecting latents. {not_found} patient_ids were not found in phenotypes and were skipped.")
-    stacked_tensors = {k: np.stack(v, axis=0) for k, v in latent_tensors.items()}
+    stacked_tensors = {k: np.stack(v, axis=0) for k, v in latent_tensors.items() if v}
     os.makedirs(save_directory, exist_ok=True)
     with open(os.path.join(save_directory, f'latent_meta_dict_{split}.json'), 'w') as f:
         json.dump(metadata_dict, f, indent=2)
