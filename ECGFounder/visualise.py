@@ -34,11 +34,12 @@ def save_umap_reduction(split, seg_type, root_dir):
                     if value in atrial_classes and seg_type == 'ventricular':
                         value = 'sinus'
                     elif seg_type == 'atrial':
-                        if value not in all_classes:
-                            print(f'{value} - mi')
-                            value = 'mi'
-                        if value in ventricular_classes:
-                            value = 'sinus'
+                        if key == 'class':
+                            if value not in all_classes:
+                                print(f'{value} - mi')
+                                value = 'mi'
+                            if value in ventricular_classes:
+                                value = 'sinus'
                     labels[key].append(value)
         z0 = np.concatenate(z0, axis=0)
         if m0:
