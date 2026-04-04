@@ -1,19 +1,20 @@
 from collections import defaultdict
+import argparse
 import json
 import math
 import os
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
-import torch
 import numpy as np
 import umap
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-def save_umap_reduction(split, root_dir):
+def save_umap_reduction(split, seg_type, root_dir):
     atrial_classes = ['avblock', 'fam', 'iab', 'lae']
     ventricular_classes = ['mi', 'lbbb', 'rbbb']
-
+    all_classes = atrial_classes + ventricular_classes + ['sinus']
+    m = None
     if split == 'all':
         z0, m0 = [], []
         labels = defaultdict(list)
@@ -23,23 +24,32 @@ def save_umap_reduction(split, root_dir):
 
             latents_info = np.load(os.path.join(root_dir, f'latent_tensors_{split}.npz'))
             _z0 = latents_info['z0']
-            _m = latents_info['m']
+            if 'm' in latents_info:
+                _m = latents_info['m']
+                m0.append(_m)
             z0.append(_z0)
-            m0.append(_m)
+            
             for info in meta_dict:
                 for key, value in info['labels'].items():
-                    if value in atrial_classes:
+                    if value in atrial_classes and seg_type == 'ventricular':
                         value = 'sinus'
+                    elif seg_type == 'atrial':
+                        if value not in all_classes:
+                            value = 'mi'
+                        if value in ventricular_classes:
+                            value = 'sinus'
                     labels[key].append(value)
         z0 = np.concatenate(z0, axis=0)
-        m = np.concatenate(m0, axis=0)
+        if m0:
+            m = np.concatenate(m0, axis=0)
     else:
         with open(os.path.join(root_dir, f'latent_meta_dict_{split}.json'), 'r') as f:
             meta_dict = json.load(f)
 
         latents_info = np.load(os.path.join(root_dir, f'latent_tensors_{split}.npz'))
         z0 = latents_info['z0']
-        m = latents_info['m']
+        if 'm' in latents_info:
+            m = latents_info['m']
         labels = defaultdict(list)
 
         for info in meta_dict:
@@ -57,11 +67,10 @@ def save_umap_reduction(split, root_dir):
 
     embeddings = {}
 
-    latent_dict = {
-        'z0': z0,
-        'm': m,
-        'combined': np.concatenate([z0, m], axis=-1)
-    }
+    latent_dict = {'z0': z0}
+    if m is not None:
+        latent_dict['m'] = m
+        latent_dict['combined'] = np.concatenate([z0, m], axis=-1)
     print(f'Performing UMAP reduction')
     for key, latent in latent_dict.items():
         embeddings[key] = reducer.fit_transform(latent)
@@ -227,17 +236,15 @@ def plot_split_umap(file_path):
     plt.savefig(plot_save_path, bbox_inches='tight')
     plt.show()
 
-# directories = ['linear_probe_ft', 'full_ft']
-# for directory in directories:
-#     print(f'Processing directory: {directory}')
-
-#     #save_dir = f'/Users/tyme/Desktop/University/Thesis/rescue_ai/results/LVEF/embeddings/{directory}'
-#     save_dir = f'/home/tchatupanyacho/rescue_ai_thesis/results/LVEF/embeddings/{directory}'
-#     save_umap_reduction(['test'], save_dir)
-            
-#plot_split_umap('/Users/tyme/Desktop/University/Thesis/rescue_ai/results/LVEF/embeddings/full_ft/test_train_embeddings.npz')
-root_dir = '/gpfs/home6/tchatupanyacho/rescue_ai_thesis/MoNODE/results/ecg/node/01_04_2026-02:54:55-0/latents'
-for split in ['train', 'all']:
-    save_umap_reduction(split, root_dir)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Compute and save UMAP embeddings for ECG latents.')
+    parser.add_argument('--split', type=str, required=True, choices=['train', 'test', 'valid', 'all'],
+                        help="Which data split to use.")
+    parser.add_argument('--root_dir', type=str, required=True,
+                        help="Directory containing latent .npz and metadata .json files.")
+    parser.add_argument('--seg_type', type=str, required=True, choices=['atrial', 'ventricular'],
+                        help="Segment type of the heartbeat.")
+    args = parser.parse_args()
+    save_umap_reduction(args.split, args.seg_type, args.root_dir)
 
     
