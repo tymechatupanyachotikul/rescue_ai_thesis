@@ -410,12 +410,17 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
         y_tr = tr_labels_all[param]
         y_te = te_labels_all[param]
         is_categorical = isinstance(y_tr[0], str)
+        # Binary float labels (0.0/1.0) are treated as binary classification
+        is_binary = (not is_categorical) and (set(y_tr) <= {0.0, 1.0})
 
         scaler = StandardScaler()
         X_tr = scaler.fit_transform(X_tr_full[tr_idx])
         X_te = scaler.transform(X_te_full[te_idx])
 
-        if is_categorical:
+        if is_categorical or is_binary:
+            if is_binary:
+                y_tr = [int(v) for v in y_tr]
+                y_te = [int(v) for v in y_te]
             le = LabelEncoder().fit(y_tr + y_te)
             param_results = {}
             for name, mdl in _classification_models():
@@ -431,7 +436,7 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
                 os.makedirs(pdir, exist_ok=True)
                 _plot_classification_param(param, param_results, pdir, le)
                 _save_metrics_json(param_results, pdir)
-        else:
+        else:  # continuous regression
             param_results = {}
             for name, mdl in _regression_models():
                 param_results[name] = _eval_regression(mdl, X_tr, y_tr, X_te, y_te)
