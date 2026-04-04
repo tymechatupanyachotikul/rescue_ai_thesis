@@ -248,7 +248,9 @@ def _collect_sample_latents(dataloader, model, split, args):
 
             z0, m = model(batch, args.plotL, mask=mask)
             z0 = z0.squeeze(0).squeeze(1)
-            m = m.squeeze(0)
+
+            if m is not None:
+                m = m.squeeze(0)
             if dataset.lower() == 'medalcare-xl':
                 _cls = [item[0] for item in batch_y]
                 patient_ids = [item[1] for item in batch_y]

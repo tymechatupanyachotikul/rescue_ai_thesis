@@ -138,9 +138,6 @@ parser.add_argument('--model_dir', type=str,
 parser.add_argument('--analysis_latent', required=False, default=False, action='store_true',
                     help="Whether to do latent space analysis")
 
-LEAD_NAMES = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
-
-
 def prepare_latents_and_labels(latents, metadata):
     """Extract valid (non-NaN/None) indices and label values for each phenotype parameter.
 
@@ -463,13 +460,11 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
     return {'regression': reg_results, 'classification': clf_results}
 
 
-
 def _save_metrics_json(param_results, out_dir):
     """Persist metrics (no model objects) to metrics.json."""
     serialisable = {name: res['metrics'] for name, res in param_results.items()}
     with open(os.path.join(out_dir, 'metrics.json'), 'w') as f:
         json.dump(serialisable, f, indent=2)
-
 
 
 def _collect_sample_latents(dataloader, model, split, args):
@@ -543,10 +538,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
     dtype = torch.float64
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    analysis_latent = args.analysis_latent
 
     trainset, validset, testset, manager, params = load_data(args, dtype)
-    
+
     if args.task == 'ecg':
         config = {
             'inp_dim': 12 - len(params[args.task]['exclude_leads_in']),
@@ -558,47 +552,49 @@ if __name__ == '__main__':
     model.to(device)
     model.to(dtype)
 
-    ckpt = torch.load(os.path.join(args.model_dir, 'model.pth'), map_location=torch.device(device), weights_only=False)
+    ckpt = torch.load(os.path.join(args.model_dir, 'model.pth'),
+                      map_location=device, weights_only=False)
     model.load_state_dict(ckpt["state_dict"])
 
     latents_dict = {}
-
     for split, dataloader in zip(['train', 'test'], [trainset, testset]):
         latents, metadata = _collect_sample_latents(dataloader, model, split, args)
-        latents_dict[split] = {
-            'latents': latents,
-            'metadata': metadata
-        }
+        latents_dict[split] = {'latents': latents, 'metadata': metadata}
 
     finetune_root = os.path.join(args.model_dir, 'finetune_results')
 
-    # Build combined z0+m latent when m is available
-    for split in ['train', 'test']:
-        lats = latents_dict[split]['latents']
-        if 'm' in lats:
+    # Require m in both splits before running m-dependent probes
+    has_m = all('m' in latents_dict[s]['latents'] for s in ['train', 'test'])
+
+    if has_m:
+        for split in ['train', 'test']:
+            lats = latents_dict[split]['latents']
             lats['z0_m'] = np.concatenate([lats['z0'], lats['m']], axis=1)
+
+    def _lats(split):
+        return latents_dict[split]['latents']
+
+    def _meta(split):
+        return latents_dict[split]['metadata']
 
     print("\n=== Linear probes (z0) ===")
     results_z0 = run_linear_probes(
-        latents_dict['train']['latents'], latents_dict['train']['metadata'],
-        latents_dict['test']['latents'],  latents_dict['test']['metadata'],
+        _lats('train'), _meta('train'), _lats('test'), _meta('test'),
         latent_key='z0',
         out_root=os.path.join(finetune_root, 'z0'),
     )
 
-    if 'm' in latents_dict['train']['latents']:
+    if has_m:
         print("\n=== Linear probes (m) ===")
         results_m = run_linear_probes(
-            latents_dict['train']['latents'], latents_dict['train']['metadata'],
-            latents_dict['test']['latents'],  latents_dict['test']['metadata'],
+            _lats('train'), _meta('train'), _lats('test'), _meta('test'),
             latent_key='m',
             out_root=os.path.join(finetune_root, 'm'),
         )
 
         print("\n=== Linear probes (z0 + m combined) ===")
         results_z0_m = run_linear_probes(
-            latents_dict['train']['latents'], latents_dict['train']['metadata'],
-            latents_dict['test']['latents'],  latents_dict['test']['metadata'],
+            _lats('train'), _meta('train'), _lats('test'), _meta('test'),
             latent_key='z0_m',
             out_root=os.path.join(finetune_root, 'z0_m'),
         )
