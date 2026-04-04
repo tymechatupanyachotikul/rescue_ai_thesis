@@ -17,7 +17,7 @@ from scipy.spatial.distance import pdist
 
 SOLVERS   = ["euler", "bdf", "rk4", "midpoint", "adams", "explicit_adams", "fixed_adams", "dopri5"]
 TASKS     = ['rot_mnist', 'rot_mnist_ou', 'sin', 'bb', 'lv', 'mocap', 'mocap_shift', 'ecg']
-MODELS     = ['node', 'sonode', 'hbnode']
+MODELS     = ['node', 'sonode', 'hbnode', 'vae']
 GRADIENT_ESTIMATION = ['no_adjoint', 'adjoint', 'ac_adjoint']
 parser = argparse.ArgumentParser('MoNODE')
 np.seterr(all='raise')

@@ -530,7 +530,13 @@ def _collect_sample_latents(dataloader, model, split, args):
     
     print(f"Finished collecting latents. {not_found} patient_ids were not found in phenotypes and were skipped.")
     latents = {k: np.stack(v, axis=0) for k, v in latent_tensors.items() if len(v) > 0}
-    
+
+    os.makedirs(save_directory, exist_ok=True)
+    np.savez(os.path.join(save_directory, f'{split}_latents.npz'), **latents)
+    with open(os.path.join(save_directory, f'{split}_metadata.json'), 'w') as f:
+        json.dump(metadata_dict, f)
+    print(f"Saved latents and metadata to {save_directory}/{split}_*")
+
     return latents, metadata_dict
     
 if __name__ == '__main__':
