@@ -35,6 +35,7 @@ def save_umap_reduction(split, seg_type, root_dir):
                         value = 'sinus'
                     elif seg_type == 'atrial':
                         if value not in all_classes:
+                            print(f'{value} - mi')
                             value = 'mi'
                         if value in ventricular_classes:
                             value = 'sinus'
