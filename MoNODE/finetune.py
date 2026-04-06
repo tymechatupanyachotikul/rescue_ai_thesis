@@ -17,7 +17,6 @@ from sklearn.metrics import (
 from sklearn.neural_network import MLPRegressor, MLPClassifier
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 
-np.seterr(all='raise')
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +154,8 @@ def _eval_regression(model, X_tr, y_tr, X_te, y_te):
 def _eval_classification(model, X_tr, y_tr, X_te, y_te, le):
     y_tr_enc = le.transform(y_tr)
     y_te_enc = le.transform(y_te)
-    model.fit(X_tr, y_tr_enc)
+    with np.errstate(under='ignore', divide='ignore'):
+        model.fit(X_tr, y_tr_enc)
     y_pred = model.predict(X_te)
     acc = float(accuracy_score(y_te_enc, y_pred))
     f1  = float(f1_score(y_te_enc, y_pred, average='macro', zero_division=0))
