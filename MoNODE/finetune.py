@@ -408,6 +408,47 @@ def _save_metrics_json(param_results, out_dir):
         json.dump(serialisable, f, indent=2)
 
 
+_ATRIAL_CLASSES      = {'avblock', 'fam', 'iab', 'lae'}
+_VENTRICULAR_CLASSES = {'mi', 'lbbb', 'rbbb'}
+_ALL_KNOWN_CLASSES   = _ATRIAL_CLASSES | _VENTRICULAR_CLASSES | {'sinus'}
+
+
+def _remap_class(value: str, seg_type: str) -> str:
+    """Remap a MedalCare-XL class label according to the segment type.
+
+    Atrial model:
+      - Any MI subclass not in the known list → 'mi', then treated as ventricular → 'sinus'
+      - Ventricular classes (mi, lbbb, rbbb) → 'sinus'
+      - Atrial classes and 'sinus' → unchanged
+
+    Ventricular model:
+      - Any class not in the known list → 'mi' (MI subclass)
+      - Atrial classes → 'sinus'
+      - Ventricular classes and 'sinus' → unchanged
+    """
+    if seg_type == 'atrial':
+        if value not in _ALL_KNOWN_CLASSES:
+            value = 'mi'               # unknown → MI subclass
+        if value in _VENTRICULAR_CLASSES:
+            value = 'sinus'            # ventricular → sinus for atrial model
+    elif seg_type == 'ventricular':
+        if value in _ATRIAL_CLASSES:
+            value = 'sinus'            # atrial → sinus for ventricular model
+    return value
+
+
+def _remap_metadata(metadata: list, seg_type: str) -> list:
+    """Apply class remapping to all records in-place (returns new list)."""
+    remapped = []
+    for entry in metadata:
+        entry = dict(entry)
+        if 'labels' in entry and 'class' in entry['labels']:
+            entry['labels'] = dict(entry['labels'])
+            entry['labels']['class'] = _remap_class(entry['labels']['class'], seg_type)
+        remapped.append(entry)
+    return remapped
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Run linear probes on pre-saved latents.')
@@ -415,6 +456,9 @@ if __name__ == '__main__':
                         help='Directory containing the saved latent .npz and metadata .json files.')
     parser.add_argument('--splits', nargs='+', default=['train', 'test'],
                         help='Splits to load (default: train test).')
+    parser.add_argument('--seg_type', type=str, choices=['atrial', 'ventricular'], default=None,
+                        help='Segment type of the model. When set, class labels in MedalCare-XL '
+                             'metadata are remapped so that out-of-domain classes become "sinus".')
     args = parser.parse_args()
 
     root_dir  = args.root_dir
@@ -426,6 +470,8 @@ if __name__ == '__main__':
     latents_dict = {}
     for split in args.splits:
         latents, metadata = _load_split(latents_dir, split)
+        if args.seg_type:
+            metadata = _remap_metadata(metadata, args.seg_type)
         latents_dict[split] = {'latents': latents, 'metadata': metadata}
 
     train_split = args.splits[0]
