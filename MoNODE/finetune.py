@@ -297,7 +297,7 @@ def _plot_summary_classification(all_results, out_dir):
 # ---------------------------------------------------------------------------
 
 def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata,
-                      latent_key='z0', out_root=None):
+                      latent_key='z0', out_root=None, methods=None):
     """Train four probes per phenotype and evaluate on the test set.
 
     Models
@@ -361,6 +361,8 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
             le = LabelEncoder().fit(y_tr + y_te)
             param_results = {}
             for name, mdl in _classification_models():
+                if methods and name not in methods:
+                    continue
                 param_results[name] = _eval_classification(mdl, X_tr, y_tr, X_te, y_te, le)
                 m = param_results[name]['metrics']
                 print(f"  [{param}][{name}]  acc={m['accuracy']:.3f}  "
@@ -376,6 +378,8 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
         else:  # continuous regression
             param_results = {}
             for name, mdl in _regression_models():
+                if methods and name not in methods:
+                    continue
                 param_results[name] = _eval_regression(mdl, X_tr, y_tr, X_te, y_te)
                 m = param_results[name]['metrics']
                 print(f"  [{param}][{name}]  R²={m['r2']:.3f}  MSE={m['mse']:.4f}")
@@ -459,12 +463,24 @@ if __name__ == '__main__':
                         help='Splits to load (default: train test).')
     parser.add_argument('--seg_type', type=str, choices=['atrial', 'ventricular'], default=None,
                         help='Segment type of the model. When set, class labels in MedalCare-XL '
-                             'metadata are remapped so that out-of-domain classes become "sinus".')
+                             'metadata are remapped so that out-of-domain classes become "sinus". '
+                             'Also used to name the output directory so runs do not overwrite each other.')
+    parser.add_argument('--methods', nargs='+', default=None,
+                        choices=['ols', 'ridge', 'lasso', 'mlp'],
+                        help='Probe methods to run. Defaults to ols only if not specified.')
     args = parser.parse_args()
 
-    root_dir  = args.root_dir
-    finetune_root = os.path.join(root_dir, 'finetune_results')
-    finetune_root = os.path.normpath(finetune_root)
+    root_dir = args.root_dir
+    methods  = set(args.methods) if args.methods else {'ols'}
+
+    # Output directory: named by seg_type when provided so runs don't overwrite each other;
+    # otherwise use a timestamp to guarantee uniqueness.
+    if args.seg_type:
+        run_label = args.seg_type
+    else:
+        run_label = 'all_classes'
+
+    finetune_root = os.path.normpath(os.path.join(root_dir, 'finetune_results', run_label))
 
     latents_dir = os.path.join(root_dir, 'latents')
     print("Loading latents...")
@@ -492,12 +508,16 @@ if __name__ == '__main__':
     def _meta(split):
         return latents_dict[split]['metadata']
 
-    print("\n=== Linear probes (z0) ===")
+    print(f"\nOutput directory: {finetune_root}")
+    print(f"Methods: {sorted(methods)}\n")
+
+    print("=== Linear probes (z0) ===")
     run_linear_probes(
         _lats(train_split), _meta(train_split),
         _lats(test_split),  _meta(test_split),
         latent_key='z0',
         out_root=os.path.join(finetune_root, 'z0'),
+        methods=methods,
     )
 
     if has_m:
@@ -507,6 +527,7 @@ if __name__ == '__main__':
             _lats(test_split),  _meta(test_split),
             latent_key='m',
             out_root=os.path.join(finetune_root, 'm'),
+            methods=methods,
         )
 
         print("\n=== Linear probes (z0 + m combined) ===")
@@ -515,5 +536,6 @@ if __name__ == '__main__':
             _lats(test_split),  _meta(test_split),
             latent_key='z0_m',
             out_root=os.path.join(finetune_root, 'z0_m'),
+            methods=methods,
         )
 
