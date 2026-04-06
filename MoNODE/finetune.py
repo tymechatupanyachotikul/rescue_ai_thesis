@@ -207,10 +207,128 @@ def _plot_regression_param(param, model_results, out_dir):
     plt.close(fig)
 
 
+def _per_class_accuracy(y_true, y_pred, classes):
+    """Return dict of class_label -> accuracy for each class."""
+    result = {}
+    for i, cls in enumerate(classes):
+        mask = y_true == i
+        if mask.sum() == 0:
+            result[cls] = float('nan')
+        else:
+            result[cls] = float((y_pred[mask] == i).mean())
+    return result
+
+
 def _plot_classification_param(param, model_results, out_dir, le):
-    """ROC curves (one panel) and confusion matrices (4-panel) side by side."""
+    """Per-param plots: confusion matrix per model, ROC curves, per-class accuracy, group summary."""
+    import json as _json
     names  = list(model_results.keys())
-    binary = len(le.classes_) == 2
+    classes = list(le.classes_)
+    binary  = len(classes) == 2
+    n_cls   = len(classes)
+    
+    # Class grouping for summary bar chart
+    ventricular = [c for c in classes if c.lower() in ('lcx_03_ant', 'lcx_03_post', 'rca_0_3', 'rca_10', 'lad_10', 'lad_03', 'lcx_10_post', 'lbbb', 'rbbb')]
+    atrial      = [c for c in classes if c.lower() in ('avblock', 'fam', 'iab', 'lae')]
+    sinus       = [c for c in classes if c.lower() == 'sinus']
+
+    # --- Confusion matrix: one figure per model, saved separately ---
+    cell_size = max(0.7, 5.0 / n_cls)   # shrink cells for many classes
+    tick_fs   = max(5, 9 - n_cls // 3)  # shrink tick font for many classes
+
+    for name in names:
+        res = model_results[name]
+        fig_cm, ax = plt.subplots(figsize=(cell_size * n_cls + 1.5,
+                                           cell_size * n_cls + 1.5))
+        disp = ConfusionMatrixDisplay.from_predictions(
+            res['y_true'], res['y_pred'],
+            display_labels=classes,
+            ax=ax, colorbar=True,
+            xticks_rotation=45,
+        )
+        ax.set_xticklabels(ax.get_xticklabels(), fontsize=tick_fs, ha='right')
+        ax.set_yticklabels(ax.get_yticklabels(), fontsize=tick_fs)
+        ax.set_xlabel('Predicted', fontsize=9)
+        ax.set_ylabel('True', fontsize=9)
+        acc = res['metrics']['accuracy']
+        f1  = res['metrics']['f1']
+        ax.set_title(f"{param} — {name}\nacc={acc:.3f}  f1={f1:.3f}", fontsize=10, fontweight='bold')
+        fig_cm.tight_layout()
+        fig_cm.savefig(os.path.join(out_dir, f'confusion_matrix_{name}.png'), dpi=130)
+        plt.close(fig_cm)
+
+    # --- Per-class accuracy: grouped bar chart across models ---
+    pca_data = {name: _per_class_accuracy(model_results[name]['y_true'],
+                                           model_results[name]['y_pred'],
+                                           classes)
+                for name in names}
+
+    # Save per-class accuracy to JSON
+    with open(os.path.join(out_dir, 'per_class_accuracy.json'), 'w') as f:
+        _json.dump(pca_data, f, indent=2)
+
+    x      = np.arange(n_cls)
+    width  = 0.8 / max(len(names), 1)
+    offsets = np.linspace(-(len(names) - 1) / 2 * width,
+                           (len(names) - 1) / 2 * width, len(names))
+    colours = [f'C{i}' for i in range(len(names))]
+
+    fig_pca, ax_pca = plt.subplots(figsize=(max(8, n_cls * 0.9 + 2), 4))
+    for (name, colour, offset) in zip(names, colours, offsets):
+        vals = [pca_data[name].get(cls, float('nan')) for cls in classes]
+        ax_pca.bar(x + offset, vals, width, label=name, color=colour, alpha=0.85)
+    ax_pca.set_xticks(x)
+    ax_pca.set_xticklabels(classes, rotation=40, ha='right', fontsize=8)
+    ax_pca.set_ylabel('Accuracy', fontsize=10)
+    ax_pca.set_ylim(0, 1.08)
+    ax_pca.axhline(1.0, color='grey', lw=0.6, linestyle='--')
+    ax_pca.set_title(f"{param} — per-class accuracy", fontsize=11, fontweight='bold')
+    ax_pca.legend(fontsize=8, framealpha=0.8)
+    ax_pca.spines[['top', 'right']].set_visible(False)
+    fig_pca.tight_layout()
+    fig_pca.savefig(os.path.join(out_dir, 'per_class_accuracy.png'), dpi=130)
+    plt.close(fig_pca)
+
+    # --- Group-summary bar chart (ventricular / atrial / sinus) ---
+    groups = [('ventricular', ventricular), ('atrial', atrial), ('sinus', sinus)]
+    groups = [(g, cls_list) for g, cls_list in groups if cls_list]  # skip absent groups
+
+    if groups:
+        group_names  = [g for g, _ in groups]
+        group_width  = 0.8 / max(len(names), 1)
+        gx           = np.arange(len(group_names))
+        g_offsets    = np.linspace(-(len(names) - 1) / 2 * group_width,
+                                    (len(names) - 1) / 2 * group_width, len(names))
+
+        fig_grp, ax_grp = plt.subplots(figsize=(max(5, len(group_names) * 1.8 + 2), 4))
+        for (name, colour, offset) in zip(names, colours, g_offsets):
+            pca = pca_data[name]
+            group_accs = []
+            for _, cls_list in groups:
+                vals = [pca[c] for c in cls_list if c in pca and not np.isnan(pca[c])]
+                group_accs.append(float(np.mean(vals)) if vals else float('nan'))
+            bars = ax_grp.bar(gx + offset, group_accs, group_width,
+                              label=name, color=colour, alpha=0.85)
+            for bar, v in zip(bars, group_accs):
+                if not np.isnan(v):
+                    ax_grp.text(bar.get_x() + bar.get_width() / 2,
+                                bar.get_height() + 0.01,
+                                f'{v:.2f}', ha='center', va='bottom', fontsize=7)
+
+        ax_grp.set_xticks(gx)
+        ax_grp.set_xticklabels(
+            [f"{g}\n({', '.join(cls_list)})" for g, cls_list in groups],
+            fontsize=8,
+        )
+        ax_grp.set_ylabel('Mean accuracy', fontsize=10)
+        ax_grp.set_ylim(0, 1.12)
+        ax_grp.axhline(1.0, color='grey', lw=0.6, linestyle='--')
+        ax_grp.set_title(f"{param} — group accuracy summary", fontsize=11, fontweight='bold')
+        ax_grp.legend(fontsize=8, framealpha=0.8)
+        ax_grp.spines[['top', 'right']].set_visible(False)
+        fig_grp.tight_layout()
+        fig_grp.savefig(os.path.join(out_dir, 'group_accuracy_summary.png'), dpi=130)
+        plt.close(fig_grp)
 
     # --- ROC curves ---
     fig_roc, ax_roc = plt.subplots(figsize=(5, 4))
@@ -227,23 +345,6 @@ def _plot_classification_param(param, model_results, out_dir, le):
     fig_roc.tight_layout()
     fig_roc.savefig(os.path.join(out_dir, 'roc_curves.png'), dpi=120)
     plt.close(fig_roc)
-
-    # --- Confusion matrices ---
-    fig_cm, axes = plt.subplots(1, len(names), figsize=(4 * len(names), 4), squeeze=False)
-    for ax, name in zip(axes[0], names):
-        res = model_results[name]
-        ConfusionMatrixDisplay.from_predictions(
-            res['y_true'], res['y_pred'],
-            display_labels=le.classes_,
-            ax=ax, colorbar=False,
-        )
-        acc = res['metrics']['accuracy']
-        f1  = res['metrics']['f1']
-        ax.set_title(f"{name}\nacc={acc:.3f}  f1={f1:.3f}", fontsize=9)
-    fig_cm.suptitle(param, fontsize=11, fontweight='bold')
-    fig_cm.tight_layout()
-    fig_cm.savefig(os.path.join(out_dir, 'confusion_matrices.png'), dpi=120)
-    plt.close(fig_cm)
 
 
 def _plot_summary_regression(all_results, out_dir):
