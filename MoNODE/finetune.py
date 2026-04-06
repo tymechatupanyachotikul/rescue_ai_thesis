@@ -1,142 +1,78 @@
+import argparse
 import json
 import math
 import os
-import numpy as np
-import torch
-from model.build_model import build_model
-from data.data_utils import load_data
-import argparse
+
 import matplotlib.pyplot as plt
+import numpy as np
 from sklearn.linear_model import (
     LinearRegression, RidgeCV, LassoCV,
     LogisticRegression, LogisticRegressionCV,
 )
-from sklearn.neural_network import MLPRegressor, MLPClassifier
 from sklearn.metrics import (
     r2_score, mean_squared_error,
     roc_auc_score, accuracy_score, f1_score,
     ConfusionMatrixDisplay, RocCurveDisplay,
 )
+from sklearn.neural_network import MLPRegressor, MLPClassifier
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-from tqdm import tqdm
 
-SOLVERS   = ["euler", "bdf", "rk4", "midpoint", "adams", "explicit_adams", "fixed_adams", "dopri5"]
-TASKS     = ['rot_mnist', 'rot_mnist_ou', 'sin', 'bb', 'lv', 'mocap', 'mocap_shift', 'ecg']
-MODELS     = ['node', 'sonode', 'hbnode', 'vae']
-GRADIENT_ESTIMATION = ['no_adjoint', 'adjoint', 'ac_adjoint']
-parser = argparse.ArgumentParser('MoNODE')
 np.seterr(all='raise')
 
-#data
-parser.add_argument('--task', type=str, default='mov_mnist', choices=TASKS,
-                    help="Experiment type")
-parser.add_argument('--noise', type=float, default=None,
-                    help="set noise level for noise robustness experiments")  
-parser.add_argument('--Nobj', type=int, default=1,
-                    help="param that can be used for multiple object set-up")                 
-parser.add_argument('--num_workers', type=int, default=0,
-                    help="number of workers")
-parser.add_argument('--data_root', type=str, default='data/',
-                    help="general data location")
-parser.add_argument('--shuffle', type=eval, default=True,
-               help='For Moving MNIST whetehr to shuffle the data')
-parser.add_argument('--dataset_root', type=str, default='/projects/prjs1890/',
-                    help="dataset location for ecg")
-parser.add_argument('--segment_type', choices=['atrial', 'ventricular'],
-                    help="Segment type of heart beat", type=str)
-parser.add_argument('--label_path', type=str, default='/projects/prjs1890/uk_biobank/phenotype_targets.pt',
-                    help="Path to phenotype labels for ECG dataset")
-#de model
-parser.add_argument('--model', type=str, default='node', choices=MODELS,
-                    help='node model type')
-parser.add_argument('--ode_latent_dim', type=int, default=10,
-                    help="Latent ODE dimensionality")
-parser.add_argument('--de_L', type=int, default=2,
-                    help="Number of hidden layers in MLP diff func")
-parser.add_argument('--de_H', type=int, default=100,
-                    help="Number of hidden neurons in each layer of MLP diff func")
 
+# ---------------------------------------------------------------------------
+# Loading helpers
+# ---------------------------------------------------------------------------
 
-#invariance
-parser.add_argument('--inv_fnc', type=str, default='MLP',
-                    help="Invariant function")
-parser.add_argument('--modulator_dim', type=int, default=0,
-                    help = 'dim of the dynamics modulator variable')
-parser.add_argument('--content_dim', type=int, default=0,
-                    help = 'dim of the content variable')
-parser.add_argument('--T_inv', type=int, default=5,
-                    help="Time frames to select for RNN based Encoder for Invariance")
-parser.add_argument('--cnn_filt_inv', type=int, default=16,
-                    help="Nfilt invariant encoder cnn")
+def _load_split(latents_dir: str, split: str) -> tuple[dict, list]:
+    """Load pre-saved latents and metadata for one split.
 
+    Supports two file naming conventions:
+      - finetune.py style:    {split}_latents.npz  /  {split}_metadata.json
+      - inference_analysis.py style: latent_tensors_{split}.npz  / latent_meta_dict_{split}.json
+    """
+    npz_candidates = [
+        os.path.join(latents_dir, f'{split}_latents.npz'),
+        os.path.join(latents_dir, f'latent_tensors_{split}.npz'),
+    ]
+    json_candidates = [
+        os.path.join(latents_dir, f'{split}_metadata.json'),
+        os.path.join(latents_dir, f'latent_meta_dict_{split}.json'),
+    ]
 
-#ode stuff
-parser.add_argument('--order', type=int, default=1,
-                    help="order of ODE")
-parser.add_argument('--solver', type=str, default='euler', choices=SOLVERS,
-                    help="ODE solver for numerical integration")
-parser.add_argument('--dt', type=float, default=0.1,
-                    help="numerical solver dt")
-parser.add_argument('--use_adjoint', type=str, default='no_adjoint', choices=GRADIENT_ESTIMATION, #we used False
-                    help="Use adjoint method for gradient computation")
+    npz_path  = next((p for p in npz_candidates  if os.path.exists(p)), None)
+    json_path = next((p for p in json_candidates if os.path.exists(p)), None)
 
-#vae 
-parser.add_argument('--T_in', type=int, default=10,
-                    help="Time frames to select for RNN based Encoder for intial state")
-parser.add_argument('--cnn_filt_enc', type=int, default=16,
-                    help="Number of filters in the cnn encoder")
-parser.add_argument('--cnn_filt_de', type=int, default=16,
-                    help="Number of filters in the cnn decoder")
-parser.add_argument('--rnn_hidden', type=int, default=10,
-                    help="Encoder RNN latent dimensionality") 
-parser.add_argument('--dec_H', type=int, default=100,
-                    help="Number of hidden neurons in MLP decoder") 
-parser.add_argument('--dec_L', type=int, default=2,
-                    help="Number of hidden layers in MLP decoder") 
-parser.add_argument('--dec_act', type=str, default='relu',
-                    help="MLP Decoder activation") 
-parser.add_argument('--enc_H', type=int, default=50,
-                    help="Encoder hidden dimensionality for GRU unit") 
-parser.add_argument('--sonode_v', type=str, default='MLP', choices=['MLP','RNN'],
-                    help="velocity encoder for SONODE") 
+    if npz_path is None:
+        raise FileNotFoundError(
+            f"No latent .npz found for split '{split}' in {latents_dir}.\n"
+            f"Tried: {npz_candidates}")
+    if json_path is None:
+        raise FileNotFoundError(
+            f"No metadata .json found for split '{split}' in {latents_dir}.\n"
+            f"Tried: {json_candidates}")
 
-#training 
-parser.add_argument('--Nepoch', type=int, default=600,
-                    help="Number of gradient steps for model training")
-parser.add_argument('--Nincr', type=int, default=10,
-                    help="Number of sequential increments of the sequence length")
-parser.add_argument('--batch_size', type=int, default=25,
-                    help="batch size")
-parser.add_argument('--lr', type=float, default=0.002,
-                    help="Learning rate for model training")
-parser.add_argument('--sobolev_weight', type=float, default=0,
-                    help="Weight of derivative loss likelihood")
-parser.add_argument('--l_w', type=float, default=0,
-                    help="Weight of likelihood scaled on derivative")
-parser.add_argument('--seed', type=int, default=121,
-                    help="Global seed for the training run")
-parser.add_argument('--continue_training', type=eval, default=False,
-                    help="If set to True continoues training of a previous model")
-parser.add_argument('--plot_every', type=int, default=20,
-                    help="How often plot the training")
-parser.add_argument('--plotL', type=int, default=1,
-                    help="Number of MC draws for plotting")
-parser.add_argument('--forecast_tr',type=int, default=2, 
-                    help="Number of forecast steps for plotting train")
-parser.add_argument('--forecast_vl',type=int, default=2,
-                    help="Number of forecast steps for plotting test")
-parser.add_argument('--exp_id', type=int, default=0,
-                    help = 'exp ID for directory')
+    npz      = np.load(npz_path)
+    latents  = dict(npz)          # {'z0': ndarray, 'm': ndarray, ...}
 
-#log 
-parser.add_argument('--save', type=str, default='results/',
-                    help="Directory name for saving all the model outputs")
-parser.add_argument('--continue_dir', type=str, default='results/',
-                    help="Directory name for continue training")
-parser.add_argument('--model_dir', type=str,
-                    help="directory of model")
-parser.add_argument('--analysis_latent', required=False, default=False, action='store_true',
-                    help="Whether to do latent space analysis")
+    with open(json_path) as f:
+        raw_meta = json.load(f)
+
+    # Normalise metadata: inference_analysis.py stores labels flat under 'labels',
+    # but for MedalCare-XL the labels dict only has 'class' and 'patient_id'.
+    # Ensure every entry has a 'labels' key.
+    metadata = []
+    for entry in raw_meta:
+        if 'labels' not in entry:
+            # Flatten all non-latent fields into labels
+            entry = dict(entry)
+            entry['labels'] = {k: v for k, v in entry.items()
+                               if k not in ('filename', 'patient_id')}
+        metadata.append(entry)
+
+    print(f"  [{split}] loaded {latents['z0'].shape[0]} samples "
+          f"from {os.path.basename(npz_path)}")
+    return latents, metadata
 
 def prepare_latents_and_labels(latents, metadata):
     """Extract valid (non-NaN/None) indices and label values for each phenotype parameter.
@@ -472,107 +408,34 @@ def _save_metrics_json(param_results, out_dir):
         json.dump(serialisable, f, indent=2)
 
 
-def _collect_sample_latents(dataloader, model, split, args):
-    """Run inference over a dataloader and collect per-sample latent.
-
-    """
-    save_directory = os.path.join(args.model_dir, 'latents')
-    # For a plain DataLoader the dataset is ECGDataset; for a Subset it's one level deeper
-    ecg_dataset = dataloader.dataset
-    ecg_dataset.return_file_path = True
-    model.eval()
-    model.return_latent = True
-
-    metadata_dict = []
-    if args.model == 'vae':
-        latent_tensors = {
-            'z0': [],
-        }
-    elif args.model == 'node':
-        latent_tensors = {
-            'z0': [],
-            'm': [],
-        }
-    else:
-        raise ValueError(f"Latent collection not implemented for model type {args.model}")
-
-    phenotypes = torch.load(args.label_path)
-    eids = phenotypes['eids']
-    eid_to_idx = {eid: i for i, eid in enumerate(eids)}   # O(1) lookup
-    targets_np = phenotypes['targets'].cpu().numpy()       # convert once
-    columns = phenotypes['columns']
-    not_found = 0
-    print(f'Dataset size : {len(dataloader.dataset.file_paths)}')
-    with torch.inference_mode():
-        for batch, batch_y, mask in tqdm(dataloader, desc="Collecting latents"):
-            batch = batch.to(model.device)
-            mask  = mask.to(model.device)
-
-            z0, m = model(batch, args.plotL, mask=mask)
-            z0 = z0.squeeze(0).squeeze(1).cpu().numpy()
-            if m is not None:
-                m = m.squeeze(0).cpu().numpy()
-
-            patient_ids = [item[1] for item in batch_y]
-
-            for i in range(batch.shape[0]):
-                eid_idx = eid_to_idx.get(patient_ids[i])
-                if eid_idx is None:
-                    not_found += 1
-                    continue
-
-                labels = dict(zip(columns, targets_np[eid_idx].tolist()))
-                metadata_dict.append({'patient_id': patient_ids[i], 'labels': labels})
-
-                latent_tensors['z0'].append(z0[i])
-                if m is not None and 'm' in latent_tensors:
-                    latent_tensors['m'].append(m[i])
-    
-    print(f"Finished collecting latents. {not_found} patient_ids were not found in phenotypes and were skipped.")
-    latents = {k: np.stack(v, axis=0) for k, v in latent_tensors.items() if len(v) > 0}
-
-    os.makedirs(save_directory, exist_ok=True)
-    np.savez(os.path.join(save_directory, f'{split}_latents.npz'), **latents)
-    with open(os.path.join(save_directory, f'{split}_metadata.json'), 'w') as f:
-        json.dump(metadata_dict, f)
-    print(f"Saved latents and metadata to {save_directory}/{split}_*")
-
-    return latents, metadata_dict
-    
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Run linear probes on pre-saved latents.')
+    parser.add_argument('--root_dir', type=str, required=True,
+                        help='Directory containing the saved latent .npz and metadata .json files.')
+    parser.add_argument('--splits', nargs='+', default=['train', 'test'],
+                        help='Splits to load (default: train test).')
     args = parser.parse_args()
-    dtype = torch.float64
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    trainset, validset, testset, manager, params = load_data(args, dtype)
+    root_dir  = args.root_dir
+    finetune_root = os.path.join(root_dir, 'finetune_results')
+    finetune_root = os.path.normpath(finetune_root)
 
-    if args.task == 'ecg':
-        config = {
-            'inp_dim': 12 - len(params[args.task]['exclude_leads_in']),
-            'w_dt': args.sobolev_weight,
-            'l_w': args.l_w,
-            'out_dim': 12 - len(params[args.task]['exclude_leads_out'])
-        }
-    model = build_model(args, device, dtype, **config)
-    model.to(device)
-    model.to(dtype)
-
-    ckpt = torch.load(os.path.join(args.model_dir, 'model.pth'),
-                      map_location=device, weights_only=False)
-    model.load_state_dict(ckpt["state_dict"])
-
+    latents_dir = os.path.join(root_dir, 'latents')
+    print("Loading latents...")
     latents_dict = {}
-    for split, dataloader in zip(['train', 'test'], [trainset, testset]):
-        latents, metadata = _collect_sample_latents(dataloader, model, split, args)
+    for split in args.splits:
+        latents, metadata = _load_split(latents_dir, split)
         latents_dict[split] = {'latents': latents, 'metadata': metadata}
 
-    finetune_root = os.path.join(args.model_dir, 'finetune_results')
+    train_split = args.splits[0]
+    test_split  = args.splits[-1]
 
     # Require m in both splits before running m-dependent probes
-    has_m = all('m' in latents_dict[s]['latents'] for s in ['train', 'test'])
+    has_m = all('m' in latents_dict[s]['latents'] for s in [train_split, test_split])
 
     if has_m:
-        for split in ['train', 'test']:
+        for split in [train_split, test_split]:
             lats = latents_dict[split]['latents']
             lats['z0_m'] = np.concatenate([lats['z0'], lats['m']], axis=1)
 
@@ -583,23 +446,26 @@ if __name__ == '__main__':
         return latents_dict[split]['metadata']
 
     print("\n=== Linear probes (z0) ===")
-    results_z0 = run_linear_probes(
-        _lats('train'), _meta('train'), _lats('test'), _meta('test'),
+    run_linear_probes(
+        _lats(train_split), _meta(train_split),
+        _lats(test_split),  _meta(test_split),
         latent_key='z0',
         out_root=os.path.join(finetune_root, 'z0'),
     )
 
     if has_m:
         print("\n=== Linear probes (m) ===")
-        results_m = run_linear_probes(
-            _lats('train'), _meta('train'), _lats('test'), _meta('test'),
+        run_linear_probes(
+            _lats(train_split), _meta(train_split),
+            _lats(test_split),  _meta(test_split),
             latent_key='m',
             out_root=os.path.join(finetune_root, 'm'),
         )
 
         print("\n=== Linear probes (z0 + m combined) ===")
-        results_z0_m = run_linear_probes(
-            _lats('train'), _meta('train'), _lats('test'), _meta('test'),
+        run_linear_probes(
+            _lats(train_split), _meta(train_split),
+            _lats(test_split),  _meta(test_split),
             latent_key='z0_m',
             out_root=os.path.join(finetune_root, 'z0_m'),
         )
