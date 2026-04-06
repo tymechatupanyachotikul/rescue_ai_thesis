@@ -248,8 +248,8 @@ def _plot_classification_param(param, model_results, out_dir, le):
 
 def _plot_summary_regression(all_results, out_dir):
     """Grouped bar chart: R² per param × model."""
-    model_names = ['ols', 'ridge', 'lasso', 'mlp']
     params = sorted(all_results.keys())
+    model_names = list(next(iter(all_results.values())).keys())
     x = np.arange(len(params))
     width = 0.2
 
@@ -271,8 +271,8 @@ def _plot_summary_regression(all_results, out_dir):
 
 def _plot_summary_classification(all_results, out_dir):
     """Grouped bar chart: AUC / accuracy / F1 per param × model."""
-    model_names = ['ols', 'ridge', 'lasso', 'mlp']
     params = sorted(all_results.keys())
+    model_names = list(next(iter(all_results.values())).keys())
     x = np.arange(len(params))
     width = 0.2
 
