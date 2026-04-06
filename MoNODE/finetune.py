@@ -162,7 +162,8 @@ def _eval_classification(model, X_tr, y_tr, X_te, y_te, le):
     metrics = {'accuracy': acc, 'f1': f1}
     y_prob = None
     if hasattr(model, 'predict_proba'):
-        y_prob = model.predict_proba(X_te)
+        with np.errstate(under='ignore'):   # sklearn softmax triggers harmless underflow
+            y_prob = model.predict_proba(X_te)
         try:
             if len(le.classes_) == 2:
                 metrics['roc_auc'] = float(roc_auc_score(y_te_enc, y_prob[:, 1]))
