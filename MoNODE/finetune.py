@@ -5,6 +5,8 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
+from tqdm import tqdm
 from sklearn.linear_model import (
     LinearRegression, RidgeCV, LassoCV,
     LogisticRegression, LogisticRegressionCV,
@@ -290,7 +292,7 @@ def _plot_classification_param(param, model_results, out_dir, le):
     plt.close(fig_pca)
 
     # --- Group-summary bar chart (ventricular / atrial / sinus) ---
-    groups = [('ventricular', ventricular), ('atrial', atrial), ('sinus', sinus)]
+    groups = [('Ventricular', ventricular), ('Atrial', atrial), ('Sinus', sinus)]
     groups = [(g, cls_list) for g, cls_list in groups if cls_list]  # skip absent groups
 
     if groups:
@@ -459,6 +461,10 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
             if is_binary:
                 y_tr = [int(v) for v in y_tr]
                 y_te = [int(v) for v in y_te]
+            if len(set(y_tr)) < 2:
+                print(f"  [{param}] skipped — training set contains only one class "
+                      f"(all samples are '{next(iter(set(y_tr)))}')")
+                continue
             le = LabelEncoder().fit(y_tr + y_te)
             param_results = {}
             for name, mdl in _classification_models():
@@ -553,6 +559,177 @@ def _remap_metadata(metadata: list, seg_type: str) -> list:
             entry['labels']['class'] = _remap_class(entry['labels']['class'], seg_type)
         remapped.append(entry)
     return remapped
+
+
+# ---------------------------------------------------------------------------
+# Post-training pipeline: latent collection + linear probes + wandb logging
+# ---------------------------------------------------------------------------
+
+def collect_latents(dataloader, model, task_params, args, device):
+    """Run inference over *dataloader* and collect z0 (and m) latents.
+
+    Handles both MedalCare-XL (class labels) and UK Biobank (phenotype targets).
+
+    Returns
+    -------
+    latents  : dict  {'z0': ndarray [N, d]}  + optional 'm': ndarray [N, m_dim]
+    metadata : list of N dicts, each with a 'labels' key
+    """
+    dataset_name = task_params.get('dataset', 'medalcare-xl').lower()
+
+    # UK Biobank: load phenotype targets once
+    if dataset_name != 'medalcare-xl':
+        pheno_path = os.path.join(args.dataset_root, 'uk_biobank', 'phenotype_targets.pt')
+        phenotype_data = torch.load(pheno_path, map_location='cpu', weights_only=False)
+        eids    = phenotype_data['eids']
+        targets = phenotype_data['targets'].cpu()
+        columns = phenotype_data['columns']
+
+    ecg_dataset = getattr(dataloader.dataset, 'dataset', dataloader.dataset)
+    ecg_dataset.return_file_path = True
+
+    model.eval()
+    model.return_latent = True
+
+    z0_list, m_list, metadata = [], [], []
+    has_m = True   # set False if model returns m=None
+    not_found = 0
+
+    with torch.no_grad():
+        for batch, batch_y, mask in tqdm(dataloader, desc="Collecting latents"):
+            batch = batch.to(device)
+            mask  = mask.to(device)
+
+            z0, m = model(batch, 1, mask=mask)   # L=1
+            z0 = z0.squeeze(0)                   # [N, d]
+            if m is not None:
+                m = m.squeeze(0)                 # [N, m_dim]
+            else:
+                has_m = False
+
+            patient_ids = [item[1] for item in batch_y]
+
+            for i in range(batch.shape[0]):
+                if dataset_name == 'medalcare-xl':
+                    cls = batch_y[i][0]
+                    z0_list.append(z0[i].detach().cpu().numpy())
+                    if has_m:
+                        m_list.append(m[i].detach().cpu().numpy())
+                    metadata.append({
+                        'patient_id': patient_ids[i],
+                        'labels': {'class': cls},
+                    })
+                else:
+                    pid = patient_ids[i]
+                    try:
+                        eid_idx = eids.index(pid)
+                    except ValueError:
+                        not_found += 1
+                        continue
+                    labels = {col: targets[eid_idx, j].item()
+                              for j, col in enumerate(columns)}
+                    z0_list.append(z0[i].detach().cpu().numpy())
+                    if has_m:
+                        m_list.append(m[i].detach().cpu().numpy())
+                    metadata.append({'patient_id': pid, 'labels': labels})
+
+    if not_found:
+        print(f"  {not_found} patient IDs not found in phenotype targets — skipped.")
+
+    latents = {'z0': np.stack(z0_list, axis=0)}
+    if has_m and m_list:
+        latents['m'] = np.stack(m_list, axis=0)
+
+    model.return_latent = False
+    return latents, metadata
+
+
+def log_probe_metrics(probe_results, latent_key, seg_type, run):
+    """Log linear probe metrics to a wandb run.
+
+    Keys follow the pattern:
+        probe/{seg_type}/{latent_key}/{regression|classification}/{param}/{method}/{metric}
+    """
+    prefix = f"probe/{seg_type}/{latent_key}" if seg_type else f"probe/{latent_key}"
+    log_dict = {}
+    for task_type in ('regression', 'classification'):
+        for param, model_results in probe_results.get(task_type, {}).items():
+            for method, res in model_results.items():
+                for metric, val in res['metrics'].items():
+                    if not (isinstance(val, float) and np.isnan(val)):
+                        log_dict[f"{prefix}/{task_type}/{param}/{method}/{metric}"] = val
+    if log_dict:
+        run.log(log_dict)
+        print(f"  Logged {len(log_dict)} probe metrics to wandb.")
+
+
+def run_post_training_probes(args, model, device, trainset, testset, task_params, run):
+    """Load best checkpoint, collect latents, run OLS linear probes, log to wandb.
+
+    Results are saved to:
+        {args.save}/latents/           — z0/m arrays + metadata JSON
+        {args.save}/finetune_results/  — per-param metrics.json + plots
+
+    The saved latent files follow the finetune.py naming convention so the
+    standalone ``finetune.py`` can be re-run on them for full probe analysis.
+    """
+    ckpt_path = os.path.join(args.save, 'model.pth')
+    if not os.path.exists(ckpt_path):
+        print(f"No checkpoint at {ckpt_path} — skipping post-training probes.")
+        return
+
+    print("\n========== Post-training linear probes ==========")
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    model.load_state_dict(ckpt['state_dict'])
+
+    dataset_name = task_params.get('dataset', 'medalcare-xl').lower()
+    seg_type     = getattr(args, 'segment_type', None)
+
+    with np.errstate(all='ignore'):
+        print("Collecting train latents...")
+        tr_latents, tr_metadata = collect_latents(trainset, model, task_params, args, device)
+        print("Collecting test latents...")
+        te_latents, te_metadata = collect_latents(testset,  model, task_params, args, device)
+
+    # Persist to disk — finetune.py _load_split() can read these back
+    latents_dir = os.path.join(args.save, 'latents')
+    os.makedirs(latents_dir, exist_ok=True)
+    np.savez(os.path.join(latents_dir, 'train_latents.npz'), **tr_latents)
+    np.savez(os.path.join(latents_dir, 'test_latents.npz'),  **te_latents)
+    with open(os.path.join(latents_dir, 'train_metadata.json'), 'w') as f:
+        json.dump(tr_metadata, f, indent=2)
+    with open(os.path.join(latents_dir, 'test_metadata.json'), 'w') as f:
+        json.dump(te_metadata, f, indent=2)
+    print(f"  Saved latents to {latents_dir}")
+
+    # Remap MedalCare-XL class labels for the segment type
+    if dataset_name == 'medalcare-xl' and seg_type:
+        tr_metadata = _remap_metadata(tr_metadata, seg_type)
+        te_metadata = _remap_metadata(te_metadata, seg_type)
+
+    # Build combined latent key when modulator is present
+    has_m = 'm' in tr_latents and 'm' in te_latents
+    if has_m:
+        tr_latents['z0_m'] = np.concatenate([tr_latents['z0'], tr_latents['m']], axis=1)
+        te_latents['z0_m'] = np.concatenate([te_latents['z0'], te_latents['m']], axis=1)
+
+    run_label     = seg_type if seg_type else 'all_classes'
+    finetune_root = os.path.join(args.save, 'finetune_results', run_label)
+
+    latent_keys = ['z0'] + (['m', 'z0_m'] if has_m else [])
+    for lkey in latent_keys:
+        print(f"\n=== Linear probes ({lkey}) ===")
+        with np.errstate(all='ignore'):
+            probe_results = run_linear_probes(
+                tr_latents, tr_metadata,
+                te_latents, te_metadata,
+                latent_key=lkey,
+                out_root=os.path.join(finetune_root, lkey),
+                methods={'ols'},
+            )
+        log_probe_metrics(probe_results, lkey, seg_type, run)
+
+    print("========== Post-training probes complete ==========\n")
 
 
 if __name__ == '__main__':
