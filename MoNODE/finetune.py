@@ -600,11 +600,8 @@ def collect_latents(dataloader, model, task_params, args, device):
             batch = batch.to(device)
             mask  = mask.to(device)
 
-            z0, m = model(batch, 1, mask=mask)   # L=1
-            z0 = z0.squeeze(0)                   # [N, d]
-            if m is not None:
-                m = m.squeeze(0)                 # [N, m_dim]
-            else:
+            z0, m = model(batch, 1, mask=mask)   # [N, d], [N, m_dim] or None
+            if m is None:
                 has_m = False
 
             patient_ids = [item[1] for item in batch_y]

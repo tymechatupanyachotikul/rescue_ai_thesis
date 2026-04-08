@@ -1,13 +1,14 @@
-import os 
+import os
 import argparse, time
 import numpy as np
 import torch
 from datetime import datetime
 from model.build_model import build_model
-from model.model_misc import train_model 
+from model.model_misc import train_model
 from model.misc import io_utils
 from model.misc.torch_utils import seed_everything, count_params
 from data.data_utils import load_data
+from finetune import run_post_training_probes
 import wandb
 
 SOLVERS   = ["euler", "bdf", "rk4", "midpoint", "adams", "explicit_adams", "fixed_adams", "dopri5"]
@@ -199,6 +200,10 @@ if __name__ == '__main__':
         logger.info('********** Resume training for model {} ********** '.format(fname))
 
     train_model(args, model, plotter, trainset, validset, testset, logger, params[args.task], run)
+
+    if args.task == 'ecg':
+        run_post_training_probes(args, model, device, trainset, testset, params[args.task], run)
+
     run.finish()
 
 

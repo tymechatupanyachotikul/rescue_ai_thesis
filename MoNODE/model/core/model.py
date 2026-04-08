@@ -171,9 +171,14 @@ class MoNODE(nn.Module):
             Xrec = self.build_decoding(ztL, out_shape, c)
         
         if self.return_latent:
-            if self.model == 'node' or self.model == 'hbnode':
-                return z0, m
+            # m is [L, N, m_dim] or None — squeeze L dim
+            m_out = m.squeeze(0) if m is not None else None   # [N, m_dim] or None
+            if self.model == 'node' or self.model == 'hbnode' or self.model == 'sonode':
+                # z0 is [L, N, Nobj, q] — flatten Nobj into q and remove L dim
+                z0_flat = z0.squeeze(0).reshape(N, -1)   # [N, Nobj*q]
+                return z0_flat, m_out
             elif self.model == 'vae':
-                return z0, None
+                # z0 is [L, N, q] — just remove L dim
+                return z0.squeeze(0), None
         else:
             return Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), InvMatrix, c, m
