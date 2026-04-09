@@ -585,7 +585,10 @@ def collect_latents(dataloader, model, task_params, args, device):
         targets = phenotype_data['targets'].cpu()
         columns = phenotype_data['columns']
 
-    ecg_dataset = getattr(dataloader.dataset, 'dataset', dataloader.dataset)
+    # Unwrap Subset wrappers to reach the underlying ECGDataset (which has file_paths)
+    ecg_dataset = dataloader.dataset
+    while not hasattr(ecg_dataset, 'file_paths'):
+        ecg_dataset = ecg_dataset.dataset
     ecg_dataset.return_file_path = True
 
     model.eval()
