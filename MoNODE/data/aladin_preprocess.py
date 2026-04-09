@@ -1,443 +1,671 @@
 import json
 import random
-import time
-import pandas as pd 
+import pandas as pd
 import os
-import glob
 import gc
 import wfdb
 from tqdm import tqdm
-import ast
 import argparse
-import numpy as np 
+import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import torch 
+import torch
 
 from aladin import ALADIN
 from aladin.core import Record
 
 import matplotlib.pyplot as plt
-from pprint import pprint 
 from collections import defaultdict
 
-from threading import Lock
-error_lock = Lock()
-
-
+FS = 500  # All ECG records are written/read at 500 Hz
 
 MEDALCARE_XL_LEADS = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
-UK_BB_LEADS    = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
-MIMIC_IV_LEADS = ['I', 'II', 'III', 'aVF', 'aVR', 'aVL', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
+UK_BB_LEADS        = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
+MIMIC_IV_LEADS     = ['I', 'II', 'III', 'aVF', 'aVR', 'aVL', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
 
 LEADS_DICT = {
     'medalcare-xl': MEDALCARE_XL_LEADS,
-    'ukbb': UK_BB_LEADS,
-    'mimic-iv': MIMIC_IV_LEADS
+    'ukbb':         UK_BB_LEADS,
+    'mimic-iv':     MIMIC_IV_LEADS,
 }
 
-ACCEPTED_TIME_RANGES = {
-    'atrial': (30, 70),
-    'ventricular': (150, 250)
+# Segment types required for each top-level mode, and whether the mode is atomic.
+_SEG_MODE: dict[str, tuple[list[str], bool]] = {
+    'all':          (['whole', 'atrial', 'ventricular'], True),
+    'both':         (['atrial', 'ventricular'],          False),
+    'whole':        (['whole'],                          False),
+    'atrial':       (['atrial'],                         False),
+    'ventricular':  (['ventricular'],                    False),
 }
 
-def convert_ecg_to_wfdb(filename, ecg_path, directory_path, dataset):
 
+# ---------------------------------------------------------------------------
+# Identifier and label helpers
+# ---------------------------------------------------------------------------
+
+def _parse_medalcare_ids(path: str) -> tuple[str, str]:
+    """Extract (run_id, session_id) from a MedalCare-XL file path."""
+    parts = path.split('/')
+    run_id     = parts[-2].split('_')[1]
+    session_id = parts[-1].split('_')[0]
+    return run_id, session_id
+
+
+def get_unique_id(record, dataset: str, idx: int | None = None) -> str:
+    """Stable, human-readable identifier for one ECG recording.
+
+    MedalCare-XL : {run_id}_{session_id}
+    UK Biobank / MIMIC-IV : stem of the original filename (EID)
+
+    Append _{idx} for sampled beat type (multiple segments per recording).
+    """
+    path = str(record.original_file_path)
+    if dataset == 'medalcare-xl':
+        run_id, session_id = _parse_medalcare_ids(path)
+        uid = f'{run_id}_{session_id}'
+    else:
+        uid = os.path.splitext(os.path.basename(path))[0]
+    return f'{uid}_{idx}' if idx is not None else uid
+
+
+def get_labels(record, dataset: str, phenotype_data: dict | None = None) -> dict:
+    """Build the labels dict for the metadata file.
+
+    MedalCare-XL : {'class': <groundtruth>, 'patient_id': <run_id>}
+    UK Biobank / MIMIC-IV : {'patient_id': <eid>} + all phenotype columns
+                            when phenotype_data is provided.
+    """
+    if dataset == 'medalcare-xl':
+        run_id, _ = _parse_medalcare_ids(str(record.original_file_path))
+        return {
+            'class':      record.groundtruth if hasattr(record, 'groundtruth') else None,
+            'patient_id': run_id,
+        }
+
+    pid = os.path.splitext(os.path.basename(str(record.original_file_path)))[0]
+    labels: dict[str, object] = {'patient_id': pid}
+
+    if phenotype_data is not None:
+        eid_to_idx = phenotype_data['eid_to_idx']
+        idx = eid_to_idx.get(str(pid))
+        if idx is None and pid.isdigit():
+            idx = eid_to_idx.get(int(pid))
+        if idx is not None:
+            # Vectorised: extract entire row at once, then zip with column names.
+            row = phenotype_data['targets'][idx].tolist()
+            labels.update(zip(phenotype_data['columns'], row))
+
+    return labels
+
+
+# ---------------------------------------------------------------------------
+# ECG loading and WFDB conversion
+# ---------------------------------------------------------------------------
+
+def _write_wfdb(case: str, ecg: np.ndarray, directory_path: str, dataset: str):
+    wfdb.wrsamp(
+        record_name=case,
+        write_dir=directory_path,
+        fs=FS,
+        units=['mV'] * ecg.shape[1],
+        sig_name=LEADS_DICT[dataset][:ecg.shape[1]],
+        p_signal=ecg,
+        fmt=['16'] * ecg.shape[1],
+    )
+
+
+def convert_ecg_to_wfdb(filename: str, ecg_path: str, directory_path: str, dataset: str):
     case = os.path.splitext(filename)[0]
-
     if filename.endswith('.csv'):
         ecg = pd.read_csv(ecg_path, header=None, dtype=np.float32).to_numpy()
-    elif filename.endswith('.npy'):
+    else:  # .npy
         ecg = np.load(ecg_path)
-
     if ecg.shape[0] < ecg.shape[1]:
         ecg = ecg.T
+    np.nan_to_num(ecg, nan=0.0, copy=False)
+    _write_wfdb(case, ecg, directory_path, dataset)
 
-    ecg = np.nan_to_num(ecg, nan=0.0, copy=False)
 
-    wfdb.wrsamp(
-        record_name=case, 
-        write_dir=directory_path,
-        fs=500, 
-        units=['mV'] * ecg.shape[1], 
-        sig_name=LEADS_DICT[dataset][:ecg.shape[1]], 
-        p_signal=ecg, 
-        fmt=['16'] * ecg.shape[1]
-    )    
-    
-def load_and_convert_case(row, dataset):
-    """Worker function to handle file checking, conversion, and loading."""
+def load_and_convert_case(row, dataset: str):
+    """Load one ECG file, converting to WFDB format if needed.
 
-    MIN_LENGTH = 100 
-
-    ecg_path = str(row.data_path)
-    directory_path, filename = os.path.split(ecg_path)
-    case = os.path.splitext(filename)[0]
-    
-    filepath = os.path.join(directory_path, case)
+    Returns (Record, wfdb_rec).
+    """
+    MIN_LENGTH = 100
+    ecg_path               = str(row.data_path)
+    directory_path, fname  = os.path.split(ecg_path)
+    case                   = os.path.splitext(fname)[0]
+    filepath               = os.path.join(directory_path, case)
 
     if not os.path.exists(filepath + '.dat') or not os.path.exists(filepath + '.hea'):
-        convert_ecg_to_wfdb(filename, ecg_path, directory_path, dataset)
-    
+        convert_ecg_to_wfdb(fname, ecg_path, directory_path, dataset)
+
     try:
         rec = wfdb.rdrecord(filepath)
-        if dataset == 'mimic-iv':
-            rec.sig_name = LEADS_DICT[dataset]
+        if dataset == 'mimic-iv' and rec.sig_name != LEADS_DICT['mimic-iv']:
+            rec.sig_name = LEADS_DICT['mimic-iv']
             wfdb.wrsamp(
-                record_name=case,
-                write_dir=directory_path,
-                fs=rec.fs,
-                units=rec.units,
-                sig_name=rec.sig_name,
-                p_signal=rec.p_signal,
-                fmt=rec.fmt
+                record_name=case, write_dir=directory_path,
+                fs=rec.fs, units=rec.units,
+                sig_name=rec.sig_name, p_signal=rec.p_signal, fmt=rec.fmt,
             )
-    except Exception as e:
-        convert_ecg_to_wfdb(filename, ecg_path, directory_path, dataset)
+    except Exception:
+        convert_ecg_to_wfdb(fname, ecg_path, directory_path, dataset)
         rec = wfdb.rdrecord(filepath)
 
     if rec.p_signal.shape[0] < MIN_LENGTH:
-        raise ValueError(f"ECG signal too short: {rec.p_signal.shape[0]} samples in {filepath}")
-    
-    ecg_dict = {name: rec.p_signal[:, i] for i, name in enumerate(rec.sig_name)}
+        raise ValueError(f"ECG too short: {rec.p_signal.shape[0]} samples ({filepath})")
 
+    ecg_dict = {name: rec.p_signal[:, i] for i, name in enumerate(rec.sig_name)}
     record = Record(ecg_dict, rec.fs, "DEMO", case)
     if hasattr(row, 'label'):
-        record.groundtruth = row.label 
+        record.groundtruth = row.label
     if hasattr(row, 'hash'):
-        record.hash = row.hash        
+        record.hash = row.hash
     record.original_file_path = row.data_path
 
-    if os.path.exists(filepath + '.npy'):
-        os.remove(filepath + '.npy')
+    npy_path = filepath + '.npy'
+    if os.path.exists(npy_path):
+        os.remove(npy_path)
 
     return record, rec
 
-def get_ecg_segments_idx(record, segment_type, beat_type):
 
-    segments = []
-    
-    def is_valid(val):
-        return val is not None and not np.isnan(val)
-    
+# ---------------------------------------------------------------------------
+# Segmentation
+# ---------------------------------------------------------------------------
+
+def _is_valid(val) -> bool:
+    return val is not None and not np.isnan(val)
+
+
+def get_ecg_segments_idx(record, segment_type: str, beat_type: str) -> tuple[list, bool]:
+    """Compute (start, end) sample index pairs for one segment type.
+
+    For 'atrial' / median beat, applies a two-tier estimation strategy when
+    P-wave delineations are partially or fully missing:
+
+        If P_onset  is missing → P_onset  = QRS_onset − 200 ms (100 samples at 500 Hz)
+        If P_offset is missing → P_offset = QRS_onset −  20 ms  (10 samples at 500 Hz)
+        If QRS onset is also unknown → cannot estimate → returns empty list.
+
+    Returns
+    -------
+    segments    : list of (start, end) tuples
+    p_estimated : True when P-wave boundaries were estimated
+    """
     if segment_type == 'ventricular':
         if beat_type == 'sampled':
-            qrst_idx = []
-            for beat in record.qrs:
-                start = int(beat.onset)
-                if beat.t is not None:
-                    end = int(beat.t.offset)
-                else:
-                    continue
-                qrst_idx.append((start, end))
-                
+            qrst_idx = [
+                (int(beat.onset), int(beat.t.offset))
+                for beat in record.qrs
+                if beat.t is not None
+            ]
             k = min(2, len(qrst_idx))
-            segments = random.sample(qrst_idx, k) if k > 0 else []
-        elif beat_type == 'median':
-            onset = record.median_beat.delineations.qrs.onset
-            offset = record.median_beat.delineations.t.offset
+            return (random.sample(qrst_idx, k) if k > 0 else []), False
 
-            segments = [(int(onset), int(offset))] if is_valid(onset) and is_valid(offset) else []
-        
-    elif segment_type == 'atrial':
+        # median
+        onset  = record.median_beat.delineations.qrs.onset
+        offset = record.median_beat.delineations.t.offset
+        if _is_valid(onset) and _is_valid(offset):
+            return [(int(onset), int(offset))], False
+        return [], False
+
+    if segment_type == 'atrial':
         if beat_type == 'sampled':
             k = min(2, len(record.p))
             sampled_p = random.sample(record.p, k) if k > 0 else []
-            segments = [(int(seg.onset), int(seg.offset)) for seg in sampled_p]
-        elif beat_type == 'median':
-            onset = record.median_beat.delineations.p.onset
-            offset = record.median_beat.delineations.p.offset
+            return [(int(s.onset), int(s.offset)) for s in sampled_p], False
 
-            segments = [(int(onset), int(offset))] if is_valid(onset) and is_valid(offset) else []
+        # median
+        p_onset   = record.median_beat.delineations.p.onset
+        p_offset  = record.median_beat.delineations.p.offset
+        qrs_onset = record.median_beat.delineations.qrs.onset
 
-    return segments 
+        if _is_valid(p_onset) and _is_valid(p_offset):
+            return [(int(p_onset), int(p_offset))], False
 
-def save_ecg_segment(segments, norm_ecg, original_record, record, segment_type, out_dir, beat_type, dataset, error_dict, plot=False):
+        if _is_valid(qrs_onset):
+            qrs_i      = int(qrs_onset)
+            est_onset  = int(p_onset)  if _is_valid(p_onset)  else qrs_i - int(0.200 * FS)
+            est_offset = int(p_offset) if _is_valid(p_offset) else qrs_i - int(0.020 * FS)
+            est_onset  = max(0, est_onset)
+            est_offset = max(est_onset + 1, est_offset)
+            if est_onset < est_offset:
+                return [(est_onset, est_offset)], True
 
-    save_dir = os.path.join(out_dir, segment_type, beat_type)
-    anomalies_dir = os.path.join(out_dir, 'anomalies')
-    os.makedirs(save_dir, exist_ok=True)
-    os.makedirs(anomalies_dir, exist_ok=True)
+        return [], False  # QRS onset unknown → cannot estimate
 
-    for idx, (start, end) in enumerate(segments):
-        ecg_segment = norm_ecg[start:end, :]
+    # whole — full median beat, no sub-segmentation
+    beat_len = record.median_beat.ecg.shape[1]  # shape: [leads, T]
+    return [(0, beat_len)], False
 
-        if beat_type == 'median':
-            mu = np.mean(ecg_segment, axis=0, keepdims=True)
-            sigma = np.std(ecg_segment, axis=0, keepdims=True)
-            ecg_segment = (ecg_segment - mu) / (sigma + 1e-8)
 
-        delta_t = end - start
-        
-        if dataset == 'medalcare-xl':
-            run_id = record.original_file_path.split('/')[-2].split('_')[1]
-            session_id = record.original_file_path.split('/')[-1].split('_')[0]
-            label = record.groundtruth.replace('.', '')
+# ---------------------------------------------------------------------------
+# Saving  (directories are pre-created in the main loop)
+# ---------------------------------------------------------------------------
 
-            if beat_type == 'sampled':
-                base_name = f'T{delta_t}_{run_id}_{session_id}_{label}_{idx}'
-            else:
-                base_name = f'T{delta_t}_{run_id}_{session_id}_{label}'
-        elif dataset in ['ukbb', 'mimic-iv']:
-            run_id = os.path.splitext(os.path.basename(record.original_file_path))[0]
-            if beat_type == 'sampled':
-                base_name = f'T{delta_t}_{run_id}_{idx}'
-            else:
-                base_name = f'T{delta_t}_{run_id}'
+def save_ecg_segment(
+    segments: list[tuple[int, int]],
+    raw_ecg: np.ndarray,
+    base_uid: str,
+    segment_type: str,
+    save_dir: str,
+    beat_type: str,
+):
+    """Slice raw_ecg into segments, normalise (except 'whole'), and save.
 
-        min_time, max_time = ACCEPTED_TIME_RANGES[segment_type]
-        ecg_segment = torch.from_numpy(ecg_segment.astype(np.float32))
+    Normalisation: per-lead z-score computed on the segment itself.
+    'whole' segments are saved without any normalisation.
+    Directories must be pre-created by the caller.
+    """
+    normalize = segment_type != 'whole'
 
-        if min_time <= delta_t <= max_time:
-            save_path = os.path.join(save_dir, f'{base_name}.pth')
+    for i, (start, end) in enumerate(segments):
+        segment = raw_ecg[start:end, :]  # view — no copy; normalization creates new array
+
+        if normalize:
+            mu     = np.mean(segment, axis=0, keepdims=True)
+            sigma  = np.std(segment,  axis=0, keepdims=True)
+            segment = (segment - mu) / (sigma + 1e-8)
+
+        uid       = f'{base_uid}_{i}' if beat_type == 'sampled' else base_uid
+        save_path = os.path.join(save_dir, f'{uid}.pth')
+        torch.save(torch.from_numpy(segment.astype(np.float32)), save_path)
+
+
+# ---------------------------------------------------------------------------
+# Per-record processing (lock-free — returns result dict for caller to merge)
+# ---------------------------------------------------------------------------
+
+def process_and_save_segments(
+    record,
+    original_record,
+    segment_type: str,
+    out_dir: str,
+    beat_type: str,
+    dataset: str,
+    phenotype_data: dict | None = None,
+) -> dict:
+    """Segment and save one ECG record.  No shared mutable state is touched.
+
+    Returns a result dict containing:
+        uid            : str | None — base unique ID (None if nothing was saved)
+        metadata       : dict | None
+        seg_failures   : list of (path, seg_type, beat_type) to append to error_dict
+        seg_counts     : dict (seg_type, beat_type) -> int for segmentation failure counts
+        p_estimated    : bool
+        discarded      : bool
+        groundtruth    : str | None (MedalCare-XL class, for class-distribution stats)
+        path           : str (original file path, for error tracking)
+    """
+    path = str(record.original_file_path)
+    gt   = getattr(record, 'groundtruth', None)
+
+    result: dict = {
+        'uid':          None,
+        'metadata':     None,
+        'seg_failures': [],
+        'seg_counts':   {},
+        'p_estimated':  False,
+        'discarded':    False,
+        'groundtruth':  gt,
+        'path':         path,
+    }
+
+    seg_types, atomic = _SEG_MODE[segment_type]
+
+    # Guard: median beat must be available
+    if beat_type == 'median' and getattr(record, 'median_beat', None) is None:
+        result['discarded'] = True
+        return result
+
+    raw_ecg = (original_record.p_signal
+               if beat_type == 'sampled'
+               else record.median_beat.ecg.T)  # [T, n_leads]
+
+    # ── Collect segments ──────────────────────────────────────────────────────
+    collected: dict[str, tuple[list, bool]] = {}
+
+    for seg_type in seg_types:
+        try:
+            segs, p_est = get_ecg_segments_idx(record, seg_type, beat_type)
+        except Exception as e:
+            print(f"  [segmentation error] {seg_type} | {path}: {e}")
+            segs, p_est = [], False
+
+        if segs:
+            collected[seg_type] = (segs, p_est)
+            if p_est:
+                result['p_estimated'] = True
         else:
-            save_path = os.path.join(anomalies_dir, f'{base_name}_{segment_type}.pth')
-            with error_lock:
-                error_dict['time_anomalies'][segment_type]['count'] += 1
-                error_dict['time_anomalies'][segment_type]['paths'].append(record.original_file_path)
+            key = (seg_type, beat_type)
+            result['seg_counts'][key] = result['seg_counts'].get(key, 0) + 1
+            result['seg_failures'].append((path, seg_type, beat_type))
 
-        torch.save(ecg_segment, save_path)
-        if plot:
-            if beat_type == 'median':
-                fig, ax = plt.subplots(figsize=(10, 4))
-                ax.plot(original_record.p_signal[:, 0], label='Original ECG')
-                ax.set_xlabel('Time')
-                ax.set_ylabel('Amplitude (mV)')
-                ax.legend()
-                fig.savefig(f'{base_name}_full_ecg_{beat_type}.png')
-                plt.close(fig) 
+    # ── Completeness check ────────────────────────────────────────────────────
+    if (atomic and len(collected) < len(seg_types)) or not collected:
+        result['discarded'] = True
+        return result
 
-                fig, ax = plt.subplots(figsize=(10, 4))
-                ax.plot(ecg_segment.detach().cpu().numpy()[:, 0], label='Normalised median beat')
-                ax.axvspan(start, end, color='#e74c3c', alpha=0.5, label=f"Segmented for {segment_type}")
-                ax.set_xlabel('Time')
-                ax.set_ylabel('Amplitude')
-                ax.legend()
-                fig.savefig(f'{base_name}_norm_segment_{beat_type}.png')
-                plt.close(fig) 
+    # ── Save ─────────────────────────────────────────────────────────────────
+    base_uid = get_unique_id(record, dataset)
 
-                fig, ax = plt.subplots(figsize=(10, 4))
-                ax.plot(record.median_beat.ecg[0, :], label='Median beat')
-                ax.axvspan(start, end, color='#e74c3c', alpha=0.5, label=f"Segmented for {segment_type}")
-                ax.set_xlabel('Time')
-                ax.set_ylabel('Amplitude (mV)')
-                ax.legend()
-                fig.savefig(f'{base_name}_segment_{beat_type}.png')
-                plt.close(fig)
+    for seg_type, (segs, _) in collected.items():
+        save_dir = os.path.join(out_dir, seg_type, beat_type)
+        save_ecg_segment(segs, raw_ecg, base_uid, seg_type, save_dir, beat_type)
 
-def process_and_save_segments(record, original_record, segment_type, out_dir, beat_type, dataset, error_dict,plot=False):
-    """Worker function to handle normalization and saving to disk."""
-    MAX_VAL = 30 
+    result['uid']      = base_uid
+    result['metadata'] = {
+        'labels':           get_labels(record, dataset, phenotype_data),
+        'p_wave_estimated': result['p_estimated'],
+    }
+    return result
 
-    segments_dict = {}
-    segment_type = ['atrial', 'ventricular'] if segment_type == 'both' else [segment_type]
 
-    for seg_type in segment_type:
-        segment_idx = get_ecg_segments_idx(record, seg_type, beat_type)
-        if segment_idx:
-            segments_dict[seg_type] = segment_idx
-        else:
-            with error_lock:
-                error_dict['segmentation'][seg_type][beat_type] += 1
-                error_dict['segmentation_failures'].append((record.original_file_path, seg_type, beat_type))
+def _merge_result(r: dict, metadata_dict: dict, error_dict: dict, dataset: str):
+    """Merge one worker result into the shared (single-threaded) accumulators."""
+    if r['uid']:
+        metadata_dict[r['uid']] = r['metadata']
 
-    if len(segments_dict.keys()) == 0:
-        return
+    # Segmentation failure counts
+    for (seg_type, bt), cnt in r['seg_counts'].items():
+        error_dict['segmentation'][seg_type][bt] += cnt
+    error_dict['segmentation_failures'].extend(r['seg_failures'])
 
-    original_ecg = original_record.p_signal if beat_type == 'sampled' else record.median_beat.ecg.T
-    print(f'ECG for {beat_type} {segment_type} has shape {original_ecg.shape}')
+    path = r['path']
+    gt   = r['groundtruth']
+    is_mc = dataset == 'medalcare-xl'
 
-    if np.max(original_ecg) > MAX_VAL:
-        with error_lock:
-            error_dict['anomoly'] += 1
-        return
-    
-    norm_ecg = original_ecg
-    if beat_type == 'sampled':
-        mu = np.mean(original_ecg, axis=0, keepdims=True)
-        sigma = np.std(original_ecg, axis=0, keepdims=True)
-        norm_ecg = (original_ecg - mu) / (sigma + 1e-8)
+    if r['discarded']:
+        error_dict['discarded']['count'] += 1
+        error_dict['discarded']['paths'].append(path)
+        if is_mc and gt:
+            error_dict['discarded']['class_distribution'][gt] += 1
 
-    for seg_type, seg_idx in segments_dict.items():
-        save_ecg_segment(seg_idx, norm_ecg, original_record, record, seg_type, out_dir, beat_type, dataset, error_dict, plot=plot)
-    
-def plot_ecg(ecg, out_path, f = 500):
+    if r['p_estimated']:
+        error_dict['p_wave_estimated']['count'] += 1
+        error_dict['p_wave_estimated']['paths'].append(path)
+        if is_mc and gt:
+            error_dict['p_wave_estimated']['class_distribution'][gt] += 1
+
+
+# ---------------------------------------------------------------------------
+# Plotting
+# ---------------------------------------------------------------------------
+
+def plot_ecg(ecg: np.ndarray, out_path: str, f: int = 500):
     t, l = ecg.shape
-    time = np.arange(t) / f
-    fig, axes = plt.subplots(l, 1, sharex=True)
-
+    time_ax = np.arange(t) / f
+    fig, axes = plt.subplots(l, 1, sharex=True, squeeze=False)
+    axes_flat = axes.flatten()
     for j in range(l):
-        ax = axes[j]
-        ax.plot(time, ecg[:, j], linewidth=0.7)
-        
+        axes_flat[j].plot(time_ax, ecg[:, j], linewidth=0.7)
         if j < l - 1:
-            ax.tick_params(axis='x', which='both', bottom=False, labelbottom=False)
-         
+            axes_flat[j].tick_params(axis='x', which='both', bottom=False, labelbottom=False)
     plt.xlabel("Time (seconds)", fontsize=12)
     plt.savefig(out_path)
     plt.close(fig)
 
+
+# ---------------------------------------------------------------------------
+# JSON serialisation helper
+# ---------------------------------------------------------------------------
+
+def _to_serialisable(obj):
+    if isinstance(obj, (defaultdict, dict)):
+        return {k: _to_serialisable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_to_serialisable(v) for v in obj]
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    return obj
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
-    argparser = argparse.ArgumentParser(description="Load and analyze ECG cases")
-    argparser.add_argument("--input_path", type=str, help="Path to the input directory", required=True)
-    argparser.add_argument("--batch_size", type=int, help="Number of cases to process in each batch", default=32) # Increased batch size
-    argparser.add_argument("--out_dir", type=str, help="Path to the output directory", required=True)
-    argparser.add_argument("--workers", type=int, help="Number of parallel workers", default=os.cpu_count())
-    argparser.add_argument("--beat_type", type=str, choices=['sampled', 'median'], help="Types of beat to segment", required=True)
-    argparser.add_argument("--demo", action='store_true', help="Run a quick demo with a subset of data")
-    argparser.add_argument("--plot_only", action='store_true', help="Only generate plots without saving segments")
-    argparser.add_argument("--plot_dir", type=str, help="Path to the directory where plots will be saved", default='/home/tchatupanyacho/rescue_ai_thesis/results/plots')
+    argparser = argparse.ArgumentParser(description="ALADIN-based ECG beat extraction and segmentation")
+    argparser.add_argument("--input_path",   type=str, required=True,
+                           help="CSV file listing ECG records for one split")
+    argparser.add_argument("--out_dir",      type=str, required=True,
+                           help="Root output directory")
+    argparser.add_argument("--beat_type",    type=str, required=True,
+                           choices=['sampled', 'median'])
+    argparser.add_argument("--segment_type", type=str, default=None,
+                           choices=['atrial', 'ventricular', 'both', 'whole', 'all'],
+                           help=(
+                               "'whole'  — full median beat, no sub-segmentation, no normalisation. "
+                               "'atrial' — P-wave with estimation fallback. "
+                               "'ventricular' — QRS-to-T. "
+                               "'both'   — atrial + ventricular independently. "
+                               "'all'    — whole + atrial + ventricular, atomic."
+                           ))
+    argparser.add_argument("--label_path",   type=str, default=None,
+                           help="phenotype_targets.pt for UK Biobank; embeds labels in metadata.")
+    argparser.add_argument("--batch_size",   type=int, default=32)
+    argparser.add_argument("--workers",      type=int, default=os.cpu_count())
+    argparser.add_argument("--demo",         action='store_true',
+                           help="Process only the first 3 records")
+    argparser.add_argument("--plot_only",    action='store_true',
+                           help="Generate diagnostic plots only, do not save segments")
+    argparser.add_argument("--plot_dir",     type=str,
+                           default='/home/tchatupanyacho/rescue_ai_thesis/results/plots')
     args = argparser.parse_args()
 
-    dataset = 'medalcare-xl' if 'medalcare-xl' in args.input_path else 'ukbb' if 'ukbb' in args.input_path else os.path.basename(args.input_path).split('_')[0]
+    # ── Dataset and split detection ───────────────────────────────────────────
+    dataset = (
+        'medalcare-xl' if 'medalcare-xl' in args.input_path else
+        'ukbb'         if 'ukbb'         in args.input_path else
+        os.path.basename(args.input_path).split('_')[0]
+    )
 
-    if dataset == 'medalcare-xl':
+    if args.segment_type is not None:
+        segment_type = args.segment_type
+    elif dataset == 'medalcare-xl':
         segment_type = os.path.splitext(args.input_path)[0].split('_')[-1]
-    elif dataset in ['ukbb', 'mimic-iv']:
+    else:
         segment_type = 'both'
 
     beat_type = args.beat_type
-    if dataset == 'medalcare-xl':
-        split = os.path.splitext(args.input_path)[0].split('_')[-2]
-    elif dataset in ['ukbb', 'mimic-iv']:
-        split = os.path.splitext(args.input_path)[0].split('_')[-1]
 
-    demo = args.demo
-    plot_only = args.plot_only
-    print(f'Processing {split} split for {segment_type} segments')
-    
-    out_dir = os.path.join(args.out_dir, split)
-    error_dir = os.path.join(args.out_dir, 'errors')
-    os.makedirs(out_dir, exist_ok=True)
-    os.makedirs(error_dir, exist_ok=True)
+    if segment_type in ('whole', 'all') and beat_type != 'median':
+        raise ValueError(f"--segment_type {segment_type} requires --beat_type median")
 
-    print("Loading ALADIN model into memory...")
-    aladin = ALADIN(
-        modelpaths=["ClassificationTrainer__nnUNetWithClassificationPlans__1d_decoding"],
-        debug={"segmenter": False, "afibdetector": False, "reflection": False, "total": False}
+    split = (
+        os.path.splitext(args.input_path)[0].split('_')[-2]
+        if dataset == 'medalcare-xl'
+        else os.path.splitext(args.input_path)[0].split('_')[-1]
     )
 
-    df = pd.read_csv(args.input_path) if not demo else pd.read_csv(args.input_path, nrows=3)
+    out_dir   = os.path.join(args.out_dir, split)
+    error_dir = os.path.join(args.out_dir, 'errors')
+    os.makedirs(out_dir,   exist_ok=True)
+    os.makedirs(error_dir, exist_ok=True)
 
-    chunks = [df.iloc[i:i + args.batch_size] for i in range(0, len(df), args.batch_size)]
-    
-    print(f"Starting processing with {args.workers} workers...")
-    error_dict = {
-        'convert_case': defaultdict(int),
-        'save_segment': defaultdict(int),
-        'segmentation': {
-            'ventricular': {
-                'sampled': 0,
-                'median': 0
-            },
-            'atrial': {
-                'sampled': 0,
-                'median': 0
-            }
-        },
-        'anomoly': 0,
-        'segmentation_failures': [],
-        'median_beat_extraction': 0,
-        'time_anomalies': {
-            'atrial': {
-                'count': 0,
-                'paths': []
-            }, 
-            'ventricular': {
-                'count': 0,
-                'paths': []
-            }
+    print(f"Dataset      : {dataset}")
+    print(f"Split        : {split}")
+    print(f"Segment type : {segment_type}")
+    print(f"Beat type    : {beat_type}")
+
+    # ── Pre-create all output directories ────────────────────────────────────
+    # Done once here so workers never pay the makedirs syscall cost.
+    if not args.plot_only:
+        for st in _SEG_MODE[segment_type][0]:
+            os.makedirs(os.path.join(out_dir, st, beat_type), exist_ok=True)
+
+    # ── Optional: load UK Biobank phenotype targets ───────────────────────────
+    phenotype_data: dict | None = None
+    if args.label_path is not None:
+        print(f"Loading phenotype targets from {args.label_path} ...")
+        raw = torch.load(args.label_path, map_location='cpu', weights_only=False)
+        eid_to_idx: dict = {}
+        for i, eid in enumerate(raw['eids']):
+            eid_to_idx[str(eid)] = i
+            if str(eid).isdigit():
+                eid_to_idx[int(eid)] = i
+        phenotype_data = {
+            'eids':       raw['eids'],
+            'targets':    raw['targets'].cpu(),
+            'columns':    raw['columns'],
+            'eid_to_idx': eid_to_idx,
         }
+        print(f"  {len(raw['eids'])} EIDs, {len(raw['columns'])} phenotypes.")
+
+    # ── Load ALADIN ────────────────────────────────────────────────────────────
+    print("Loading ALADIN ...")
+    aladin = ALADIN(
+        modelpaths=["ClassificationTrainer__nnUNetWithClassificationPlans__1d_decoding"],
+        debug={"segmenter": False, "afibdetector": False, "reflection": False, "total": False},
+    )
+
+    # ── Load CSV ──────────────────────────────────────────────────────────────
+    df     = pd.read_csv(args.input_path, nrows=3) if args.demo else pd.read_csv(args.input_path)
+    chunks = [df.iloc[i:i + args.batch_size] for i in range(0, len(df), args.batch_size)]
+    print(f"Processing {len(df)} records in {len(chunks)} batches ({args.workers} workers) ...")
+
+    # ── Error / stats tracking (accessed only by the main thread) ─────────────
+    error_dict = {
+        'convert_case':           defaultdict(int),
+        'save_segment':           defaultdict(int),
+        'median_beat_extraction': {'count': 0, 'paths': [], 'class_distribution': defaultdict(int)},
+        'p_wave_estimated':       {'count': 0, 'paths': [], 'class_distribution': defaultdict(int)},
+        'discarded':              {'count': 0, 'paths': [], 'class_distribution': defaultdict(int)},
+        'segmentation': {
+            'ventricular': {'sampled': 0, 'median': 0},
+            'atrial':      {'sampled': 0, 'median': 0},
+            'whole':       {'sampled': 0, 'median': 0},
+        },
+        'segmentation_failures': [],
     }
 
+    metadata_dict: dict = {}
+    n_loaded  = 0
     n_success = 0
-    for chunk_idx, chunk in enumerate(tqdm(chunks, desc="Processing Batches")):
-        
-        loaded_data = []
-        with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            future_to_row = {executor.submit(load_and_convert_case, row, dataset): row for row in chunk.itertuples(index=False)}
-            for future in as_completed(future_to_row):
+    is_mc     = dataset == 'medalcare-xl'
+
+    # ── Main processing loop ──────────────────────────────────────────────────
+    for chunk in tqdm(chunks, desc="Batches"):
+
+        # Load + convert ECG files in parallel (I/O-bound)
+        loaded_data: list = []
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futures = {
+                pool.submit(load_and_convert_case, row, dataset): row
+                for row in chunk.itertuples(index=False)
+            }
+            for future in as_completed(futures):
                 try:
                     loaded_data.append(future.result())
+                    n_loaded += 1
                 except Exception as e:
-                    with error_lock:
-                        error_dict['convert_case'][type(e).__name__] += 1
-                    print(f"Error loading record: {e}")
-        
+                    error_dict['convert_case'][type(e).__name__] += 1
+                    print(f"  [load error] {e}")
+
         if not loaded_data:
             continue
-            
-        records = [data[0] for data in loaded_data]
-        original_records = [data[1] for data in loaded_data]
 
-        st = time.time()
+        records          = [d[0] for d in loaded_data]
+        original_records = [d[1] for d in loaded_data]
+
+        # ALADIN batch segmentation + reflection (must be sequential)
         aladin.segmenter.batch(records)
         aladin.reflection.batch(records)
 
+        # Median beat extraction (sequential; ALADIN may not be thread-safe)
         if beat_type == 'median':
-            for record in tqdm(records, desc="Extracting median beats"):
+            for record in tqdm(records, desc="Median beats", leave=False):
                 try:
                     aladin.calculate_median(record, 0.4, 0.6, 0.1)
                 except Exception as e:
-                    with error_lock:
-                        error_dict['median_beat_extraction'] += 1
-                    print(f"Error processing record {record.recordname}: {e}")
-        
-        if plot_only:
-            plot_dir = args.plot_dir
-            os.makedirs(plot_dir, exist_ok=True)
+                    ed = error_dict['median_beat_extraction']
+                    ed['count'] += 1
+                    ed['paths'].append(str(record.original_file_path))
+                    if is_mc and hasattr(record, 'groundtruth'):
+                        ed['class_distribution'][record.groundtruth] += 1
+                    print(f"  [median beat error] {record.recordname}: {e}")
 
-            for record, original_record in zip(records, original_records):
-                if dataset == 'medalcare-xl':
-                    run_id = record.original_file_path.split('/')[-2].split('_')[1]
-                    session_id = record.original_file_path.split('/')[-1].split('_')[0]
-                    label = record.groundtruth.replace('.', '')
-                    if beat_type == 'sampled':
-                        aladin.plot(record, name=os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_ecg'))
-                    else:
-                        median_beat = record.median_beat.ecg.T
-                        original_ecg = original_record.p_signal
-
-                        mu = np.mean(median_beat, axis=0, keepdims=True)
-                        sigma = np.std(median_beat, axis=0, keepdims=True)
-                        norm_median_beat = (median_beat - mu) / (sigma + 1e-8)
-
-                        mu = np.mean(original_ecg, axis=0, keepdims=True)
-                        sigma = np.std(original_ecg, axis=0, keepdims=True)
-                        norm_original_ecg = (original_ecg - mu) / (sigma + 1e-8)
-
-                        plot_ecg(median_beat, os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_median_ecg.png'))
-                        plot_ecg(norm_median_beat, os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_norm_median_ecg.png'))
-                        plot_ecg(original_ecg, os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_original_ecg.png'))
-                        plot_ecg(norm_original_ecg, os.path.join(plot_dir, f'{run_id}_{session_id}_{label}_norm_original_ecg.png'))
-                else:
-                    run_id = os.path.splitext(record.original_file_path)[0]
-                    save_dir = os.path.join(plot_dir, f'{run_id}_ecg')
-                    print(f'Saving to {save_dir}')
-                    aladin.plot(record, name=save_dir)
+        if args.plot_only:
+            os.makedirs(args.plot_dir, exist_ok=True)
+            for record, orig in zip(records, original_records):
+                uid = get_unique_id(record, dataset)
+                if beat_type == 'sampled':
+                    aladin.plot(record, name=os.path.join(args.plot_dir, f'{uid}_ecg'))
+                elif getattr(record, 'median_beat', None) is not None:
+                    plot_ecg(record.median_beat.ecg.T,
+                             os.path.join(args.plot_dir, f'{uid}_median.png'))
+                    plot_ecg(orig.p_signal,
+                             os.path.join(args.plot_dir, f'{uid}_original.png'))
         else:
-            with ThreadPoolExecutor(max_workers=args.workers) as executor:
-                futures = []
-                for rec, orig in zip(records, original_records):
-                    futures.append(executor.submit(process_and_save_segments, rec, orig, segment_type, out_dir, beat_type, dataset, error_dict, plot=demo))
-                
-                for future in as_completed(futures):
+            # Submit save jobs; workers are lock-free and return result dicts.
+            with ThreadPoolExecutor(max_workers=args.workers) as pool:
+                save_futures = [
+                    pool.submit(
+                        process_and_save_segments,
+                        rec, orig, segment_type, out_dir, beat_type,
+                        dataset, phenotype_data,
+                    )
+                    for rec, orig in zip(records, original_records)
+                ]
+                for future in as_completed(save_futures):
                     try:
-                        future.result()
+                        result = future.result()
+                        _merge_result(result, metadata_dict, error_dict, dataset)
                         n_success += 1
                     except Exception as e:
-                        with error_lock:
-                            error_dict['save_segment'][type(e).__name__] += 1
-                        print(f"Error saving segment: {e}")
-        
-        del loaded_data 
-        del records 
-        del original_records
+                        error_dict['save_segment'][type(e).__name__] += 1
+                        print(f"  [save error] {e}")
+
+        del loaded_data, records, original_records
         gc.collect()
 
-    print("Processing complete!")
-    print(f"Successfully processed {n_success}/{len(df)} records.")
-    print("\nError Summary:")
-    print(error_dict)
+    # ── Save metadata ─────────────────────────────────────────────────────────
+    metadata_path = os.path.join(args.out_dir, f'{split}_metadata.json')
+    with open(metadata_path, 'w') as f:
+        json.dump(_to_serialisable(metadata_dict), f, indent=2)
+    print(f"\nMetadata → {metadata_path}  ({len(metadata_dict)} entries)")
 
-    with open(os.path.join(error_dir, f'{split}_{segment_type}_error_summary.json'), 'w') as f:
-        json.dump(error_dict, f, indent=4)
+    # ── Save statistics ───────────────────────────────────────────────────────
+    stats = {
+        'summary': {
+            'total_records_in_csv':        len(df),
+            'total_records_loaded':         n_loaded,
+            'total_records_save_attempted': n_success,
+            'total_patients_in_metadata':   len(metadata_dict),
+            'load_success_rate_pct':        round(100 * n_loaded / max(len(df), 1), 2),
+        },
+        'median_beat_extraction_failures': _to_serialisable(error_dict['median_beat_extraction']),
+        'p_wave_estimated':                _to_serialisable(error_dict['p_wave_estimated']),
+        'discarded_samples':               _to_serialisable(error_dict['discarded']),
+        'segmentation_failures_by_type':   _to_serialisable(error_dict['segmentation']),
+        'segmentation_failure_paths':      error_dict['segmentation_failures'],
+        'conversion_errors':               _to_serialisable(error_dict['convert_case']),
+        'save_errors':                     _to_serialisable(error_dict['save_segment']),
+    }
+    stats_path = os.path.join(error_dir, f'{split}_{segment_type}_stats.json')
+    with open(stats_path, 'w') as f:
+        json.dump(stats, f, indent=2)
+
+    # ── Human-readable summary ────────────────────────────────────────────────
+    print("\n" + "=" * 60)
+    print("PROCESSING COMPLETE")
+    print("=" * 60)
+    print(f"  Records in CSV              : {len(df)}")
+    print(f"  Successfully loaded         : {n_loaded}")
+    print(f"  Patients saved to metadata  : {len(metadata_dict)}")
+    print(f"  Median beat failures        : {error_dict['median_beat_extraction']['count']}")
+    print(f"  P-wave boundaries estimated : {error_dict['p_wave_estimated']['count']}")
+    print(f"  Samples discarded           : {error_dict['discarded']['count']}")
+    if is_mc:
+        pwe = dict(error_dict['p_wave_estimated']['class_distribution'])
+        dis = dict(error_dict['discarded']['class_distribution'])
+        if pwe:
+            print(f"  P-wave estimated — class dist : {pwe}")
+        if dis:
+            print(f"  Discarded        — class dist : {dis}")
+    print(f"\n  Statistics → {stats_path}")
+    print(f"  Metadata   → {metadata_path}")
+    print("=" * 60)
