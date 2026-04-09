@@ -1,4 +1,4 @@
-rom _future_ import annotations
+from _future_ import annotations
 
 import argparse
 from pathlib import Path
