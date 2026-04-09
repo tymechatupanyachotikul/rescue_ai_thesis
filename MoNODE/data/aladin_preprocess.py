@@ -42,14 +42,16 @@ _SEG_MODE: dict[str, tuple[list[str], bool]] = {
 # Identifier and label helpers
 # ---------------------------------------------------------------------------
 
-def _parse_medalcare_ids(path: str) -> tuple[str, str]:
+def _parse_medalcare_ids(path: str) -> tuple[str, str, str]:
     """Extract (run_id, session_id) from a MedalCare-XL file path."""
+
     print(path)
     parts = path.split('/')
     run_id     = parts[-2].split('_')[1]
     session_id = parts[-1].split('_')[0]
+    _cls = parts[-4]
 
-    return run_id, session_id
+    return run_id, session_id, _cls
 
 
 def get_unique_id(record, dataset: str, idx: int | None = None) -> str:
@@ -62,8 +64,8 @@ def get_unique_id(record, dataset: str, idx: int | None = None) -> str:
     """
     path = str(record.original_file_path)
     if dataset == 'medalcare-xl':
-        run_id, session_id = _parse_medalcare_ids(path)
-        uid = f'{run_id}_{session_id}'
+        run_id, session_id, _cls = _parse_medalcare_ids(path)
+        uid = f'{run_id}_{session_id}_{_cls}'
     else:
         uid = os.path.splitext(os.path.basename(path))[0]
     return f'{uid}_{idx}' if idx is not None else uid
@@ -77,8 +79,8 @@ def get_labels(record, dataset: str, phenotype_data: dict | None = None) -> dict
                             when phenotype_data is provided.
     """
     if dataset == 'medalcare-xl':
-        run_id, _ = _parse_medalcare_ids(str(record.original_file_path))
-        
+        run_id, _, _ = _parse_medalcare_ids(str(record.original_file_path))
+
         return {
             'class':      record.groundtruth if hasattr(record, 'groundtruth') else None,
             'patient_id': run_id,
