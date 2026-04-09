@@ -1,4 +1,3 @@
-from _future_ import annotations
 
 import argparse
 from pathlib import Path
