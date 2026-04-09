@@ -403,9 +403,9 @@ def update_metadata(metadata_path, split):
 
 
 meta_split = [
-    ('/projects/prjs1890/MedalCare-XL/segments/test_metadata.json', 'test'),
-    # ('/projects/prjs1890/MedalCare-XL/segments/valid_metadata.json', 'valid'),
-    # ('/projects/prjs1890/MedalCare-XL/segments/train_metadata.json', 'train'),
+    # ('/projects/prjs1890/MedalCare-XL/segments/test_metadata.json', 'test'),
+    ('/projects/prjs1890/MedalCare-XL/segments/valid_metadata.json', 'valid'),
+    ('/projects/prjs1890/MedalCare-XL/segments/train_metadata.json', 'train'),
 ]
         
 
