@@ -359,10 +359,18 @@ def process_and_save_segments(
         save_dir = os.path.join(out_dir, seg_type, beat_type)
         save_ecg_segment(segs, raw_ecg, base_uid, seg_type, save_dir, beat_type)
 
+    # Segment lengths: int for median (one segment per type), list for sampled.
+    seg_lengths = {
+        seg_type: (segs[0][1] - segs[0][0] if len(segs) == 1
+                   else [e - s for s, e in segs])
+        for seg_type, (segs, _) in collected.items()
+    }
+
     result['uid']      = base_uid
     result['metadata'] = {
-        'labels':           get_labels(record, dataset, phenotype_data),
-        'p_wave_estimated': result['p_estimated'],
+        'labels':            get_labels(record, dataset, phenotype_data),
+        'p_wave_estimated':  result['p_estimated'],
+        'segment_lengths':   seg_lengths,
     }
     return result
 
