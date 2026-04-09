@@ -300,26 +300,6 @@ def plot_ecg(file_path, root_dir):
         except Exception as e:
             print(f"Error processing {file}: {e}")
 
-
-# root_dir = '/projects/prjs1890/uk_biobank/raw'
-# get_uk_bb_split(root_dir)
-
-root_dir = '/scratch-shared/tchatupanyacho/mimic-iv-ecg-diagnostic-electrocardiogram-matched-subset-1.0'
-save_dir = '/projects/prjs1890/mimic-iv'
-lvef_csv = '/home/tchatupanyacho/rescue_ai_thesis/ECGFounder/csv/LVEF.csv'
-get_mimic_split(root_dir, save_dir, lvef_csv)
-
-# root_dir = '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly/plots'
-# anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000010_raw.csv_anomoly_ecg.pkl'
-
-# get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled', anomoly_ecg_path)
-# plot_ecg(anomoly_ecg_path, root_dir)
-
-# anomoly_ecg_path = '/projects/prjs1890/MedalCare-XL/examples/000031_raw.csv_anomoly_ecg.pkl'
-# plot_ecg(anomoly_ecg_path, root_dir)
-# get_time_stats('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled', anomoly_ecg_path)
-
-
 def remove_anomoly_ecg(base_dir, remove_dir, anomoly_ecg = []):
     
     for a in anomoly_ecg:
@@ -357,57 +337,78 @@ def remove_anomoly_ecg(base_dir, remove_dir, anomoly_ecg = []):
 
     print(f'Total ECG: {total_ecg} | Remaining ECG: {remaining} | Removed ECG: {total_ecg - remaining}')
 
+def get_filepath(uid, split):
+
+    splits = uid.split('_')
+    run_id = splits[0]
+    session = splits[1]
+
+    if len(splits) > 3:
+        _cls = 'mi'
+        subclass = '_'.join(splits[2:]) 
+        filepath = f'/projects/prjs1890/MedalCare-XL/WP2_largeDataset_ParameterFiles/{_cls}/{subclass}/{split}/run_{run_id}'
+    else:
+        _cls = splits[2]
+        filepath = f'/projects/prjs1890/MedalCare-XL/WP2_largeDataset_ParameterFiles/{_cls}/{split}/run_{run_id}'
+    
+    return (os.path.join(filepath, f'{session}_VentricularParameters.txt'), os.path.join(filepath, f'{session}_AtrialParameters.txt'))
+
+def update_metadata(metadata_path, split):
+    atrial_keys = ['cv_t.BulkTissue', 'cv_t.CristaTerminalis', 'cv_t.PectinateMuscles', 'cv_t.BachmannsBundle', 'cv_t.InferiorIsthmus',
+                   'ar.BulkTissue', 'ar.CristaTerminalis', 'ar.PectinateMuscles', 'ar.BachmannsBundle', 'ar.InferiorIsthmus']
+    ventricular_keys = [
+        "cv.rvmyo_s_r",
+        "cv.lvmyo_s_r",
+        "cv.lvmyo_n_r",
+        "cv.lvendo_s_r",
+        "cv.rvmyo_n_r",
+        "cv.rvendo_n_r",
+        "cv.lvmyo_f",
+        "cv.lvendo_n_r",
+        "cv.lvendo_f",
+        "cv.rvendo_s_r",
+        "cv.rvmyo_f",
+        "cv.rvendo_f",
+    ]
+
+    with open(metadata_path, 'r') as f:
+        metadata = json.load(f) 
+
+    for uid in metadata.keys():
+        v_file, a_file = get_filepath(uid, split)
+
+        with open(v_file, "r") as f:
+            lines = f.readlines()
+
+            for line in lines:
+                line_split = line.split('=')
+                param = line_split[0].strip()
+                if param in ventricular_keys:
+                    value = float(line_split[1].strip().replace('mm/s', '')) 
+                    metadata[uid]['labels'][param] = value
+
+        with open(a_file, "r") as f:
+            lines = f.readlines()
+
+            for line in lines:
+                line_split = line.split('=')
+                param = line_split[0].strip()
+                if param in atrial_keys:
+                    value = float(line_split[1].strip().replace('mm/s', '')) 
+                    metadata[uid]['labels'][param] = value
 
 
-# base_dirs = [
-#     '/projects/prjs1890/MedalCare-XL/segments/train/atrial/median',
-#     '/projects/prjs1890/MedalCare-XL/segments/train/ventricular/median',
-#     '/projects/prjs1890/MedalCare-XL/segments/valid/atrial/median',
-#     '/projects/prjs1890/MedalCare-XL/segments/valid/ventricular/median',
-#     '/projects/prjs1890/MedalCare-XL/segments/test/atrial/median',
-#     '/projects/prjs1890/MedalCare-XL/segments/test/ventricular/median', 
-#     '/projects/prjs1890/MedalCare-XL/segments/train/atrial/sampled',
-#     '/projects/prjs1890/MedalCare-XL/segments/train/ventricular/sampled',
-#     '/projects/prjs1890/MedalCare-XL/segments/valid/atrial/sampled',
-#     '/projects/prjs1890/MedalCare-XL/segments/valid/ventricular/sampled',
-#     '/projects/prjs1890/MedalCare-XL/segments/test/atrial/sampled',
-#     '/projects/prjs1890/MedalCare-XL/segments/test/ventricular/sampled',
-# ]
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=4)
 
-# csv_paths = [
-#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv',
-#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_ventricular.csv',
-#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_atrial.csv',
-#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_ventricular.csv',
-#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_atrial.csv',
-#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_ventricular.csv',
-#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv',
-#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_ventricular.csv',
-#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_atrial.csv',
-#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_valid_ventricular.csv',
-#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_atrial.csv',
-#     '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_test_ventricular.csv',
-# ]
-# for base_dir, csv_path in zip(base_dirs, csv_paths):
-#     remove_dir = base_dir.replace('segments', 'removed_anomoly_segments')
-#     os.makedirs(remove_dir, exist_ok=True)
 
-#     anomoly_ecg = find_anomoly_ecg(csv_path)
-#     remove_anomoly_ecg(base_dir, remove_dir, anomoly_ecg)
+meta_split = [
+    ('/projects/prjs1890/MedalCare-XL/segments/test_metadata.json', 'test'),
+    # ('/projects/prjs1890/MedalCare-XL/segments/valid_metadata.json', 'valid'),
+    # ('/projects/prjs1890/MedalCare-XL/segments/train_metadata.json', 'train'),
+]
+        
 
-# csv_path = '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_atrial.csv'
-# out_dir = '/projects/prjs1890/MedalCare-XL/examples'
 
-# find_anomoly_ecg(csv_path, out_dir)
-
-# csv_path = '/projects/prjs1890/MedalCare-XL/data_split/medalcare_xl_train_ventricular.csv'
-# find_anomoly_ecg(csv_path, out_dir)
-
-# root_dir = '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly'
-# file_paths = [
-#     '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly/filepaths/atrial_lower_files.json',
-#     '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly/filepaths/atrial_upper_files.json',
-#     '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly/filepaths/ventricular_lower_files.json',
-#     '/home/tchatupanyacho/rescue_ai_thesis/results/ecg_anomoly/filepaths/ventricular_upper_files.json',
-# ]
-
+for meta_path, split in meta_split:
+    update_metadata(meta_path, split)
