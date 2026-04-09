@@ -534,10 +534,6 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
     dict_test_mses = {}  # populated when best model is found
 
     for ep in range(args.Nepoch):
-        # Curriculum: increase horizon every ep_inc_c epochs
-        if ep != 0 and ep % ep_inc_c == 0:
-            T_ += ep_inc_v
-
         # VAE has no stochastic latent trajectory — use L=1 always
         L = 1 if args.model == 'sonode' else (1 if ep < args.Nepoch // 2 else 2)
 
@@ -549,16 +545,6 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
         # ── Inner batch loop ─────────────────────────────────────────────────
         for itr, (local_batch, local_y, local_mask) in enumerate(trainset):
             tr_minibatch = local_batch.to(model.device)
-            if itr == 0:
-                print(f"Train batch shape: {tr_minibatch.shape}")
-
-            # Curriculum sub-sampling for non-image tasks
-            if args.task in ('sin', 'spiral', 'lv') or 'mocap' in args.task:
-                N, T = tr_minibatch.shape[:2]
-                N_   = int(N * (T // T_))
-                t0s  = torch.randint(0, max(T - T_, 1), [N_]) if T_ < T else torch.zeros([N_], dtype=torch.int)
-                tr_minibatch = tr_minibatch.repeat([N_, 1, 1])
-                tr_minibatch = torch.stack([tr_minibatch[n, t0:t0 + T_] for n, t0 in enumerate(t0s)])
 
             loss, nlhood, kl_z0, _, _, tr_mse, _, _, _cls_mse, _pat_mse, sobolev_loss, _mse_per_lead = compute_loss(
                 model, tr_minibatch, local_y, L,
