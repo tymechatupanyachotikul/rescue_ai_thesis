@@ -44,9 +44,11 @@ _SEG_MODE: dict[str, tuple[list[str], bool]] = {
 
 def _parse_medalcare_ids(path: str) -> tuple[str, str]:
     """Extract (run_id, session_id) from a MedalCare-XL file path."""
+    print(path)
     parts = path.split('/')
     run_id     = parts[-2].split('_')[1]
     session_id = parts[-1].split('_')[0]
+    print(run_id, session_id)
     return run_id, session_id
 
 
