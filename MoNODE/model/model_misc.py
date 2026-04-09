@@ -392,8 +392,11 @@ def _log_split_metrics(run, prefix, dict_mses, mse_t_batches, mse_l_batches,
         data=[[ti, m, m - s, m + s] for ti, m, s in zip(t, mse_t, sse_t)],
         columns=["timestep", "mean", "lower", "upper"],
     )
+    _PANEL = {'val': 'valid_eval', 'test': 'test_eval'}
+    panel = _PANEL.get(prefix, f'{prefix}_eval')
+
     run.log({
-        f"tables/{prefix}/mse_t": wandb.plot_table(
+        f"{panel}/mse_t": wandb.plot_table(
             vega_spec_name="tymechatu-university-of-amsterdam/std_band_custom",
             data_table=table,
             fields={"x": "timestep", "y": "mean", "lower_bound": "lower", "upper_bound": "upper"},
@@ -408,10 +411,10 @@ def _log_split_metrics(run, prefix, dict_mses, mse_t_batches, mse_l_batches,
         columns=["lead", "mean", "lower", "upper"],
     )
     run.log({
-        f"tables/{prefix}/mse_by_lead": wandb.plot.bar(table, "lead", "mean", title="MSE per Lead")
+        f"{panel}/mse_by_lead": wandb.plot.bar(table, "lead", "mean", title="MSE per Lead")
     })
 
-    # Scalar MSE for this split
+    # Scalar MSE for this split (keep under original prefix for time-series charts)
     run.log({f"{prefix}/mse": mse_rec})
 
     if has_label:
@@ -419,13 +422,13 @@ def _log_split_metrics(run, prefix, dict_mses, mse_t_batches, mse_l_batches,
             data=[[cls, np.mean(vals)] for cls, vals in loss_per_class.items()],
             columns=["class", "mse"],
         )
-        run.log({f"tables/{prefix}/mse_per_class": wandb.plot.bar(table, "class", "mse", title="MSE per class")})
+        run.log({f"{panel}/mse_per_class": wandb.plot.bar(table, "class", "mse", title="MSE per class")})
 
         table = wandb.Table(
             data=[[pid, np.mean(vals)] for pid, vals in loss_per_patient.items()],
             columns=["patient_id", "mse"],
         )
-        run.log({f"tables/{prefix}/mse_per_patient": wandb.plot.bar(table, "patient_id", "mse", title="MSE per patient")})
+        run.log({f"{panel}/mse_per_patient": wandb.plot.bar(table, "patient_id", "mse", title="MSE per patient")})
 
     return mse_rec, mse_for
 
@@ -589,14 +592,14 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
         # ── End-of-epoch: log per-class / per-lead training metrics ──────────
         if has_label:
             run.log({
-                "tables/train/mse_per_class": wandb.plot.bar(
+                "train_eval/mse_per_class": wandb.plot.bar(
                     wandb.Table(
                         data=[[cls, np.mean(v)] for cls, v in loss_per_class.items()],
                         columns=["class", "mse"],
                     ),
                     "class", "mse", title="Train MSE per class",
                 ),
-                "tables/train/mse_per_patient": wandb.plot.bar(
+                "train_eval/mse_per_patient": wandb.plot.bar(
                     wandb.Table(
                         data=[[pid, np.mean(v)] for pid, v in loss_per_patient.items()],
                         columns=["patient_id", "mse"],
@@ -609,7 +612,7 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
             mean_lead = np.stack(mse_per_lead_accum).mean(axis=0).squeeze()  # (D,)
             lead_labels = custom_channel if custom_channel else list(range(len(mean_lead)))
             run.log({
-                "tables/train/mse_per_lead": wandb.plot.bar(
+                "train_eval/mse_per_lead": wandb.plot.bar(
                     wandb.Table(
                         data=[[str(l), v] for l, v in zip(lead_labels, mean_lead.tolist())],
                         columns=["lead", "mse"],
