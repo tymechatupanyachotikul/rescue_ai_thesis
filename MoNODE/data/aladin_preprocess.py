@@ -48,7 +48,7 @@ def _parse_medalcare_ids(path: str) -> tuple[str, str]:
     parts = path.split('/')
     run_id     = parts[-2].split('_')[1]
     session_id = parts[-1].split('_')[0]
-    print(run_id, session_id)
+    print('RUNID SESHID', run_id, session_id)
     return run_id, session_id
 
 
@@ -78,6 +78,7 @@ def get_labels(record, dataset: str, phenotype_data: dict | None = None) -> dict
     """
     if dataset == 'medalcare-xl':
         run_id, _ = _parse_medalcare_ids(str(record.original_file_path))
+        print(f'ground truth :{record.groundtruth}')
         return {
             'class':      record.groundtruth if hasattr(record, 'groundtruth') else None,
             'patient_id': run_id,
