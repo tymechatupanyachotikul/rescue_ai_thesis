@@ -644,23 +644,120 @@ def collect_latents(dataloader, model, task_params, args, device):
     return latents, metadata
 
 
-def log_probe_metrics(probe_results, latent_key, seg_type, run):
-    """Log linear probe metrics to a wandb run.
+def _probe_bar_chart(title, x_labels, bar_groups, ylabel, ylim=(0, 1)):
+    """Return a matplotlib Figure with a grouped bar chart for probe results.
 
-    Keys follow the pattern:
-        probe/{seg_type}/{latent_key}/{regression|classification}/{param}/{method}/{metric}
+    Args:
+        title      : figure title string
+        x_labels   : list of x-axis tick labels
+        bar_groups : list of (group_label, values_list) — one bar per group per x position
+        ylabel     : y-axis label
+        ylim       : (min, max) for y axis
     """
-    prefix = f"probe/{seg_type}/{latent_key}" if seg_type else f"probe/{latent_key}"
+    n_x      = len(x_labels)
+    n_groups = len(bar_groups)
+    width    = 0.8 / max(n_groups, 1)
+    offsets  = np.linspace(-(n_groups - 1) / 2 * width,
+                            (n_groups - 1) / 2 * width, n_groups)
+    x = np.arange(n_x)
+
+    fig, ax = plt.subplots(figsize=(max(6, n_x * 0.7 + 2), 4))
+    for (label, vals), offset in zip(bar_groups, offsets):
+        ax.bar(x + offset, vals, width, label=label, alpha=0.85)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(x_labels, rotation=35, ha='right', fontsize=8)
+    ax.set_ylabel(ylabel, fontsize=10)
+    ax.set_ylim(*ylim)
+    ax.set_title(title, fontsize=11, fontweight='bold')
+    if n_groups > 1:
+        ax.legend(fontsize=8, framealpha=0.8)
+    ax.spines[['top', 'right']].set_visible(False)
+    fig.tight_layout()
+    return fig
+
+
+def log_probe_metrics(probe_results, latent_key, seg_type, run):
+    """Log linear probe results to wandb under the 'linear probe' panel.
+
+    Logs:
+    - Regression   : bar chart of R² per parameter (one bar per probe method)
+    - Classification: bar chart of per-class accuracy + bar chart of overall
+                      accuracy / F1 / ROC-AUC per probe method
+    """
+    import wandb as _wandb
+    panel   = "linear probe"
+    suffix  = f"{seg_type}/{latent_key}" if seg_type else latent_key
     log_dict = {}
-    for task_type in ('regression', 'classification'):
-        for param, model_results in probe_results.get(task_type, {}).items():
-            for method, res in model_results.items():
-                for metric, val in res['metrics'].items():
-                    if not (isinstance(val, float) and np.isnan(val)):
-                        log_dict[f"{prefix}/{task_type}/{param}/{method}/{metric}"] = val
+
+    # ── Regression: R² per parameter ──────────────────────────────────────────
+    reg = probe_results.get('regression', {})
+    if reg:
+        params  = sorted(reg.keys())
+        methods = sorted(next(iter(reg.values())).keys())
+        groups  = [
+            (method, [reg[p][method]['metrics'].get('r2', float('nan')) for p in params])
+            for method in methods
+        ]
+        fig = _probe_bar_chart(
+            title=f"R² per parameter — {suffix}",
+            x_labels=params,
+            bar_groups=groups,
+            ylabel="R²",
+            ylim=(min(0, min(v for _, vs in groups for v in vs if not np.isnan(v)) - 0.05), 1.0),
+        )
+        log_dict[f"{panel}/regression/{suffix}"] = _wandb.Image(fig)
+        plt.close(fig)
+
+    # ── Classification: per-class accuracy + overall metrics ──────────────────
+    clf = probe_results.get('classification', {})
+    if clf:
+        for param, model_results in clf.items():
+            methods = sorted(model_results.keys())
+
+            # Per-class accuracy bar chart
+            sample_res = next(iter(model_results.values()))
+            le_classes = list(range(max(sample_res['y_true']) + 1))
+            # Use string class labels if available from per_class_accuracy computation
+            pca = {m: _per_class_accuracy(model_results[m]['y_true'],
+                                           model_results[m]['y_pred'],
+                                           le_classes)
+                   for m in methods}
+            # Try to get string class names from the label encoder stored in results
+            class_labels = [str(c) for c in le_classes]
+            pca_groups = [
+                (m, [pca[m].get(c, float('nan')) for c in le_classes])
+                for m in methods
+            ]
+            fig = _probe_bar_chart(
+                title=f"Per-class accuracy — {param} ({suffix})",
+                x_labels=class_labels,
+                bar_groups=pca_groups,
+                ylabel="Accuracy",
+                ylim=(0, 1.08),
+            )
+            log_dict[f"{panel}/classification/per_class_accuracy/{param}/{suffix}"] = _wandb.Image(fig)
+            plt.close(fig)
+
+            # Overall metrics bar chart (accuracy, f1, roc_auc)
+            metric_keys = ['accuracy', 'f1', 'roc_auc']
+            metric_groups = [
+                (m, [model_results[m]['metrics'].get(k, float('nan')) for k in metric_keys])
+                for m in methods
+            ]
+            fig = _probe_bar_chart(
+                title=f"Overall metrics — {param} ({suffix})",
+                x_labels=metric_keys,
+                bar_groups=metric_groups,
+                ylabel="Score",
+                ylim=(0, 1.08),
+            )
+            log_dict[f"{panel}/classification/overall_metrics/{param}/{suffix}"] = _wandb.Image(fig)
+            plt.close(fig)
+
     if log_dict:
         run.log(log_dict)
-        print(f"  Logged {len(log_dict)} probe metrics to wandb.")
+        print(f"  Logged {len(log_dict)} probe charts to wandb under '{panel}' panel.")
 
 
 def run_post_training_probes(args, model, device, trainset, testset, task_params, run):
