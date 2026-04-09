@@ -48,7 +48,7 @@ def _parse_medalcare_ids(path: str) -> tuple[str, str]:
     parts = path.split('/')
     run_id     = parts[-2].split('_')[1]
     session_id = parts[-1].split('_')[0]
-    print('RUNID SESHID', run_id, session_id)
+
     return run_id, session_id
 
 
@@ -78,7 +78,7 @@ def get_labels(record, dataset: str, phenotype_data: dict | None = None) -> dict
     """
     if dataset == 'medalcare-xl':
         run_id, _ = _parse_medalcare_ids(str(record.original_file_path))
-        print(f'ground truth :{record.groundtruth}')
+        
         return {
             'class':      record.groundtruth if hasattr(record, 'groundtruth') else None,
             'patient_id': run_id,
@@ -453,6 +453,8 @@ if __name__ == "__main__":
     argparser.add_argument("--workers",      type=int, default=os.cpu_count())
     argparser.add_argument("--demo",         action='store_true',
                            help="Process only the first 3 records")
+    argparser.add_argument("--split",    type=str, required=True,
+                           choices=['train', 'valid', 'test'])
     argparser.add_argument("--plot_only",    action='store_true',
                            help="Generate diagnostic plots only, do not save segments")
     argparser.add_argument("--plot_dir",     type=str,
@@ -461,7 +463,7 @@ if __name__ == "__main__":
 
     # ── Dataset and split detection ───────────────────────────────────────────
     dataset = (
-        'medalcare-xl' if 'medalcare-xl' in args.input_path else
+        'medalcare-xl' if 'medalcare-xl' in args.input_path  or 'medalcare_xl' in args.input_path else
         'ukbb'         if 'ukbb'         in args.input_path else
         os.path.basename(args.input_path).split('_')[0]
     )
@@ -478,11 +480,7 @@ if __name__ == "__main__":
     if segment_type in ('whole', 'all') and beat_type != 'median':
         raise ValueError(f"--segment_type {segment_type} requires --beat_type median")
 
-    split = (
-        os.path.splitext(args.input_path)[0].split('_')[-2]
-        if dataset == 'medalcare-xl'
-        else os.path.splitext(args.input_path)[0].split('_')[-1]
-    )
+    split = args.split
 
     out_dir   = os.path.join(args.out_dir, split)
     error_dir = os.path.join(args.out_dir, 'errors')
