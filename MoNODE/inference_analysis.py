@@ -51,7 +51,11 @@ parser.add_argument('--de_L', type=int, default=2,
                     help="Number of hidden layers in MLP diff func")
 parser.add_argument('--de_H', type=int, default=100,
                     help="Number of hidden neurons in each layer of MLP diff func")
-
+parser.add_argument('--aladin_metadata_dir', type=str, default=None,
+                        help='Directory containing {split}_metadata.json files produced by '
+                             'aladin_preprocess.py (train_metadata.json, valid_metadata.json, '
+                             'test_metadata.json).  When provided, labels are taken from these '
+                             'files instead of from the metadata embedded in the latents JSON.')
 
 #invariance
 parser.add_argument('--inv_fnc', type=str, default='MLP',
