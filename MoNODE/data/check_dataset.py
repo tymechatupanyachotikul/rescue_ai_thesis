@@ -789,7 +789,7 @@ for metadata_path, split, error_path, anomaly_dir in meta_split:
     remove_anomaly_test(metadata_path, error_path, split, anomaly_dir, root_dir)
 
 remove_anomaly_train(
-    '/projects/prjs1890/uk_biobank/segments/test_metadata.json',
+    '/projects/prjs1890/uk_biobank/segments/train_metadata.json',
     '/projects/prjs1890/uk_biobank/segments/errors/train_all_stats.json', 
     'train', 
     '/projects/prjs1890/uk_biobank/segments/valid/anomaly', 
