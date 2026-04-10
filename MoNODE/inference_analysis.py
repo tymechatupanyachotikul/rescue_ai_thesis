@@ -302,7 +302,6 @@ def _collect_sample_latents(dataloader, model, split, args):
                         if entry is not None:
                             labels = entry.get('labels', {})
                         else:
-                            print(stem, uid)
                             not_found += 1
                             # Parse class from UID: parts after session_id (index 1)
                             uid_parts = uid.split('_')
