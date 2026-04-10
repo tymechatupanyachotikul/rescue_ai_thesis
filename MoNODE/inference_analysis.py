@@ -415,7 +415,7 @@ if __name__ == '__main__':
 
     if analysis_latent:
         _collect_sample_latents(testset, model, 'test', args)
-        _collect_sample_latents(trainset, model, 'valid', args)
+        _collect_sample_latents(validset, model, 'valid', args)
         _collect_sample_latents(trainset, model, 'train', args)
     else:
         sample_results, loss_per_class = _collect_sample_results(testset, model, args)
