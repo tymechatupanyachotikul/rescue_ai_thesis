@@ -173,12 +173,17 @@ class MoNODE(nn.Module):
         if self.return_latent:
             # m is [L, N, m_dim] or None — squeeze L dim
             m_out = m.squeeze(0) if m is not None else None   # [N, m_dim] or None
-            if self.model == 'node' or self.model == 'hbnode' or self.model == 'sonode':
-                # z0 is [L, N, Nobj, q] — flatten Nobj into q and remove L dim
+            if self.model == 'node' or self.model == 'hbnode':
+                # Return the posterior mean s0_mu [N, q] — deterministic, no sampling noise.
+                # s0_mu may cover multiple objects (Nobj); reshape to match z0_flat convention.
+                z0_mean = s0_mu.reshape(N, -1)   # [N, q]  (Nobj already folded into q by encoder)
+                return z0_mean, m_out
+            elif self.model == 'sonode':
+                # SONODE has no VAE posterior — sampled z0 is the best available representation
                 z0_flat = z0.squeeze(0).reshape(N, -1)   # [N, Nobj*q]
                 return z0_flat, m_out
             elif self.model == 'vae':
-                # z0 is [L, N, q] — just remove L dim
-                return z0.squeeze(0), None
+                # Return posterior mean s0_mu [N, q] instead of the sampled z0
+                return s0_mu, None
         else:
             return Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), InvMatrix, c, m
