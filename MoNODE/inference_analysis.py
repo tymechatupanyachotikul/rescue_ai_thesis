@@ -1,5 +1,6 @@
 import json
-import os 
+import os
+import re
 import numpy as np
 import torch
 from model.build_model import build_model
@@ -217,30 +218,61 @@ def _collect_sample_results(dataloader, model, args, class_filter=None):
     return results, loss_per_class
 
 
-def _collect_sample_latents(dataloader, model, split, args):
-    """Run inference over a dataloader and collect per-sample latent.
+_T_PREFIX_RE = re.compile(r'^T\d+_')
 
+def _medalcare_uid_from_stem(stem: str) -> str:
+    """Strip the run-directory prefix from a MedalCare-XL .pth file stem.
+
+    e.g. ``T49_S62_000069_lae`` → ``S62_000069_lae``.
+    Stems that do not start with ``T\\d+_`` are returned unchanged.
+    """
+    return _T_PREFIX_RE.sub('', stem)
+
+
+def _collect_sample_latents(dataloader, model, split, args):
+    """Run inference over a dataloader and collect per-sample latents.
+
+    For MedalCare-XL the UID is derived from the filename stem by stripping
+    the run-directory prefix (``T{n}_``), then used to look up the full label
+    dict from the ALADIN metadata file specified by ``args.aladin_metadata_dir``
+    (expected path: ``{aladin_metadata_dir}/{split}_metadata.json``).
     """
     save_directory = os.path.join(os.path.dirname(args.model_path), 'latents')
-    # For a plain DataLoader the dataset is ECGDataset; for a Subset it's one level deeper
     ecg_dataset = dataloader.dataset
     ecg_dataset.return_file_path = True
     model.eval()
     model.return_latent = True
     dataset = args.dataset
 
-    metadata_dict = [] 
-    latent_tensors = {
-        'z0': [],
-        'm': [],
-    }
+    # ── Load ALADIN metadata for MedalCare-XL ────────────────────────────────
+    aladin_metadata: dict | None = None
+    if dataset.lower() == 'medalcare-xl':
+        aladin_dir = getattr(args, 'aladin_metadata_dir', None)
+        if aladin_dir is not None:
+            meta_path = os.path.join(aladin_dir, f'{split}_metadata.json')
+            if os.path.exists(meta_path):
+                with open(meta_path) as f:
+                    aladin_metadata = json.load(f)
+                print(f"  Loaded ALADIN metadata ({len(aladin_metadata)} entries) from {meta_path}")  # type: ignore[arg-type]
+            else:
+                print(f"  Warning: ALADIN metadata not found at {meta_path} — storing class label only.")
 
-    phenotypes = torch.load('/projects/prjs1890/uk_biobank/phenotype_targets.pt')
-    eids = phenotypes['eids']
-    targets = phenotypes['targets'].cpu()
-    columns = phenotypes['columns']
+    metadata_dict = []
+    latent_tensors = {'z0': [], 'm': []}
+
+    # ── UK Biobank phenotype targets (loaded lazily only when needed) ─────────
+    eids: list   = []
+    targets      = None
+    columns: list = []
+    if dataset.lower() != 'medalcare-xl':
+        phenotypes = torch.load('/projects/prjs1890/uk_biobank/phenotype_targets.pt')
+        eids    = phenotypes['eids']
+        targets = phenotypes['targets'].cpu()
+        columns = phenotypes['columns']
+
     not_found = 0
     print(f'Dataset size : {len(dataloader.dataset.file_paths)}')
+
     with torch.no_grad():
         for batch, batch_y, mask in tqdm(dataloader, desc="Collecting latents"):
             batch = batch.to(model.device)
@@ -248,51 +280,64 @@ def _collect_sample_latents(dataloader, model, split, args):
 
             z0, m = model(batch, args.plotL, mask=mask)
             z0 = z0.squeeze(0).squeeze(1)
-
             if m is not None:
                 m = m.squeeze(0)
-            if dataset.lower() == 'medalcare-xl':
-                _cls = [item[0] for item in batch_y]
-                patient_ids = [item[1] for item in batch_y]
-                filenames   = [item[2] for item in batch_y]
-            else:
-                patient_ids = [item[1] for item in batch_y]
-                filenames   = [item[2] for item in batch_y]
+
+            patient_ids = [item[1] for item in batch_y]
+            filenames   = [item[2] for item in batch_y]
 
             for i in range(batch.shape[0]):
-                if dataset == 'medalcare-xl':
+                if dataset.lower() == 'medalcare-xl':
+                    # Derive the ALADIN UID from the file stem
+                    stem = os.path.splitext(os.path.basename(filenames[i]))[0]
+                    uid  = _medalcare_uid_from_stem(stem)
+
+                    # Look up full labels; fall back to class-from-UID if no metadata
+                    if aladin_metadata is not None:
+                        entry = aladin_metadata.get(uid)
+                        if entry is not None:
+                            labels = entry.get('labels', {})
+                        else:
+                            print(stem, uid)
+                            not_found += 1
+                            # Parse class from UID: parts after session_id (index 1)
+                            uid_parts = uid.split('_')
+                            labels = {
+                                'class':      '_'.join(uid_parts[2:]),
+                                'patient_id': uid_parts[0],
+                            }
+                    else:
+                        uid_parts = uid.split('_')
+                        labels = {
+                            'class':      batch_y[i][0],
+                            'patient_id': uid_parts[0] if uid_parts else patient_ids[i],
+                        }
+
                     latent_tensors['z0'].append(z0[i].detach().cpu().numpy())
                     if m is not None:
                         latent_tensors['m'].append(m[i].detach().cpu().numpy())
-
                     metadata_dict.append({
-                        'filename':          filenames[i],
-                        'patient_id':        patient_ids[i],
-                        'labels':             {
-                            'class': _cls[i],
-                            'patient_id': patient_ids[i],
-                        }
+                        'uid':      uid,
+                        'filename': filenames[i],
+                        'labels':   labels,
                     })
+
                 else:
                     try:
                         eid_idx = eids.index(patient_ids[i])
-                        labels = {} 
-                        for j, col in enumerate(columns):    
-                            labels[col] = targets[eid_idx, j].item() 
-
-                        metadata_dict.append({
-                            'filename':          filenames[i],
-                            'patient_id':        patient_ids[i],
-                            'labels':            labels
-                        })
-
+                        labels  = {col: targets[eid_idx, j].item()  # type: ignore[index]
+                                   for j, col in enumerate(columns)}
                         latent_tensors['z0'].append(z0[i].detach().cpu().numpy())
                         latent_tensors['m'].append(m[i].detach().cpu().numpy())
-
+                        metadata_dict.append({
+                            'filename':   filenames[i],
+                            'patient_id': patient_ids[i],
+                            'labels':     labels,
+                        })
                     except ValueError:
-                        print(f"Warning: patient_id {patient_ids[i]} not found in phenotypes. Skipping metadata for this sample.")
-                        not_found += 1 
-                        continue 
+                        print(f"Warning: patient_id {patient_ids[i]} not found in phenotypes. Skipping.")
+                        not_found += 1
+                        continue
     
     print(f"Finished collecting latents. {not_found} patient_ids were not found in phenotypes and were skipped.")
     stacked_tensors = {k: np.stack(v, axis=0) for k, v in latent_tensors.items() if v}
