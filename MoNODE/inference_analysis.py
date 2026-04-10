@@ -40,7 +40,7 @@ parser.add_argument('--dataset_root', type=str, default='/projects/prjs1890/',
                     help="dataset location for ecg")
 parser.add_argument('--segment_type', choices=['atrial', 'ventricular'],
                     help="Segment type of heart beat", type=str)
-parser.add_argument('--dataset', type=str, default='medalcare-xl',  
+parser.add_argument('--dataset', type=str, default='MedalCare-XL',  
                     help="ECG dataset name")
 #de model
 parser.add_argument('--model', type=str, default='node', choices=MODELS,

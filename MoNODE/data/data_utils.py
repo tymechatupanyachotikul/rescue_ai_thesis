@@ -135,6 +135,7 @@ def __load_data(args, dtype, dataset=None):
 			print(exc)
 
 	params[dataset]['beat_type'] = args.segment_type
+	params[dataset]['dataset'] = args.dataset
 	folder_path = os.path.join(args.data_root,args.task)
 
 	io_utils.makedirs(folder_path)
