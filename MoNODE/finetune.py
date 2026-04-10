@@ -47,6 +47,7 @@ def _medalcare_uid_from_stem(stem: str) -> str:
     ``{session_id}_{cls}`` (e.g. ``S62_000069_lae``).  If the stem does not start
     with ``T\\d+_`` it is returned unchanged.
     """
+    stem = os.path.splitext(os.path.basename(stem))[0]
     return _T_PREFIX_RE.sub('', stem)
 
 
@@ -118,11 +119,12 @@ def _load_split(latents_dir: str, split: str,
     if aladin_metadata is not None:
         not_found = 0
         for entry in metadata:
-            uid = _medalcare_uid_from_stem(entry.get('uid') or entry.get('patient_id') or '')
+            uid = _medalcare_uid_from_stem(entry.get('uid') or entry.get('filename') or '')
             aladin_entry = aladin_metadata.get(uid)
             if aladin_entry is not None:
                 entry['labels'] = aladin_entry.get('labels', {})
             else:
+                print(uid)
                 not_found += 1
         if not_found:
             print(f"  [{split}] {not_found} UIDs not found in ALADIN metadata — labels left as-is.")
