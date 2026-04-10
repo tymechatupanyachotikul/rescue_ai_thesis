@@ -12,6 +12,7 @@ import random
 from collections import defaultdict
 import shutil
 from scipy import stats as scipy_stats
+import re 
 
 def get_time_stats(base_dir, anomoly_ecg_path=None, plot=False):
 
@@ -779,19 +780,36 @@ def change_name(root_dir):
 
     print(f"Done. Renamed: {renamed} | Skipped (no underscore): {skipped} | Conflicts: {conflict}")
 
-meta_split = [
-    ('/projects/prjs1890/uk_biobank/segments/test_metadata.json', 'test', '/projects/prjs1890/uk_biobank/segments/errors/test_all_stats.json', '/projects/prjs1890/uk_biobank/segments/test/anomaly'),
-    ('/projects/prjs1890/uk_biobank/segments/valid_metadata.json', 'valid', '/projects/prjs1890/uk_biobank/segments/errors/valid_all_stats.json', '/projects/prjs1890/uk_biobank/segments/valid/anomaly'),
-]
+def change_name_2(root_dir):
 
-root_dir = '/projects/prjs1890/uk_biobank/segments/'
-for metadata_path, split, error_path, anomaly_dir in meta_split:
-    remove_anomaly_test(metadata_path, error_path, split, anomaly_dir, root_dir)
+    renamed  = 0
+    skipped  = 0
+    conflict = 0
 
-remove_anomaly_train(
-    '/projects/prjs1890/uk_biobank/segments/train_metadata.json',
-    '/projects/prjs1890/uk_biobank/segments/errors/train_all_stats.json', 
-    'train', 
-    '/projects/prjs1890/uk_biobank/segments/valid/anomaly', 
-    root_dir
-    )
+    for dirpath, _, filenames in os.walk(root_dir):
+        for fname in filenames:
+            if not fname.endswith('.pth'):
+                continue
+
+            stem = os.path.splitext(fname)[0]
+            if len(stem.split('_')) < 4:
+                skipped += 1
+                continue
+            stem = re.sub(r'_(\d)(\d)(?=(_|$))', r'_\1.\2', stem)
+            new_fname = stem + '.pth'
+            src = os.path.join(dirpath, fname)
+            dst = os.path.join(dirpath, new_fname)
+
+            if os.path.exists(dst):
+                print(f"  Conflict — destination already exists, skipping: {dst}")
+                conflict += 1
+                continue
+
+            os.rename(src, dst)
+            renamed += 1
+
+    print(f"Done. Renamed: {renamed} | Skipped (no underscore): {skipped} | Conflicts: {conflict}")
+
+
+change_name_2('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/median')
+change_name_2('/projects/prjs1890/MedalCare-XL/segments/train/atrial/median')
