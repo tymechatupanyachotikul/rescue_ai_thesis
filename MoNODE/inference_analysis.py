@@ -269,7 +269,7 @@ def _collect_sample_latents(dataloader, model, split, args):
     targets      = None
     columns: list = []
     if dataset.lower() != 'medalcare-xl':
-        phenotypes = torch.load('/projects/prjs1890/uk_biobank/phenotype_targets.pt')
+        phenotypes = torch.load('/projects/prjs1890/uk_biobank/phenotype_targets_2.pt')
         eids    = phenotypes['eids']
         targets = phenotypes['targets'].cpu()
         columns = phenotypes['columns']
@@ -327,9 +327,19 @@ def _collect_sample_latents(dataloader, model, split, args):
 
                 else:
                     try:
-                        eid_idx = eids.index(patient_ids[i])
-                        labels  = {col: targets[eid_idx, j].item()  # type: ignore[index]
-                                   for j, col in enumerate(columns)}
+                        if aladin_metadata is not None:
+                            entry = aladin_metadata.get(patient_ids[i])
+                            if entry is not None:
+                                labels = entry.get('labels', {})
+                            else:
+                                eid_idx = eids.index(patient_ids[i])
+                                labels  = {col: targets[eid_idx, j].item()  # type: ignore[index]
+                                        for j, col in enumerate(columns)}
+                        else:
+                            eid_idx = eids.index(patient_ids[i])
+                            labels  = {col: targets[eid_idx, j].item()  # type: ignore[index]
+                                    for j, col in enumerate(columns)}
+                            
                         latent_tensors['z0'].append(z0[i].detach().cpu().numpy())
                         latent_tensors['m'].append(m[i].detach().cpu().numpy())
                         metadata_dict.append({
