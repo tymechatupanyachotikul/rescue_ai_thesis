@@ -110,8 +110,8 @@ def get_data_params(root_dir, dataset, sample_type, beat_type, task, exclude_lea
 					split_info['file_paths'].append(os.path.join(base_dir, file_path))
 
 					path_split = file_path.split('_')
-					split_info['run_id'].append(path_split[1])
-					split_info['class'].append('_'.join(path_split[3:]).split('.')[0])
+					split_info['run_id'].append(path_split[0])
+					split_info['class'].append('_'.join(path_split[2:]).split('.')[0])
 				else:
 					split_info['file_paths'].append(os.path.join(base_dir, file_path))
 

@@ -335,7 +335,7 @@ def _collect_sample_latents(dataloader, model, split, args):
                         latent_tensors['m'].append(m[i].detach().cpu().numpy())
                         metadata_dict.append({
                             'filename':   filenames[i],
-                            'patient_id': patient_ids[i],
+                            'uid': patient_ids[i],
                             'labels':     labels,
                         })
                     except ValueError:
