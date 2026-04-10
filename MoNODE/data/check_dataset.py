@@ -780,14 +780,18 @@ def change_name(root_dir):
     print(f"Done. Renamed: {renamed} | Skipped (no underscore): {skipped} | Conflicts: {conflict}")
 
 meta_split = [
-    ('/projects/prjs1890/MedalCare-XL/segments/test_metadata.json', 'test', '/projects/prjs1890/MedalCare-XL/segments/errors/test_all_stats.json', '/projects/prjs1890/MedalCare-XL/segments/test/anomaly'),
-    ('/projects/prjs1890/MedalCare-XL/segments/valid_metadata.json', 'valid', '/projects/prjs1890/MedalCare-XL/segments/errors/valid_all_stats.json', '/projects/prjs1890/MedalCare-XL/segments/valid/anomaly'),
-    #('/projects/prjs1890/MedalCare-XL/segments/train_metadata.json', 'train', 'train_whole_stats.json)
+    ('/projects/prjs1890/uk_biobank/segments/test_metadata.json', 'test', '/projects/prjs1890/uk_biobank/segments/errors/test_all_stats.json', '/projects/prjs1890/uk_biobank/segments/test/anomaly'),
+    ('/projects/prjs1890/uk_biobank/segments/valid_metadata.json', 'valid', '/projects/prjs1890/uk_biobank/segments/errors/valid_all_stats.json', '/projects/prjs1890/uk_biobank/segments/valid/anomaly'),
 ]
 
-root_dir = '/projects/prjs1890/MedalCare-XL/segments/'
+root_dir = '/projects/prjs1890/uk_biobank/segments/'
 for metadata_path, split, error_path, anomaly_dir in meta_split:
     remove_anomaly_test(metadata_path, error_path, split, anomaly_dir, root_dir)
 
-change_name('/projects/prjs1890/MedalCare-XL/segments/train/atrial/median')
-change_name('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/median')
+remove_anomaly_train(
+    '/projects/prjs1890/uk_biobank/segments/test_metadata.json',
+    '/projects/prjs1890/uk_biobank/segments/errors/train_all_stats.json', 
+    'train', 
+    '/projects/prjs1890/uk_biobank/segments/valid/anomaly', 
+    root_dir
+    )
