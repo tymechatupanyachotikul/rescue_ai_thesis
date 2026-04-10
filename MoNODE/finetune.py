@@ -119,7 +119,7 @@ def _load_split(latents_dir: str, split: str,
     if aladin_metadata is not None:
         not_found = 0
         for entry in metadata:
-            uid = _medalcare_uid_from_stem(entry.get('uid') or entry.get('filename') or '')
+            uid = entry.get('uid')
             aladin_entry = aladin_metadata.get(uid)
             if aladin_entry is not None:
                 entry['labels'] = aladin_entry.get('labels', {})
