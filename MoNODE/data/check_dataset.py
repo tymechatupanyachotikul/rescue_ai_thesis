@@ -1,16 +1,17 @@
 import json
 import os
-import pandas as pd 
+import pandas as pd
 import numpy as np
 import torch
 from pathlib import Path
 import itertools
-import pickle 
+import pickle
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-import random 
+import random
 from collections import defaultdict
-import shutil 
+import shutil
+from scipy import stats as scipy_stats
 
 def get_time_stats(base_dir, anomoly_ecg_path=None, plot=False):
 
@@ -402,13 +403,391 @@ def update_metadata(metadata_path, split):
         json.dump(metadata, f, indent=4)
 
 
+def remove_anomaly_test(metadata_path, error_path, split, anomaly_dir, root_dir):
+
+    with open(metadata_path, 'r') as f:
+        metadata = json.load(f)
+
+    with open(error_path, 'r') as f:
+        error_dict = json.load(f)
+
+    # ── Collect (uid, time) pairs for each segment type ──────────────────────
+    atrial_time = []
+    ventricular_time = []
+
+    for uid, info in metadata.items():
+        seg_lengths = info.get('segment_lengths', {})
+        if 'atrial' in seg_lengths:
+            t = seg_lengths['atrial']
+            if isinstance(t, list):
+                t = t[0]
+            atrial_time.append((uid, int(t)))
+        if 'ventricular' in seg_lengths:
+            t = seg_lengths['ventricular']
+            if isinstance(t, list):
+                t = t[0]
+            ventricular_time.append((uid, int(t)))
+
+    # ── Two-tailed z-test: flag UIDs whose segment length is a statistical
+    #    outlier (p < 0.05).  Cutoff times are mean ± z_crit * std. ──────────
+    def find_anomalies(time_list: list[tuple[str, int]]):
+        if len(time_list) < 2:
+            return [], None, None
+
+        uids  = [u for u, _ in time_list]
+        times = np.array([t for _, t in time_list], dtype=float)
+
+        mean  = times.mean()
+        std   = times.std()
+
+        # z_critical for two-tailed α = 0.05: norm.ppf(0.975) ≈ 1.96
+        z_crit  = scipy_stats.norm.ppf(0.975)
+        lower   = float(mean - z_crit * std)
+        upper   = float(mean + z_crit * std)
+
+        z_scores = (times - mean) / (std + 1e-8)
+        p_values = 2 * scipy_stats.norm.sf(np.abs(z_scores))
+
+        anomaly_uids = [uid for uid, p in zip(uids, p_values) if p < 0.05]
+        return anomaly_uids, lower, upper
+
+    atrial_uids,      atrial_lower,      atrial_upper      = find_anomalies(atrial_time)
+    ventricular_uids, ventricular_lower, ventricular_upper = find_anomalies(ventricular_time)
+
+    # ── Write anomaly summary into error_dict ─────────────────────────────────
+    error_dict['anomaly'] = {
+        'atrial': {
+            'count':        len(atrial_uids),
+            'uid':          atrial_uids,
+            'cutoff_time':  (atrial_lower, atrial_upper),
+        },
+        'ventricular': {
+            'count':        len(ventricular_uids),
+            'uid':          ventricular_uids,
+            'cutoff_time':  (ventricular_lower, ventricular_upper),
+        },
+    }
+
+    print(f"[{split}] Anomalous UIDs — atrial: {len(atrial_uids)}, "
+          f"ventricular: {len(ventricular_uids)}")
+    print(f"  Atrial    cutoff: [{atrial_lower:.1f}, {atrial_upper:.1f}]")
+    print(f"  Ventricular cutoff: [{ventricular_lower:.1f}, {ventricular_upper:.1f}]")
+
+    # ── Union of anomalous UIDs across both segment types ────────────────────
+    anomaly_uid_set = set(atrial_uids) | set(ventricular_uids)
+    print(f"  Combined unique anomalous UIDs: {len(anomaly_uid_set)}")
+
+    os.makedirs(anomaly_dir, exist_ok=True)
+
+    # ── Move matching files from all three seg_type/median dirs ──────────────
+    seg_types     = ['atrial', 'ventricular', 'whole']
+    total_moved     = 0
+    total_remaining = 0
+
+    for seg_type in seg_types:
+        seg_dir = os.path.join(root_dir, split, seg_type, 'median')
+        if not os.path.isdir(seg_dir):
+            print(f"  Skipping {seg_dir} (directory not found)")
+            continue
+
+        moved     = 0
+        remaining = 0
+        for fname in os.listdir(seg_dir):
+            if not fname.endswith('.pth'):
+                continue
+            uid = os.path.splitext(fname)[0]
+            if uid in anomaly_uid_set:
+                new_name = f"{uid}_{seg_type}.pth"
+                shutil.move(
+                    os.path.join(seg_dir, fname),
+                    os.path.join(anomaly_dir, new_name),
+                )
+                moved += 1
+            else:
+                remaining += 1
+
+        print(f"  [{split}/{seg_type}/median] moved: {moved}, remaining: {remaining}")
+        total_moved     += moved
+        total_remaining += remaining
+
+    error_dict['anomaly']['files_moved']     = total_moved
+    error_dict['anomaly']['files_remaining'] = total_remaining
+
+    # ── Persist updated error_dict ────────────────────────────────────────────
+    with open(error_path, 'w') as f:
+        json.dump(error_dict, f, indent=2)
+
+    print(f"\nTotal files moved: {total_moved} | Total remaining: {total_remaining}")
+    print(f"Updated error_dict saved to {error_path}")
+
+
+
+def remove_anomaly_train(metadata_path, error_path, split, anomaly_dir, root_dir):
+    """Identify statistically anomalous segment lengths per seg-type via two-tailed
+    z-test (p < 0.05), move only the matching seg-type files to *anomaly_dir*, and
+    write rich statistics back into the error JSON.
+
+    Atrial anomalies  → files moved from {root_dir}/{split}/atrial/median/ only.
+    Ventricular       → files moved from {root_dir}/{split}/ventricular/median/ only.
+    Whole             → untouched.
+    """
+
+    with open(metadata_path, 'r') as f:
+        metadata = json.load(f)
+
+    with open(error_path, 'r') as f:
+        error_dict = json.load(f)
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _time_stats(times: np.ndarray) -> dict:
+        """Descriptive statistics for an array of segment lengths."""
+        q1, q3 = np.percentile(times, [25, 75])
+        return {
+            'mean':   float(times.mean()),
+            'std':    float(times.std()),
+            'min':    int(times.min()),
+            'max':    int(times.max()),
+            'median': float(np.median(times)),
+            'iqr':    float(q3 - q1),
+            'q1':     float(q1),
+            'q3':     float(q3),
+            'n':      int(len(times)),
+        }
+
+    def find_anomalies(time_list: list[tuple[str, int]]):
+        """Two-tailed z-test.  Returns (anomaly_records, lower_cutoff, upper_cutoff).
+
+        anomaly_records : list of (uid, time, p_value) for every outlier.
+        Cutoff          : mean ± z_crit * std  where z_crit ≈ 1.96 (α = 0.05).
+        """
+        if len(time_list) < 2:
+            return [], None, None
+
+        uids  = [u for u, _ in time_list]
+        times = np.array([t for _, t in time_list], dtype=float)
+
+        mean = times.mean()
+        std  = times.std()
+
+        z_crit = scipy_stats.norm.ppf(0.975)   # ≈ 1.96
+        lower  = float(mean - z_crit * std)
+        upper  = float(mean + z_crit * std)
+
+        z_scores = (times - mean) / (std + 1e-8)
+        p_values = 2 * scipy_stats.norm.sf(np.abs(z_scores))
+
+        anomaly_records = [
+            (uid, int(t), float(p))
+            for uid, t, p in zip(uids, times, p_values)
+            if p < 0.05
+        ]
+        return anomaly_records, lower, upper
+
+    def count_pth(directory: str) -> int:
+        if not os.path.isdir(directory):
+            return 0
+        return sum(1 for f in os.listdir(directory) if f.endswith('.pth'))
+
+    # ── Collect (uid, time) pairs ─────────────────────────────────────────────
+    atrial_time      = []
+    ventricular_time = []
+
+    for uid, info in metadata.items():
+        seg_lengths = info.get('segment_lengths', {})
+        if 'atrial' in seg_lengths:
+            t = seg_lengths['atrial']
+            if isinstance(t, list):
+                t = t[0]
+            atrial_time.append((uid, int(t)))
+        if 'ventricular' in seg_lengths:
+            t = seg_lengths['ventricular']
+            if isinstance(t, list):
+                t = t[0]
+            ventricular_time.append((uid, int(t)))
+
+    # ── Segment counts before any moves ───────────────────────────────────────
+    whole_dir       = os.path.join(root_dir, split, 'whole',       'median')
+    atrial_dir      = os.path.join(root_dir, split, 'atrial',      'median')
+    ventricular_dir = os.path.join(root_dir, split, 'ventricular', 'median')
+
+    atrial_total      = count_pth(atrial_dir)
+    ventricular_total = count_pth(ventricular_dir)
+    whole_total       = count_pth(whole_dir)
+
+    print(f"[{split}] Files before removal:")
+    print(f"  atrial:      {atrial_total}")
+    print(f"  ventricular: {ventricular_total}")
+    print(f"  whole:       {whole_total}  (untouched)")
+
+    # ── Statistical testing ───────────────────────────────────────────────────
+    atrial_anomalies,      atrial_lower,      atrial_upper      = find_anomalies(atrial_time)
+    ventricular_anomalies, ventricular_lower, ventricular_upper = find_anomalies(ventricular_time)
+
+    atrial_all_times      = np.array([t for _, t in atrial_time],      dtype=float)
+    ventricular_all_times = np.array([t for _, t in ventricular_time], dtype=float)
+
+    # ── Build per-seg-type result dict ────────────────────────────────────────
+
+    def _build_seg_result(anomaly_records, all_times, lower, upper,
+                          seg_type, seg_dir, anomaly_uid_set):
+        """Move files for *seg_type* only and return the stats dict."""
+        os.makedirs(anomaly_dir, exist_ok=True)
+
+        moved     = 0
+        remaining = 0
+        for fname in (os.listdir(seg_dir) if os.path.isdir(seg_dir) else []):
+            if not fname.endswith('.pth'):
+                continue
+            uid = os.path.splitext(fname)[0]
+            if uid in anomaly_uid_set:
+                new_name = f"{uid}_{seg_type}.pth"
+                shutil.move(
+                    os.path.join(seg_dir, fname),
+                    os.path.join(anomaly_dir, new_name),
+                )
+                moved += 1
+            else:
+                remaining += 1
+
+        # Collect rich per-removed-sample info
+        removed_details = []
+        for uid, t, p in anomaly_records:
+            entry = metadata.get(uid, {})
+            labels = entry.get('labels', {})
+            removed_details.append({
+                'uid':        uid,
+                'patient_id': labels.get('patient_id', uid.split('_')[0]),
+                'class':      labels.get('class', None),
+                'time':       t,
+                'p_value':    round(p, 6),
+                'side':       'low' if t < lower else 'high',
+            })
+
+        # Class distribution of removed samples
+        class_dist: dict = {}
+        for d in removed_details:
+            cls = d['class'] or 'unknown'
+            class_dist[cls] = class_dist.get(cls, 0) + 1
+
+        pct_removed = round(100 * moved / max(int(all_times.size), 1), 2)
+
+        return {
+            'time_stats':        _time_stats(all_times),
+            'cutoff_time':       (lower, upper),
+            'count':             moved,
+            'percent_removed':   pct_removed,
+            'files_moved':       moved,
+            'files_remaining':   remaining,
+            'class_distribution_removed': class_dist,
+            'removed':           removed_details,
+        }
+
+    atrial_uid_set      = {uid for uid, _, _ in atrial_anomalies}
+    ventricular_uid_set = {uid for uid, _, _ in ventricular_anomalies}
+
+    print(f"\n[{split}] Statistical anomalies (p < 0.05):")
+    print(f"  atrial      [{atrial_lower:.1f}, {atrial_upper:.1f}]: "
+          f"{len(atrial_uid_set)} / {len(atrial_time)}")
+    print(f"  ventricular [{ventricular_lower:.1f}, {ventricular_upper:.1f}]: "
+          f"{len(ventricular_uid_set)} / {len(ventricular_time)}")
+
+    atrial_result      = _build_seg_result(
+        atrial_anomalies, atrial_all_times,
+        atrial_lower, atrial_upper,
+        'atrial', atrial_dir, atrial_uid_set,
+    )
+    ventricular_result = _build_seg_result(
+        ventricular_anomalies, ventricular_all_times,
+        ventricular_lower, ventricular_upper,
+        'ventricular', ventricular_dir, ventricular_uid_set,
+    )
+
+    # ── Assemble error_dict entry ─────────────────────────────────────────────
+    error_dict['anomaly_train'] = {
+        'summary': {
+            'atrial_total_before':      atrial_total,
+            'ventricular_total_before': ventricular_total,
+            'whole_total':              whole_total,
+            'atrial_remaining':         atrial_result['files_remaining'],
+            'ventricular_remaining':    ventricular_result['files_remaining'],
+            'total_files_moved':        atrial_result['files_moved'] + ventricular_result['files_moved'],
+        },
+        'atrial':      atrial_result,
+        'ventricular': ventricular_result,
+    }
+
+    # ── Human-readable summary ────────────────────────────────────────────────
+    print(f"\n{'='*60}")
+    print(f"ANOMALY REMOVAL SUMMARY  [{split}]")
+    print(f"{'='*60}")
+    for seg, res in [('atrial', atrial_result), ('ventricular', ventricular_result)]:
+        st = res['time_stats']
+        lo, hi = res['cutoff_time']
+        print(f"\n  {seg.upper()}")
+        print(f"    Samples      : {st['n']}")
+        print(f"    Time — mean±std : {st['mean']:.1f} ± {st['std']:.1f}  "
+              f"[{st['min']}, {st['max']}]  median={st['median']:.1f}  IQR={st['iqr']:.1f}")
+        print(f"    Cutoff       : [{lo:.2f}, {hi:.2f}]")
+        print(f"    Removed      : {res['files_moved']} ({res['percent_removed']}%)")
+        print(f"    Remaining    : {res['files_remaining']}")
+        if res['class_distribution_removed']:
+            print(f"    Removed class dist : {res['class_distribution_removed']}")
+    print(f"\n  WHOLE  : {whole_total} files (untouched)")
+    print(f"  Total moved : {error_dict['anomaly_train']['summary']['total_files_moved']}")
+    print(f"{'='*60}\n")
+
+    with open(error_path, 'w') as f:
+        json.dump(error_dict, f, indent=2)
+
+    print(f"Updated error_dict saved to {error_path}")
+
+def change_name(root_dir):
+    """Rename all .pth files under root_dir by stripping the first underscore-delimited
+    component from the filename.
+
+    Example: T50_S65_000029_LCX_03_ant.pth  →  S65_000029_LCX_03_ant.pth
+
+    Files whose name does not contain an underscore are left untouched.
+    Walks all subdirectories recursively.
+    """
+    renamed  = 0
+    skipped  = 0
+    conflict = 0
+
+    for dirpath, _, filenames in os.walk(root_dir):
+        for fname in filenames:
+            if not fname.endswith('.pth'):
+                continue
+
+            parts = os.path.splitext(fname)[0].split('_', 1)
+            if len(parts) < 2:
+                skipped += 1
+                continue
+
+            new_fname = parts[1] + '.pth'
+            src = os.path.join(dirpath, fname)
+            dst = os.path.join(dirpath, new_fname)
+
+            if os.path.exists(dst):
+                print(f"  Conflict — destination already exists, skipping: {dst}")
+                conflict += 1
+                continue
+
+            os.rename(src, dst)
+            renamed += 1
+
+    print(f"Done. Renamed: {renamed} | Skipped (no underscore): {skipped} | Conflicts: {conflict}")
+
 meta_split = [
-    # ('/projects/prjs1890/MedalCare-XL/segments/test_metadata.json', 'test'),
-    ('/projects/prjs1890/MedalCare-XL/segments/valid_metadata.json', 'valid'),
-    ('/projects/prjs1890/MedalCare-XL/segments/train_metadata.json', 'train'),
+    ('/projects/prjs1890/MedalCare-XL/segments/test_metadata.json', 'test', '/projects/prjs1890/MedalCare-XL/segments/errors/test_all_stats.json', '/projects/prjs1890/MedalCare-XL/segments/test/anomaly'),
+    ('/projects/prjs1890/MedalCare-XL/segments/valid_metadata.json', 'valid', '/projects/prjs1890/MedalCare-XL/segments/errors/valid_all_stats.json', '/projects/prjs1890/MedalCare-XL/segments/valid/anomaly'),
+    #('/projects/prjs1890/MedalCare-XL/segments/train_metadata.json', 'train', 'train_whole_stats.json)
 ]
-        
 
+root_dir = '/projects/prjs1890/MedalCare-XL/segments/'
+for metadata_path, split, error_path, anomaly_dir in meta_split:
+    remove_anomaly_test(metadata_path, error_path, split, anomaly_dir, root_dir)
 
-for meta_path, split in meta_split:
-    update_metadata(meta_path, split)
+change_name('/projects/prjs1890/MedalCare-XL/segments/train/atrial/median')
+change_name('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/median')
