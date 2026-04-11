@@ -302,10 +302,10 @@ def _plot_classification_param(param, model_results, out_dir, le):
     """Per-param plots: confusion matrix per model, ROC curves, per-class accuracy, group summary."""
     import json as _json
     names  = list(model_results.keys())
-    classes = list(le.classes_)
+    classes = [str(c) for c in le.classes_]   # always strings for safe .lower() and display
     binary  = len(classes) == 2
     n_cls   = len(classes)
-    
+
     # Class grouping for summary bar chart
     ventricular = [c for c in classes if c.lower() in ('lcx_03_ant', 'lcx_03_post', 'rca_0_3', 'rca_10', 'lad_10', 'lad_03', 'lcx_10_post', 'lbbb', 'rbbb')]
     atrial      = [c for c in classes if c.lower() in ('avblock', 'fam', 'iab', 'lae')]
