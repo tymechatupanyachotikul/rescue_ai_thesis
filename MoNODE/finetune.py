@@ -875,14 +875,29 @@ def run_gmm_clustering(
         param_values[param] = arr
 
     # ── Categorical parameters ─────────────────────────────────────────────────
-    cat_params: set[str] = set()
+    # Mirror the same logic as run_linear_probes:
+    #   - str/bool values → categorical
+    #   - numeric with exactly 2 distinct values → binary (treated as categorical)
+    _raw_label_vals: dict[str, list] = {}
     for m in test_metadata:
         for k, v in m.get('labels', {}).items():
             if k in _SKIP_LABEL_KEYS:
                 continue
-            if isinstance(v, bool):
-                cat_params.add(k)
-            elif isinstance(v, str) and v.lower() not in ('nan', 'none', ''):
+            _raw_label_vals.setdefault(k, []).append(v)
+
+    cat_params: set[str] = set()
+    for k, vals in _raw_label_vals.items():
+        non_null = [v for v in vals
+                    if v is not None
+                    and not (isinstance(v, float) and np.isnan(v))
+                    and str(v).lower() not in ('nan', 'none', '')]
+        if not non_null:
+            continue
+        if isinstance(non_null[0], bool) or isinstance(non_null[0], str):
+            cat_params.add(k)
+        else:
+            # numeric: binary if exactly 2 distinct values (same as is_binary in probes)
+            if len(set(non_null)) == 2:
                 cat_params.add(k)
 
     # param → list[str | None] aligned with test samples
