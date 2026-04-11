@@ -22,7 +22,7 @@ from sklearn.linear_model import (
 )
 from sklearn.metrics import (
     r2_score, mean_squared_error,
-    roc_auc_score, accuracy_score, f1_score,
+    roc_auc_score, accuracy_score, f1_score, recall_score,
     adjusted_rand_score,
     silhouette_score, silhouette_samples,
     ConfusionMatrixDisplay, RocCurveDisplay,
@@ -182,13 +182,21 @@ def _regression_models():
     ]
 
 
-def _classification_models():
-    """Return (name, model) pairs for the four classification probes."""
+def _classification_models(binary: bool = False):
+    """Return (name, model) pairs for the four classification probes.
+
+    For multi-class probes (binary=False) logistic regression models are
+    initialised with class_weight='balanced' to correct for class imbalance.
+    MLP has no class_weight parameter and is left unchanged.
+    """
+    cw = None if binary else 'balanced'
     return [
-        ('ols',   LogisticRegression(penalty=None, max_iter=1000, n_jobs=-1)),
-        ('ridge', LogisticRegressionCV(penalty='l2', cv=5, max_iter=1000, n_jobs=-1)),
+        ('ols',   LogisticRegression(penalty=None, max_iter=1000, n_jobs=-1,
+                                     class_weight=cw)),
+        ('ridge', LogisticRegressionCV(penalty='l2', cv=5, max_iter=1000, n_jobs=-1,
+                                       class_weight=cw)),
         ('lasso', LogisticRegressionCV(penalty='l1', solver='saga', cv=5,
-                                       max_iter=1000, n_jobs=-1)),
+                                       max_iter=1000, n_jobs=-1, class_weight=cw)),
         ('mlp',   MLPClassifier(hidden_layer_sizes=(128,), activation='relu',
                                 max_iter=500, early_stopping=True,
                                 validation_fraction=0.1, random_state=0)),
@@ -212,27 +220,38 @@ def _eval_regression(model, X_tr, y_tr, X_te, y_te):
 
 
 def _eval_classification(model, X_tr, y_tr, X_te, y_te, le):
+    """Evaluate a classification probe.
+
+    Binary (2 classes)  → reports accuracy only.
+    Multi-class         → reports macro F1, macro AUROC, macro Recall.
+    """
     y_tr_enc = le.transform(y_tr)
     y_te_enc = le.transform(y_te)
+    binary = len(le.classes_) == 2
     with np.errstate(under='ignore', divide='ignore'):
         model.fit(X_tr, y_tr_enc)
     y_pred = model.predict(X_te)
-    acc = float(accuracy_score(y_te_enc, y_pred))
-    f1  = float(f1_score(y_te_enc, y_pred, average='macro', zero_division=0))
-    metrics = {'accuracy': acc, 'f1': f1}
+
     y_prob = None
     if hasattr(model, 'predict_proba'):
-        with np.errstate(under='ignore'):   # sklearn softmax triggers harmless underflow
+        with np.errstate(under='ignore'):
             y_prob = model.predict_proba(X_te)
-        try:
-            if len(le.classes_) == 2:
-                metrics['roc_auc'] = float(roc_auc_score(y_te_enc, y_prob[:, 1]))
-            else:
-                metrics['roc_auc'] = float(
+
+    if binary:
+        metrics = {'accuracy': float(accuracy_score(y_te_enc, y_pred))}
+    else:
+        metrics = {
+            'f1_macro':     float(f1_score(y_te_enc, y_pred, average='macro', zero_division=0)),
+            'recall_macro': float(recall_score(y_te_enc, y_pred, average='macro', zero_division=0)),
+        }
+        if y_prob is not None:
+            try:
+                metrics['auroc_macro'] = float(
                     roc_auc_score(y_te_enc, y_prob, multi_class='ovr', average='macro')
                 )
-        except ValueError:
-            pass
+            except ValueError:
+                pass
+
     return {
         'model':   model,
         'y_pred':  y_pred,
@@ -310,9 +329,14 @@ def _plot_classification_param(param, model_results, out_dir, le):
         ax.set_yticklabels(ax.get_yticklabels(), fontsize=tick_fs)
         ax.set_xlabel('Predicted', fontsize=9)
         ax.set_ylabel('True', fontsize=9)
-        acc = res['metrics']['accuracy']
-        f1  = res['metrics']['f1']
-        ax.set_title(f"{param} — {name}\nacc={acc:.3f}  f1={f1:.3f}", fontsize=10, fontweight='bold')
+        m = res['metrics']
+        if 'accuracy' in m:   # binary
+            metric_str = f"acc={m['accuracy']:.3f}"
+        else:                 # multi-class
+            metric_str = (f"f1={m.get('f1_macro', float('nan')):.3f}  "
+                          f"recall={m.get('recall_macro', float('nan')):.3f}  "
+                          f"auroc={m.get('auroc_macro', float('nan')):.3f}")
+        ax.set_title(f"{param} — {name}\n{metric_str}", fontsize=10, fontweight='bold')
         fig_cm.tight_layout()
         fig_cm.savefig(os.path.join(out_dir, f'confusion_matrix_{name}.png'), dpi=130)
         plt.close(fig_cm)
@@ -390,21 +414,21 @@ def _plot_classification_param(param, model_results, out_dir, le):
         fig_grp.savefig(os.path.join(out_dir, 'group_accuracy_summary.png'), dpi=130)
         plt.close(fig_grp)
 
-    # --- ROC curves ---
-    fig_roc, ax_roc = plt.subplots(figsize=(5, 4))
-    for name, res in model_results.items():
-        if res['y_prob'] is not None and binary:
-            RocCurveDisplay.from_predictions(
-                res['y_true'], res['y_prob'][:, 1],
-                name=f"{name} (AUC={res['metrics'].get('roc_auc', float('nan')):.2f})",
-                ax=ax_roc,
-            )
+    # --- ROC curves (binary only) ---
     if binary:
+        fig_roc, ax_roc = plt.subplots(figsize=(5, 4))
+        for name, res in model_results.items():
+            if res['y_prob'] is not None:
+                RocCurveDisplay.from_predictions(
+                    res['y_true'], res['y_prob'][:, 1],
+                    name=name,
+                    ax=ax_roc,
+                )
         ax_roc.plot([0, 1], [0, 1], 'k--', lw=1)
-    ax_roc.set_title(f"{param} — ROC curves")
-    fig_roc.tight_layout()
-    fig_roc.savefig(os.path.join(out_dir, 'roc_curves.png'), dpi=120)
-    plt.close(fig_roc)
+        ax_roc.set_title(f"{param} — ROC curves")
+        fig_roc.tight_layout()
+        fig_roc.savefig(os.path.join(out_dir, 'roc_curves.png'), dpi=120)
+        plt.close(fig_roc)
 
 
 def _plot_summary_regression(all_results, out_dir):
@@ -431,23 +455,39 @@ def _plot_summary_regression(all_results, out_dir):
 
 
 def _plot_summary_classification(all_results, out_dir):
-    """Grouped bar chart: AUC / accuracy / F1 per param × model."""
+    """Grouped bar chart per metric across params × models.
+
+    Binary params report accuracy; multi-class params report
+    f1_macro / recall_macro / auroc_macro.  The summary shows all four
+    metrics in separate panels, leaving NaN where a metric is absent.
+    """
     params = sorted(all_results.keys())
     model_names = list(next(iter(all_results.values())).keys())
     x = np.arange(len(params))
-    width = 0.2
+    width = 0.8 / max(len(model_names), 1)
+    offsets = np.linspace(-(len(model_names) - 1) / 2 * width,
+                           (len(model_names) - 1) / 2 * width, len(model_names))
 
-    fig, axes = plt.subplots(1, 3, figsize=(max(10, len(params) * 1.5 + 2), 5))
-    for i, metric in enumerate(['accuracy', 'f1', 'roc_auc']):
-        ax = axes[i]
-        for j, mname in enumerate(model_names):
+    metrics_to_plot = [
+        ('accuracy',     'Accuracy (binary)'),
+        ('f1_macro',     'Macro F1 (multi-class)'),
+        ('recall_macro', 'Macro Recall (multi-class)'),
+        ('auroc_macro',  'Macro AUROC (multi-class)'),
+    ]
+
+    fig, axes = plt.subplots(2, 2, figsize=(max(10, len(params) * 1.2 + 2), 8))
+    axes = axes.flatten()
+    for ax, (metric, title) in zip(axes, metrics_to_plot):
+        for j, (mname, offset) in enumerate(zip(model_names, offsets)):
             vals = [all_results[p][mname]['metrics'].get(metric, float('nan')) for p in params]
-            ax.bar(x + j * width, vals, width, label=mname)
-        ax.set_xticks(x + width * 1.5)
+            ax.bar(x + offset, vals, width, label=mname, color=f'C{j}', alpha=0.85)
+        ax.set_xticks(x)
         ax.set_xticklabels(params, rotation=45, ha='right', fontsize=7)
-        ax.set_ylabel(metric)
-        ax.set_title(f"Classification summary — {metric}")
-        ax.legend(fontsize=8)
+        ax.set_ylim(0, 1.05)
+        ax.set_ylabel(title, fontsize=9)
+        ax.set_title(title, fontsize=10, fontweight='bold')
+        ax.legend(fontsize=7, framealpha=0.8)
+        ax.spines[['top', 'right']].set_visible(False)
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, 'classification_summary.png'), dpi=120)
     plt.close(fig)
@@ -458,7 +498,8 @@ def _plot_summary_classification(all_results, out_dir):
 # ---------------------------------------------------------------------------
 
 def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata,
-                      latent_key='z0', out_root=None, methods=None):
+                      latent_key='z0', out_root=None, methods=None,
+                      skip_params=None):
     """Train four probes per phenotype and evaluate on the test set.
 
     Models
@@ -468,8 +509,9 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
 
     Metrics
     -------
-    Regression    : MSE, R²
-    Classification: Accuracy, F1 (macro), ROC-AUC
+    Regression         : MSE, R²
+    Binary classif.    : Accuracy
+    Multi-class classif: Macro F1, Macro Recall, Macro AUROC
 
     Directory layout (when out_root is given)
     -----------------------------------------
@@ -499,6 +541,10 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
     all_dataset_stats: dict = {}   # param -> stats dict, saved to a single JSON at the end
 
     for param in sorted(all_params):
+        if skip_params and param in skip_params:
+            print(f"  [{param}] skipped (in skip_params)")
+            continue
+
         tr_idx = tr_indices[param]
         te_idx = te_indices[param]
 
@@ -510,8 +556,8 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
         y_tr = tr_labels_all[param]
         y_te = te_labels_all[param]
         is_categorical = isinstance(y_tr[0], str)
-        # Binary float labels (0.0/1.0) are treated as binary classification
-        is_binary = (not is_categorical) and (set(y_tr) <= {0.0, 1.0})
+        # Any param with exactly 2 distinct values → binary classification
+        is_binary = (not is_categorical) and (len(set(y_tr)) == 2)
 
         # ── Dataset statistics ────────────────────────────────────────────────
         dstats = _compute_dataset_stats(y_tr, y_te, is_categorical, is_binary)
@@ -532,13 +578,18 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
                 continue
             le = LabelEncoder().fit(y_tr + y_te)
             param_results = {}
-            for name, mdl in _classification_models():
+            for name, mdl in _classification_models(binary=is_binary):
                 if methods and name not in methods:
                     continue
                 param_results[name] = _eval_classification(mdl, X_tr, y_tr, X_te, y_te, le)
                 m = param_results[name]['metrics']
-                print(f"  [{param}][{name}]  acc={m['accuracy']:.3f}  "
-                      f"f1={m['f1']:.3f}  auc={m.get('roc_auc', float('nan')):.3f}")
+                if 'accuracy' in m:   # binary
+                    print(f"  [{param}][{name}]  acc={m['accuracy']:.3f}")
+                else:                 # multi-class
+                    print(f"  [{param}][{name}]  "
+                          f"f1={m.get('f1_macro', float('nan')):.3f}  "
+                          f"recall={m.get('recall_macro', float('nan')):.3f}  "
+                          f"auroc={m.get('auroc_macro', float('nan')):.3f}")
 
             clf_results[param] = param_results
 
@@ -740,6 +791,8 @@ def run_gmm_clustering(
     pca_dim: int = 10,
     out_root: str | None = None,
     run=None,
+    class_label_key: str = 'class',
+    tag: str | None = None,
 ) -> dict:
     """Fit a diagonal-covariance GMM in PCA-reduced latent space and evaluate clustering.
 
@@ -776,7 +829,8 @@ def run_gmm_clustering(
     """
     out_dir = None
     if out_root:
-        out_dir = os.path.join(out_root, 'clustering', latent_key)
+        subdir = f'{latent_key}_{tag}' if tag else latent_key
+        out_dir = os.path.join(out_root, 'clustering', subdir)
         os.makedirs(out_dir, exist_ok=True)
 
     is_medalcare = dataset_name.lower() == 'medalcare-xl'
@@ -837,7 +891,7 @@ def run_gmm_clustering(
     ari = None
     true_classes_te = None
     if is_medalcare:
-        raw_true = [m.get('labels', {}).get('class') for m in test_metadata]
+        raw_true = [m.get('labels', {}).get(class_label_key) for m in test_metadata]
         if any(v is not None for v in raw_true):
             le_cls = LabelEncoder()
             valid_mask = np.array([v is not None and str(v) not in ('', 'None')
@@ -847,7 +901,7 @@ def run_gmm_clustering(
             ari = float(adjusted_rand_score(true_enc, pred_valid))
             true_classes_te = np.array([str(v) if ok else 'unknown'
                                          for v, ok in zip(raw_true, valid_mask)])
-            print(f"  [GMM/{latent_key}] ARI: {ari:.4f}")
+            print(f"  [GMM/{latent_key}] ARI vs '{class_label_key}': {ari:.4f}")
 
     # ── 8. Per-cluster label statistics + Kruskal-Wallis ε² ──────────────────
     # Collect all continuous parameters present in test metadata
@@ -1435,7 +1489,7 @@ def log_probe_metrics(probe_results, latent_key, seg_type, run):
                      plots per parameter (logged once, independent of latent_key)
     - Regression   : bar chart of R² per parameter (one bar per probe method)
     - Classification: bar chart of per-class accuracy + bar chart of overall
-                      accuracy / F1 / ROC-AUC per probe method
+                      metrics (binary: accuracy; multi-class: macro F1 / Recall / AUROC)
     """
     import wandb as _wandb
     panel    = "linear probe"
@@ -1521,8 +1575,13 @@ def log_probe_metrics(probe_results, latent_key, seg_type, run):
             log_dict[f"{panel}/classification/per_class_accuracy/{param}/{suffix}"] = _wandb.Image(fig)
             plt.close(fig)
 
-            # Overall metrics bar chart (accuracy, f1, roc_auc)
-            metric_keys = ['accuracy', 'f1', 'roc_auc']
+            # Overall metrics bar chart
+            # Binary: accuracy only; multi-class: f1_macro / recall_macro / auroc_macro
+            sample_metrics = next(iter(model_results.values()))['metrics']
+            if 'accuracy' in sample_metrics:
+                metric_keys = ['accuracy']
+            else:
+                metric_keys = ['f1_macro', 'recall_macro', 'auroc_macro']
             metric_groups = [
                 (m, [model_results[m]['metrics'].get(k, float('nan')) for k in metric_keys])
                 for m in methods
@@ -1611,6 +1670,12 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     run_label     = seg_type if seg_type else 'all_classes'
     finetune_root = os.path.join(args.save, 'finetune_results', run_label)
 
+    # Params to skip in linear probing (patient_id is not a useful probe target)
+    probe_skip = {'patient_id'} if dataset_name == 'medalcare-xl' else None
+
+    # n_clusters: inferred from classes for MedalCare-XL, fixed 8 for UK Biobank
+    gmm_n_clusters = None if dataset_name == 'medalcare-xl' else 8
+
     latent_keys = ['z0'] + (['m', 'z0_m'] if has_m else [])
     for lkey in latent_keys:
         print(f"\n=== Linear probes ({lkey}) ===")
@@ -1621,8 +1686,40 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                 latent_key=lkey,
                 out_root=os.path.join(finetune_root, lkey),
                 methods={'ols'},
+                skip_params=probe_skip,
             )
         log_probe_metrics(probe_results, lkey, seg_type, run)
+
+        # ── GMM clustering ────────────────────────────────────────────────────
+        print(f"\n=== GMM clustering ({lkey}) ===")
+        with np.errstate(all='ignore'):
+            run_gmm_clustering(
+                tr_latents, tr_metadata,
+                te_latents, te_metadata,
+                latent_key=lkey,
+                dataset_name=dataset_name,
+                n_clusters=gmm_n_clusters,
+                pca_dim=10,
+                out_root=finetune_root,
+                run=run,
+            )
+
+        # ── Patient-ID clustering (MedalCare-XL only, n_clusters=2) ──────────
+        if dataset_name == 'medalcare-xl':
+            print(f"\n=== Patient-ID clustering ({lkey}) ===")
+            with np.errstate(all='ignore'):
+                run_gmm_clustering(
+                    tr_latents, tr_metadata,
+                    te_latents, te_metadata,
+                    latent_key=lkey,
+                    dataset_name=dataset_name,
+                    n_clusters=2,
+                    pca_dim=10,
+                    out_root=finetune_root,
+                    run=run,
+                    class_label_key='patient_id',
+                    tag='patient_id',
+                )
 
     print("========== Post-training probes complete ==========\n")
 
@@ -1646,6 +1743,9 @@ if __name__ == '__main__':
                              'aladin_preprocess.py (train_metadata.json, valid_metadata.json, '
                              'test_metadata.json).  When provided, labels are taken from these '
                              'files instead of from the metadata embedded in the latents JSON.')
+    parser.add_argument('--dataset', type=str, default='medalcare-xl',
+                        choices=['medalcare-xl', 'uk-biobank'],
+                        help='Dataset name — controls GMM cluster count and patient_id handling.')
     args = parser.parse_args()
 
     root_dir = args.root_dir
@@ -1702,31 +1802,45 @@ if __name__ == '__main__':
     print(f"\nOutput directory: {finetune_root}")
     print(f"Methods: {sorted(methods)}\n")
 
-    print("=== Linear probes (z0) ===")
-    run_linear_probes(
-        _lats(train_split), _meta(train_split),
-        _lats(test_split),  _meta(test_split),
-        latent_key='z0',
-        out_root=os.path.join(finetune_root, 'z0'),
-        methods=methods,
-    )
+    dataset_name  = args.dataset.lower()
+    probe_skip    = {'patient_id'} if dataset_name == 'medalcare-xl' else None
+    gmm_n_clusters = None if dataset_name == 'medalcare-xl' else 8
 
-    if has_m:
-        print("\n=== Linear probes (m) ===")
+    latent_keys = ['z0'] + (['m', 'z0_m'] if has_m else [])
+    for lkey in latent_keys:
+        print(f"\n=== Linear probes ({lkey}) ===")
         run_linear_probes(
             _lats(train_split), _meta(train_split),
             _lats(test_split),  _meta(test_split),
-            latent_key='m',
-            out_root=os.path.join(finetune_root, 'm'),
+            latent_key=lkey,
+            out_root=os.path.join(finetune_root, lkey),
             methods=methods,
+            skip_params=probe_skip,
         )
 
-        print("\n=== Linear probes (z0 + m combined) ===")
-        run_linear_probes(
-            _lats(train_split), _meta(train_split),
-            _lats(test_split),  _meta(test_split),
-            latent_key='z0_m',
-            out_root=os.path.join(finetune_root, 'z0_m'),
-            methods=methods,
-        )
+        print(f"\n=== GMM clustering ({lkey}) ===")
+        with np.errstate(all='ignore'):
+            run_gmm_clustering(
+                _lats(train_split), _meta(train_split),
+                _lats(test_split),  _meta(test_split),
+                latent_key=lkey,
+                dataset_name=dataset_name,
+                n_clusters=gmm_n_clusters,
+                pca_dim=10,
+                out_root=finetune_root,
+            )
 
+        if dataset_name == 'medalcare-xl':
+            print(f"\n=== Patient-ID clustering ({lkey}) ===")
+            with np.errstate(all='ignore'):
+                run_gmm_clustering(
+                    _lats(train_split), _meta(train_split),
+                    _lats(test_split),  _meta(test_split),
+                    latent_key=lkey,
+                    dataset_name=dataset_name,
+                    n_clusters=2,
+                    pca_dim=10,
+                    out_root=finetune_root,
+                    class_label_key='patient_id',
+                    tag='patient_id',
+                )
