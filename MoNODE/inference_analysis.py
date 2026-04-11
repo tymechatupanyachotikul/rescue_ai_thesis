@@ -342,7 +342,8 @@ def _collect_sample_latents(dataloader, model, split, args):
                                     for j, col in enumerate(columns)}
                             
                         latent_tensors['z0'].append(z0[i].detach().cpu().numpy())
-                        latent_tensors['m'].append(m[i].detach().cpu().numpy())
+                        if m is not None:
+                            latent_tensors['m'].append(m[i].detach().cpu().numpy())
                         metadata_dict.append({
                             'filename':   filenames[i],
                             'uid': patient_ids[i],
