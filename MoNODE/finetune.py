@@ -939,7 +939,10 @@ def run_gmm_clustering(
             else float('nan')
             for m in test_metadata
         ])
-        param_values[param] = arr
+        # Only keep params with >2 distinct non-NaN values (binary params go to chi-square)
+        distinct_vals = set(v for v in arr if not np.isnan(v))
+        if len(distinct_vals) > 2:
+            param_values[param] = arr
 
     # ── Categorical parameters ─────────────────────────────────────────────────
     # Mirror the same logic as run_linear_probes:
