@@ -827,12 +827,19 @@ def refine_metadata_labels(metadata_path, split):
         'ar.PectinateMuscles',
         'cv.lvendo_f',
         'cv.lvmyo',
-        'cv.lvymyo_n_r',
+        'cv.lvmyo_n_r',
         'cv.lvmyo_s_r',
+        'cv.lvmyo_f',
         'cv.rvendo_f',
         'cv.rvymyo_f',
         'cv.rvmyo_n_r',
+        'cv.rvmyo_f',
         'cv.rvmyo_s_r',
+        'cv.lvendo_s_r',
+        'ar.InferiorIsthmus',
+        'cv.rvendo_n_r',
+        'cv.rvendo_s_r',
+        'cv.lvendo_n_r'
     }
     APD_KEYS = {'APD.min', 'APD.v_d', 'APD.z_d', 'APD.max'}
 
