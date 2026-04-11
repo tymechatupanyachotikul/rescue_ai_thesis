@@ -966,7 +966,7 @@ def run_gmm_clustering(
             chi2_results[param] = {'chi2': None, 'dof': None, 'p_value': None,
                                    'cramers_v': None}
             continue
-
+        print(f'Performing CHI SQUARE for {param}')
         cat_idx = {c: i for i, c in enumerate(categories)}
         table = np.zeros((n_clusters, len(categories)), dtype=int)
         for v, lbl in zip(vals_list, labels_te):
@@ -981,6 +981,7 @@ def run_gmm_clustering(
         if table_trimmed.shape[0] < 2 or table_trimmed.shape[1] < 2:
             chi2_results[param] = {'chi2': None, 'dof': None, 'p_value': None,
                                    'cramers_v': None}
+            print(f'SKipping chi square')
             continue
 
         try:
@@ -996,6 +997,7 @@ def run_gmm_clustering(
                 'cramers_v': round(cramers_v,         6),
             }
         except Exception as e:
+            print(f'Error {e}')
             chi2_results[param] = {'chi2': None, 'dof': None, 'p_value': None,
                                    'cramers_v': None, 'error': str(e)}
 
