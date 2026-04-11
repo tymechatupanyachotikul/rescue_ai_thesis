@@ -811,5 +811,67 @@ def change_name_2(root_dir):
     print(f"Done. Renamed: {renamed} | Skipped (no underscore): {skipped} | Conflicts: {conflict}")
 
 
-change_name_2('/projects/prjs1890/MedalCare-XL/segments/train/ventricular/median')
-change_name_2('/projects/prjs1890/MedalCare-XL/segments/train/atrial/median')
+def refine_metadata_labels(metadata_path, split):
+    """Remove unwanted label keys and add APD ventricular keys for each UID.
+
+    Keys removed from labels:
+        ar.BulkTissue, ar.PectinateMuscles,
+        cv.lvendo_f, cv.lvmyo, cv.lvymyo_n_r, cv.lvmyo_s_r,
+        cv.rvendo_f, cv.rvymyo_f, cv.rvmyo_n_r, cv.rvmyo_s_r
+
+    Keys added from VentricularParameters.txt:
+        APD.min, APD.v_d, APD.z_d, APD.max
+    """
+    KEYS_TO_REMOVE = {
+        'ar.BulkTissue',
+        'ar.PectinateMuscles',
+        'cv.lvendo_f',
+        'cv.lvmyo',
+        'cv.lvymyo_n_r',
+        'cv.lvmyo_s_r',
+        'cv.rvendo_f',
+        'cv.rvymyo_f',
+        'cv.rvmyo_n_r',
+        'cv.rvmyo_s_r',
+    }
+    APD_KEYS = {'APD.min', 'APD.v_d', 'APD.z_d', 'APD.max'}
+
+    with open(metadata_path, 'r') as f:
+        metadata = json.load(f)
+
+    for uid, entry in metadata.items():
+        labels = entry.get('labels', {})
+
+        # Remove unwanted keys
+        for key in KEYS_TO_REMOVE:
+            labels.pop(key, None)
+
+        # Add APD keys from VentricularParameters.txt
+        v_file, _ = get_filepath(uid, split)
+        try:
+            with open(v_file, 'r') as f:
+                for line in f:
+                    if '=' not in line:
+                        continue
+                    param, _, value_str = line.partition('=')
+                    param = param.strip()
+                    if param in APD_KEYS:
+                        try:
+                            labels[param] = float(value_str.strip().replace('mm/s', ''))
+                        except ValueError:
+                            pass
+        except FileNotFoundError:
+            print(f"Warning: VentricularParameters.txt not found for uid={uid} — APD keys skipped")
+
+        entry['labels'] = labels
+
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=4)
+
+    print(f"refine_metadata_labels complete: {len(metadata)} UIDs processed → {metadata_path}")
+
+root_dir = '/projects/prjs1890/MedalCare-XL/segments'
+for split in ['train', 'valid', 'test']:
+    metadata_path = os.path.join(root_dir, f'{split}_metadat.json')
+    refine_metadata_labels(metadata_path, split)
+
