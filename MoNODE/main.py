@@ -204,7 +204,8 @@ if __name__ == '__main__':
     train_model(args, model, plotter, trainset, validset, testset, logger, params[args.task], run)
 
     if args.task == 'ecg':
-        run_post_training_probes(args, model, device, trainset, testset, params[args.task], run)
+        run_post_training_probes(args, model, device, trainset, testset, params[args.task], run,
+                                  validset=validset)
 
     run.finish()
 

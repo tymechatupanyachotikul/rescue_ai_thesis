@@ -23,13 +23,21 @@ from sklearn.linear_model import (
 from sklearn.metrics import (
     r2_score, mean_squared_error,
     roc_auc_score, accuracy_score, f1_score, recall_score,
+    balanced_accuracy_score,
     adjusted_rand_score,
     silhouette_score, silhouette_samples,
-    ConfusionMatrixDisplay, RocCurveDisplay,
+    ConfusionMatrixDisplay,
 )
+from sklearn.manifold import TSNE
 from sklearn.mixture import GaussianMixture
 from sklearn.neural_network import MLPRegressor, MLPClassifier
 from sklearn.preprocessing import StandardScaler, LabelEncoder
+
+try:
+    from umap import UMAP as _UMAP
+    HAS_UMAP = True
+except ImportError:
+    HAS_UMAP = False
 
 
 
@@ -182,14 +190,15 @@ def _regression_models():
     ]
 
 
-def _classification_models(binary: bool = False):
+def _classification_models(binary: bool = False, imbalanced: bool = False):
     """Return (name, model) pairs for the four classification probes.
 
-    For multi-class probes (binary=False) logistic regression models are
-    initialised with class_weight='balanced' to correct for class imbalance.
+    class_weight='balanced' is applied to logistic regression for:
+      - all multi-class probes, or
+      - binary probes where the majority class exceeds 80 % of the training set.
     MLP has no class_weight parameter and is left unchanged.
     """
-    cw = None if binary else 'balanced'
+    cw = None if (binary and not imbalanced) else 'balanced'
     return [
         ('ols',   LogisticRegression(penalty=None, max_iter=1000, n_jobs=-1,
                                      class_weight=cw)),
@@ -213,17 +222,17 @@ def _eval_regression(model, X_tr, y_tr, X_te, y_te):
         'y_pred':  y_pred,
         'y_true':  y_te_arr,
         'metrics': {
-            'mse': float(mean_squared_error(y_te_arr, y_pred)),
-            'r2':  float(r2_score(y_te_arr, y_pred)),
+            'r2': float(r2_score(y_te_arr, y_pred)),
         },
     }
 
 
-def _eval_classification(model, X_tr, y_tr, X_te, y_te, le):
+def _eval_classification(model, X_tr, y_tr, X_te, y_te, le, imbalanced: bool = False):
     """Evaluate a classification probe.
 
-    Binary (2 classes)  → reports accuracy only.
-    Multi-class         → reports macro F1, macro AUROC, macro Recall.
+    Binary balanced    → accuracy only.
+    Binary imbalanced  → F1 (positive class), AUROC, balanced accuracy.
+    Multi-class        → macro F1, macro AUROC, macro recall.
     """
     y_tr_enc = le.transform(y_tr)
     y_te_enc = le.transform(y_te)
@@ -237,7 +246,18 @@ def _eval_classification(model, X_tr, y_tr, X_te, y_te, le):
         with np.errstate(under='ignore'):
             y_prob = model.predict_proba(X_te)
 
-    if binary:
+    if binary and imbalanced:
+        metrics = {
+            'f1_binary':          float(f1_score(y_te_enc, y_pred, pos_label=1,
+                                                  average='binary', zero_division=0)),
+            'balanced_accuracy':  float(balanced_accuracy_score(y_te_enc, y_pred)),
+        }
+        if y_prob is not None:
+            try:
+                metrics['auroc'] = float(roc_auc_score(y_te_enc, y_prob[:, 1]))
+            except ValueError:
+                pass
+    elif binary:
         metrics = {'accuracy': float(accuracy_score(y_te_enc, y_pred))}
     else:
         metrics = {
@@ -299,40 +319,35 @@ def _per_class_accuracy(y_true, y_pred, classes):
 
 
 def _plot_classification_param(param, model_results, out_dir, le):
-    """Per-param plots: confusion matrix per model, ROC curves, per-class accuracy, group summary."""
-    import json as _json
-    names  = list(model_results.keys())
-    classes = [str(c) for c in le.classes_]   # always strings for safe .lower() and display
-    binary  = len(classes) == 2
+    """Confusion matrix per model + combined metrics/per-class-accuracy JSON."""
+    names   = list(model_results.keys())
+    classes = [str(c) for c in le.classes_]
     n_cls   = len(classes)
 
-    # Class grouping for summary bar chart
-    ventricular = [c for c in classes if c.lower() in ('lcx_03_ant', 'lcx_03_post', 'rca_0_3', 'rca_10', 'lad_10', 'lad_03', 'lcx_10_post', 'lbbb', 'rbbb')]
-    atrial      = [c for c in classes if c.lower() in ('avblock', 'fam', 'iab', 'lae')]
-    sinus       = [c for c in classes if c.lower() == 'sinus']
-
-    # --- Confusion matrix: one figure per model, saved separately ---
-    cell_size = max(0.7, 5.0 / n_cls)   # shrink cells for many classes
-    tick_fs   = max(5, 9 - n_cls // 3)  # shrink tick font for many classes
+    cell_size = max(0.7, 5.0 / n_cls)
+    tick_fs   = max(5, 9 - n_cls // 3)
 
     for name in names:
         res = model_results[name]
         fig_cm, ax = plt.subplots(figsize=(cell_size * n_cls + 1.5,
                                            cell_size * n_cls + 1.5))
-        disp = ConfusionMatrixDisplay.from_predictions(
+        ConfusionMatrixDisplay.from_predictions(
             res['y_true'], res['y_pred'],
             display_labels=classes,
-            ax=ax, colorbar=True,
-            xticks_rotation=45,
+            ax=ax, colorbar=True, xticks_rotation=45,
         )
         ax.set_xticklabels(ax.get_xticklabels(), fontsize=tick_fs, ha='right')
         ax.set_yticklabels(ax.get_yticklabels(), fontsize=tick_fs)
         ax.set_xlabel('Predicted', fontsize=9)
         ax.set_ylabel('True', fontsize=9)
         m = res['metrics']
-        if 'accuracy' in m:   # binary
+        if 'accuracy' in m:
             metric_str = f"acc={m['accuracy']:.3f}"
-        else:                 # multi-class
+        elif 'f1_binary' in m:
+            metric_str = (f"f1={m.get('f1_binary', float('nan')):.3f}  "
+                          f"auroc={m.get('auroc', float('nan')):.3f}  "
+                          f"bal_acc={m.get('balanced_accuracy', float('nan')):.3f}")
+        else:
             metric_str = (f"f1={m.get('f1_macro', float('nan')):.3f}  "
                           f"recall={m.get('recall_macro', float('nan')):.3f}  "
                           f"auroc={m.get('auroc_macro', float('nan')):.3f}")
@@ -341,94 +356,20 @@ def _plot_classification_param(param, model_results, out_dir, le):
         fig_cm.savefig(os.path.join(out_dir, f'confusion_matrix_{name}.png'), dpi=130)
         plt.close(fig_cm)
 
-    # --- Per-class accuracy: grouped bar chart across models ---
+    # Combined metrics + per-class accuracy in one JSON
     pca_data = {name: _per_class_accuracy(model_results[name]['y_true'],
                                            model_results[name]['y_pred'],
                                            classes)
                 for name in names}
-
-    # Save per-class accuracy to JSON
-    with open(os.path.join(out_dir, 'per_class_accuracy.json'), 'w') as f:
-        _json.dump(pca_data, f, indent=2)
-
-    x      = np.arange(n_cls)
-    width  = 0.8 / max(len(names), 1)
-    offsets = np.linspace(-(len(names) - 1) / 2 * width,
-                           (len(names) - 1) / 2 * width, len(names))
-    colours = [f'C{i}' for i in range(len(names))]
-
-    fig_pca, ax_pca = plt.subplots(figsize=(max(8, n_cls * 0.9 + 2), 4))
-    for (name, colour, offset) in zip(names, colours, offsets):
-        vals = [pca_data[name].get(cls, float('nan')) for cls in classes]
-        ax_pca.bar(x + offset, vals, width, label=name, color=colour, alpha=0.85)
-    ax_pca.set_xticks(x)
-    ax_pca.set_xticklabels(classes, rotation=40, ha='right', fontsize=8)
-    ax_pca.set_ylabel('Accuracy', fontsize=10)
-    ax_pca.set_ylim(0, 1.08)
-    ax_pca.axhline(1.0, color='grey', lw=0.6, linestyle='--')
-    ax_pca.set_title(f"{param} — per-class accuracy", fontsize=11, fontweight='bold')
-    ax_pca.legend(fontsize=8, framealpha=0.8)
-    ax_pca.spines[['top', 'right']].set_visible(False)
-    fig_pca.tight_layout()
-    fig_pca.savefig(os.path.join(out_dir, 'per_class_accuracy.png'), dpi=130)
-    plt.close(fig_pca)
-
-    # --- Group-summary bar chart (ventricular / atrial / sinus) ---
-    groups = [('Ventricular', ventricular), ('Atrial', atrial), ('Sinus', sinus)]
-    groups = [(g, cls_list) for g, cls_list in groups if cls_list]  # skip absent groups
-
-    if groups:
-        group_names  = [g for g, _ in groups]
-        group_width  = 0.8 / max(len(names), 1)
-        gx           = np.arange(len(group_names))
-        g_offsets    = np.linspace(-(len(names) - 1) / 2 * group_width,
-                                    (len(names) - 1) / 2 * group_width, len(names))
-
-        fig_grp, ax_grp = plt.subplots(figsize=(max(5, len(group_names) * 1.8 + 2), 4))
-        for (name, colour, offset) in zip(names, colours, g_offsets):
-            pca = pca_data[name]
-            group_accs = []
-            for _, cls_list in groups:
-                vals = [pca[c] for c in cls_list if c in pca and not np.isnan(pca[c])]
-                group_accs.append(float(np.mean(vals)) if vals else float('nan'))
-            bars = ax_grp.bar(gx + offset, group_accs, group_width,
-                              label=name, color=colour, alpha=0.85)
-            for bar, v in zip(bars, group_accs):
-                if not np.isnan(v):
-                    ax_grp.text(bar.get_x() + bar.get_width() / 2,
-                                bar.get_height() + 0.01,
-                                f'{v:.2f}', ha='center', va='bottom', fontsize=7)
-
-        ax_grp.set_xticks(gx)
-        ax_grp.set_xticklabels(
-            [f"{g}\n({', '.join(cls_list)})" for g, cls_list in groups],
-            fontsize=8,
-        )
-        ax_grp.set_ylabel('Mean accuracy', fontsize=10)
-        ax_grp.set_ylim(0, 1.12)
-        ax_grp.axhline(1.0, color='grey', lw=0.6, linestyle='--')
-        ax_grp.set_title(f"{param} — group accuracy summary", fontsize=11, fontweight='bold')
-        ax_grp.legend(fontsize=8, framealpha=0.8)
-        ax_grp.spines[['top', 'right']].set_visible(False)
-        fig_grp.tight_layout()
-        fig_grp.savefig(os.path.join(out_dir, 'group_accuracy_summary.png'), dpi=130)
-        plt.close(fig_grp)
-
-    # --- ROC curves (binary only) ---
-    if binary:
-        fig_roc, ax_roc = plt.subplots(figsize=(5, 4))
-        for name, res in model_results.items():
-            if res['y_prob'] is not None:
-                RocCurveDisplay.from_predictions(
-                    res['y_true'], res['y_prob'][:, 1],
-                    name=name,
-                    ax=ax_roc,
-                )
-        ax_roc.plot([0, 1], [0, 1], 'k--', lw=1)
-        ax_roc.set_title(f"{param} — ROC curves")
-        fig_roc.tight_layout()
-        fig_roc.savefig(os.path.join(out_dir, 'roc_curves.png'), dpi=120)
-        plt.close(fig_roc)
+    combined = {
+        name: {
+            'metrics':           model_results[name]['metrics'],
+            'per_class_accuracy': pca_data[name],
+        }
+        for name in names
+    }
+    with open(os.path.join(out_dir, 'metrics.json'), 'w') as f:
+        json.dump(combined, f, indent=2)
 
 
 def _plot_summary_regression(all_results, out_dir):
@@ -436,30 +377,35 @@ def _plot_summary_regression(all_results, out_dir):
     params = sorted(all_results.keys())
     model_names = list(next(iter(all_results.values())).keys())
     x = np.arange(len(params))
-    width = 0.2
+    width = 0.8 / max(len(model_names), 1)
+    offsets = np.linspace(-(len(model_names) - 1) / 2 * width,
+                           (len(model_names) - 1) / 2 * width, len(model_names))
 
-    fig, axes = plt.subplots(1, 2, figsize=(max(8, len(params) * 1.2 + 2), 5))
-    for i, metric in enumerate(['r2', 'mse']):
-        ax = axes[i]
-        for j, mname in enumerate(model_names):
-            vals = [all_results[p][mname]['metrics'].get(metric, float('nan')) for p in params]
-            ax.bar(x + j * width, vals, width, label=mname)
-        ax.set_xticks(x + width * 1.5)
-        ax.set_xticklabels(params, rotation=45, ha='right', fontsize=7)
-        ax.set_ylabel(metric.upper())
-        ax.set_title(f"Regression summary — {metric.upper()}")
-        ax.legend(fontsize=8)
+    fig, ax = plt.subplots(figsize=(max(8, len(params) * 1.2 + 2), 5))
+    for j, (mname, offset) in enumerate(zip(model_names, offsets)):
+        vals = [all_results[p][mname]['metrics'].get('r2', float('nan')) for p in params]
+        ax.bar(x + offset, vals, width, label=mname, color=f'C{j}', alpha=0.85)
+    ax.set_xticks(x)
+    ax.set_xticklabels(params, rotation=45, ha='right', fontsize=7)
+    ax.set_ylabel('R²', fontsize=10)
+    ax.set_title('Regression summary — R²', fontsize=11, fontweight='bold')
+    ax.legend(fontsize=8, framealpha=0.8)
+    ax.spines[['top', 'right']].set_visible(False)
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, 'regression_summary.png'), dpi=120)
     plt.close(fig)
 
 
 def _plot_summary_classification(all_results, out_dir):
-    """Grouped bar chart per metric across params × models.
+    """3-panel grouped bar chart combining binary-imbalanced and multi-class metrics.
 
-    Binary params report accuracy; multi-class params report
-    f1_macro / recall_macro / auroc_macro.  The summary shows all four
-    metrics in separate panels, leaving NaN where a metric is absent.
+    Each panel picks the first available key per param × model:
+      F1               : f1_binary  (imbalanced binary)  | f1_macro  (multi-class)
+      AUROC            : auroc      (imbalanced binary)  | auroc_macro (multi-class)
+      Bal-acc / Recall : balanced_accuracy (imbalanced binary) | recall_macro (multi-class)
+
+    Balanced binary params (accuracy only) produce NaN bars — they are not
+    the focus of this chart.
     """
     params = sorted(all_results.keys())
     model_names = list(next(iter(all_results.values())).keys())
@@ -468,23 +414,26 @@ def _plot_summary_classification(all_results, out_dir):
     offsets = np.linspace(-(len(model_names) - 1) / 2 * width,
                            (len(model_names) - 1) / 2 * width, len(model_names))
 
-    metrics_to_plot = [
-        ('accuracy',     'Accuracy (binary)'),
-        ('f1_macro',     'Macro F1 (multi-class)'),
-        ('recall_macro', 'Macro Recall (multi-class)'),
-        ('auroc_macro',  'Macro AUROC (multi-class)'),
+    # (title, [keys to try in order])
+    panels = [
+        ('F1 (binary pos. / macro)',            ['f1_binary',         'f1_macro']),
+        ('AUROC (binary / macro)',               ['auroc',             'auroc_macro']),
+        ('Balanced-acc / Macro recall',          ['balanced_accuracy',  'recall_macro']),
     ]
 
-    fig, axes = plt.subplots(2, 2, figsize=(max(10, len(params) * 1.2 + 2), 8))
-    axes = axes.flatten()
-    for ax, (metric, title) in zip(axes, metrics_to_plot):
+    fig, axes = plt.subplots(1, 3, figsize=(max(14, len(params) * 1.8 + 3), 5))
+    for ax, (title, keys) in zip(axes, panels):
         for j, (mname, offset) in enumerate(zip(model_names, offsets)):
-            vals = [all_results[p][mname]['metrics'].get(metric, float('nan')) for p in params]
+            vals = []
+            for p in params:
+                m = all_results[p][mname]['metrics']
+                v = next((m[k] for k in keys if k in m), float('nan'))
+                vals.append(v)
             ax.bar(x + offset, vals, width, label=mname, color=f'C{j}', alpha=0.85)
         ax.set_xticks(x)
         ax.set_xticklabels(params, rotation=45, ha='right', fontsize=7)
         ax.set_ylim(0, 1.05)
-        ax.set_ylabel(title, fontsize=9)
+        ax.set_ylabel('Score', fontsize=9)
         ax.set_title(title, fontsize=10, fontweight='bold')
         ax.legend(fontsize=7, framealpha=0.8)
         ax.spines[['top', 'right']].set_visible(False)
@@ -559,7 +508,15 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
         # Any param with exactly 2 distinct values → binary classification
         is_binary = (not is_categorical) and (len(set(y_tr)) == 2)
 
-        # ── Dataset statistics ────────────────────────────────────────────────
+        # Imbalance check: majority class > 80 % of the training set
+        is_imbalanced = False
+        if is_binary or is_categorical:
+            from collections import Counter as _Counter
+            tr_counts = _Counter(y_tr)
+            majority_frac = max(tr_counts.values()) / max(len(y_tr), 1)
+            is_imbalanced = majority_frac > 0.80
+
+        # ── Dataset statistics (print only, no file) ──────────────────────────
         dstats = _compute_dataset_stats(y_tr, y_te, is_categorical, is_binary)
         all_dataset_stats[param] = dstats
         _print_dataset_stats(param, dstats)
@@ -578,14 +535,21 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
                 continue
             le = LabelEncoder().fit(y_tr + y_te)
             param_results = {}
-            for name, mdl in _classification_models(binary=is_binary):
+            for name, mdl in _classification_models(binary=is_binary, imbalanced=is_imbalanced):
                 if methods and name not in methods:
                     continue
-                param_results[name] = _eval_classification(mdl, X_tr, y_tr, X_te, y_te, le)
+                param_results[name] = _eval_classification(
+                    mdl, X_tr, y_tr, X_te, y_te, le, imbalanced=is_imbalanced)
                 m = param_results[name]['metrics']
-                if 'accuracy' in m:   # binary
+                if 'accuracy' in m:
                     print(f"  [{param}][{name}]  acc={m['accuracy']:.3f}")
-                else:                 # multi-class
+                elif 'f1_binary' in m:
+                    print(f"  [{param}][{name}]  "
+                          f"f1={m.get('f1_binary', float('nan')):.3f}  "
+                          f"auroc={m.get('auroc', float('nan')):.3f}  "
+                          f"bal_acc={m.get('balanced_accuracy', float('nan')):.3f}  "
+                          f"[imbalanced={majority_frac:.0%}]")
+                else:
                     print(f"  [{param}][{name}]  "
                           f"f1={m.get('f1_macro', float('nan')):.3f}  "
                           f"recall={m.get('recall_macro', float('nan')):.3f}  "
@@ -597,8 +561,6 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
                 pdir = os.path.join(out_root, 'classification', param)
                 os.makedirs(pdir, exist_ok=True)
                 _plot_classification_param(param, param_results, pdir, le)
-                _plot_dataset_stats(param, dstats, pdir)
-                _save_metrics_json(param_results, pdir)
         else:  # continuous regression
             param_results = {}
             for name, mdl in _regression_models():
@@ -606,7 +568,7 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
                     continue
                 param_results[name] = _eval_regression(mdl, X_tr, y_tr, X_te, y_te)
                 m = param_results[name]['metrics']
-                print(f"  [{param}][{name}]  R²={m['r2']:.3f}  MSE={m['mse']:.4f}")
+                print(f"  [{param}][{name}]  R²={m['r2']:.3f}")
 
             reg_results[param] = param_results
 
@@ -614,10 +576,9 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
                 pdir = os.path.join(out_root, 'regression', param)
                 os.makedirs(pdir, exist_ok=True)
                 _plot_regression_param(param, param_results, pdir)
-                _plot_dataset_stats(param, dstats, pdir)
                 _save_metrics_json(param_results, pdir)
 
-    # ── Summary plots + consolidated dataset_stats.json ───────────────────────
+    # ── Summary plots ─────────────────────────────────────────────────────────
     if out_root:
         if reg_results:
             sdir = os.path.join(out_root, 'regression', '_summary')
@@ -627,12 +588,6 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
             sdir = os.path.join(out_root, 'classification', '_summary')
             os.makedirs(sdir, exist_ok=True)
             _plot_summary_classification(clf_results, sdir)
-
-        # Single file with all parameters' dataset statistics side-by-side
-        stats_path = os.path.join(out_root, 'dataset_stats.json')
-        with open(stats_path, 'w') as f:
-            json.dump(all_dataset_stats, f, indent=2)
-        print(f"\n  Dataset statistics saved → {stats_path}")
 
     return {'regression': reg_results, 'classification': clf_results,
             'dataset_stats': all_dataset_stats}
@@ -769,11 +724,6 @@ def _make_dataset_stats_fig(param: str, stats: dict):
     return fig
 
 
-def _plot_dataset_stats(param: str, stats: dict, out_dir: str) -> None:
-    """Save a distribution plot for this parameter to *out_dir*/dataset_stats.png."""
-    fig = _make_dataset_stats_fig(param, stats)
-    fig.savefig(os.path.join(out_dir, 'dataset_stats.png'), dpi=120)
-    plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -820,8 +770,8 @@ def run_gmm_clustering(
     ------------------------------------------
     {out_root}/clustering/{latent_key}/
       gmm_results.json          — all metrics and per-cluster stats
-      cluster_scatter.png       — PCA-2D scatter coloured by predicted cluster
-      cluster_scatter_true.png  — same scatter coloured by true class (MC-XL only)
+      latent_umap.png           — UMAP 2-D: predicted | ground-truth panels
+      latent_tsne.png           — t-SNE 2-D: predicted | ground-truth panels
       silhouette.png            — per-cluster silhouette bar chart
       param_epsilon_squared.png — effect-size bar chart across parameters
       cluster_{k}/
@@ -841,14 +791,14 @@ def run_gmm_clustering(
 
     # ── 2. Standardise ────────────────────────────────────────────────────────
     scaler = StandardScaler()
-    X_tr   = scaler.fit_transform(X_tr)
-    X_te   = scaler.transform(X_te)
+    X_tr        = scaler.fit_transform(X_tr)
+    X_te_scaled = scaler.transform(X_te)   # kept for UMAP/t-SNE embedding (full dim)
 
     # ── 3. PCA (fit on train) ─────────────────────────────────────────────────
     actual_pca_dim = min(pca_dim, X_tr.shape[1], X_tr.shape[0])
     pca = PCA(n_components=actual_pca_dim, random_state=42)
     Z_tr = pca.fit_transform(X_tr)
-    Z_te = pca.transform(X_te)
+    Z_te = pca.transform(X_te_scaled)
     explained_var = float(pca.explained_variance_ratio_.sum())
     print(f"  [GMM/{latent_key}] PCA {X_tr.shape[1]}→{actual_pca_dim}d, "
           f"explained variance: {explained_var:.3f}")
@@ -995,9 +945,7 @@ def run_gmm_clustering(
 
     # ── 10. Plots ─────────────────────────────────────────────────────────────
     if out_dir:
-        _plot_gmm_scatter(Z_te, labels_te, n_clusters, out_dir, suffix='predicted')
-        if true_classes_te is not None:
-            _plot_gmm_scatter_true(Z_te, true_classes_te, out_dir)
+        _plot_latent_embed(X_te_scaled, labels_te, true_classes_te, n_clusters, out_dir)
         _plot_gmm_silhouette(sil_sample, labels_te, n_clusters, sil_global, out_dir)
         _plot_gmm_epsilon_squared(eps_sq_results, out_dir)
         _plot_gmm_cluster_violins(param_values, labels_te, n_clusters, out_dir)
@@ -1038,47 +986,85 @@ def run_gmm_clustering(
 
 # ── GMM plotting helpers ───────────────────────────────────────────────────────
 
-def _plot_gmm_scatter(Z: np.ndarray, labels: np.ndarray, n_clusters: int,
-                      out_dir: str, suffix: str = 'predicted') -> None:
-    """2-D PCA scatter coloured by cluster assignment."""
-    fig, ax = plt.subplots(figsize=(6, 5))
-    cmap = mpl_cm.get_cmap('tab20', n_clusters)
-    for k in range(n_clusters):
-        mask = labels == k
-        ax.scatter(Z[mask, 0], Z[mask, 1], s=6, alpha=0.5,
-                   color=cmap(k), label=f'C{k} (n={mask.sum()})', rasterized=True)
-    ax.set_xlabel('PC 1', fontsize=9)
-    ax.set_ylabel('PC 2', fontsize=9)
-    ax.set_title(f'GMM clusters ({suffix})', fontsize=11, fontweight='bold')
-    ax.legend(fontsize=6, markerscale=2, ncol=max(1, n_clusters // 8),
-              framealpha=0.7)
+def _scatter_panel(ax, E2d, labels, unique_labels, cmap_fn, title, xlabel, ylabel,
+                   is_cluster: bool = True) -> None:
+    """Draw one scatter panel onto *ax*. Shared by UMAP and t-SNE figures."""
+    for i, lbl in enumerate(unique_labels):
+        mask = labels == lbl
+        label_str = f'C{lbl} (n={mask.sum()})' if is_cluster else str(lbl)
+        ax.scatter(E2d[mask, 0], E2d[mask, 1], s=5, alpha=0.5,
+                   color=cmap_fn(i), label=label_str, rasterized=True)
+    ax.set_xlabel(xlabel, fontsize=9)
+    ax.set_ylabel(ylabel, fontsize=9)
+    ax.set_title(title, fontsize=10, fontweight='bold')
+    ncol = max(1, len(unique_labels) // 10)
+    ax.legend(fontsize=5, markerscale=2, ncol=ncol, framealpha=0.7)
     ax.spines[['top', 'right']].set_visible(False)
-    fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, f'cluster_scatter_{suffix}.png'), dpi=130)
-    plt.close(fig)
 
 
-def _plot_gmm_scatter_true(Z: np.ndarray, true_classes: np.ndarray,
-                           out_dir: str) -> None:
-    """2-D PCA scatter coloured by true class labels."""
-    unique_cls = sorted(set(true_classes))
-    cmap = mpl_cm.get_cmap('tab20', len(unique_cls))
-    cls_idx = {c: i for i, c in enumerate(unique_cls)}
+def _plot_latent_embed(X: np.ndarray, labels_pred: np.ndarray,
+                       true_classes, n_clusters: int, out_dir: str) -> None:
+    """UMAP and t-SNE 2-D embedding of the scaled latent space.
 
-    fig, ax = plt.subplots(figsize=(6, 5))
-    for cls in unique_cls:
-        mask = true_classes == cls
-        ax.scatter(Z[mask, 0], Z[mask, 1], s=6, alpha=0.5,
-                   color=cmap(cls_idx[cls]), label=cls, rasterized=True)
-    ax.set_xlabel('PC 1', fontsize=9)
-    ax.set_ylabel('PC 2', fontsize=9)
-    ax.set_title('True class labels', fontsize=11, fontweight='bold')
-    ax.legend(fontsize=6, markerscale=2, ncol=max(1, len(unique_cls) // 8),
-              framealpha=0.7)
-    ax.spines[['top', 'right']].set_visible(False)
-    fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, 'cluster_scatter_true.png'), dpi=130)
-    plt.close(fig)
+    Produces two figures, each with side-by-side predicted / ground-truth panels:
+      latent_umap.png
+      latent_tsne.png
+
+    *true_classes* may be None (skips the ground-truth panel).
+    """
+    cmap_pred = mpl_cm.get_cmap('tab20', n_clusters)
+    unique_pred = sorted(set(labels_pred.tolist()))
+
+    has_true = true_classes is not None
+    unique_true = sorted(set(true_classes.tolist())) if has_true else []
+    cmap_true = mpl_cm.get_cmap('tab20', max(len(unique_true), 1))
+
+    n_panels = 2 if has_true else 1
+
+    for method_name, E2d in _embed_2d(X):
+        fig, axes = plt.subplots(1, n_panels, figsize=(6 * n_panels, 5), squeeze=False)
+
+        _scatter_panel(
+            axes[0, 0], E2d, labels_pred, unique_pred,
+            cmap_pred,
+            title=f'GMM predicted — {method_name}',
+            xlabel=f'{method_name} 1', ylabel=f'{method_name} 2',
+            is_cluster=True,
+        )
+        if has_true:
+            _scatter_panel(
+                axes[0, 1], E2d, true_classes, unique_true,
+                cmap_true,
+                title=f'Ground truth — {method_name}',
+                xlabel=f'{method_name} 1', ylabel=f'{method_name} 2',
+                is_cluster=False,
+            )
+
+        fig.tight_layout()
+        fname = f'latent_{method_name.lower()}.png'
+        fig.savefig(os.path.join(out_dir, fname), dpi=130)
+        plt.close(fig)
+        print(f"  Saved {fname}")
+
+
+def _embed_2d(X: np.ndarray):
+    """Yield (method_name, 2-D embedding) for UMAP (if available) and t-SNE."""
+    if HAS_UMAP:
+        try:
+            emb = _UMAP(n_components=2, random_state=42,
+                        n_neighbors=min(15, len(X) - 1)).fit_transform(X)
+            yield 'UMAP', emb
+        except Exception as e:
+            print(f"  UMAP failed: {e}")
+
+    n_iter = 1000
+    perp   = min(30, max(5, len(X) // 100))
+    try:
+        emb = TSNE(n_components=2, perplexity=perp, n_iter=n_iter,
+                   random_state=42).fit_transform(X)
+        yield 'tSNE', emb
+    except Exception as e:
+        print(f"  t-SNE failed: {e}")
 
 
 def _plot_gmm_silhouette(sil_sample: np.ndarray, labels: np.ndarray,
@@ -1261,10 +1247,10 @@ def _log_gmm_to_wandb(run, latent_key: str, sil_global: float,
 
     if out_dir:
         for fname, key_suffix in [
-            ('cluster_scatter_predicted.png', 'scatter_predicted'),
-            ('cluster_scatter_true.png',      'scatter_true'),
-            ('silhouette.png',                'silhouette'),
-            ('param_epsilon_squared.png',     'epsilon_squared'),
+            ('latent_umap.png',           'embed_umap'),
+            ('latent_tsne.png',           'embed_tsne'),
+            ('silhouette.png',            'silhouette'),
+            ('param_epsilon_squared.png', 'epsilon_squared'),
         ]:
             fpath = os.path.join(out_dir, fname)
             if os.path.exists(fpath):
@@ -1601,8 +1587,12 @@ def log_probe_metrics(probe_results, latent_key, seg_type, run):
         print(f"  Logged {len(log_dict)} probe charts to wandb under '{panel}' panel.")
 
 
-def run_post_training_probes(args, model, device, trainset, testset, task_params, run):
+def run_post_training_probes(args, model, device, trainset, testset, task_params, run,
+                              validset=None):
     """Load best checkpoint, collect latents, run OLS linear probes, log to wandb.
+
+    Evaluation is done on the **combined valid + test** set (when validset is
+    provided); otherwise test only.
 
     Results are saved to:
         {args.save}/latents/           — z0/m arrays + metadata JSON
@@ -1635,11 +1625,19 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
         with open(path) as f:
             return json.load(f)
 
+    va_latents: dict = {}
+    va_metadata: list = []
+
     with np.errstate(all='ignore'):
         print("Collecting train latents...")
         tr_latents, tr_metadata = collect_latents(
             trainset, model, task_params, args, device,
             aladin_metadata=_load_aladin_meta('train'))
+        if validset is not None:
+            print("Collecting valid latents...")
+            va_latents, va_metadata = collect_latents(
+                validset, model, task_params, args, device,
+                aladin_metadata=_load_aladin_meta('valid'))
         print("Collecting test latents...")
         te_latents, te_metadata = collect_latents(
             testset,  model, task_params, args, device,
@@ -1654,18 +1652,37 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
         json.dump(tr_metadata, f, indent=2)
     with open(os.path.join(latents_dir, 'test_metadata.json'), 'w') as f:
         json.dump(te_metadata, f, indent=2)
+    if validset is not None:
+        np.savez(os.path.join(latents_dir, 'valid_latents.npz'), **va_latents)
+        with open(os.path.join(latents_dir, 'valid_metadata.json'), 'w') as f:
+            json.dump(va_metadata, f, indent=2)
     print(f"  Saved latents to {latents_dir}")
 
     # Remap MedalCare-XL class labels for the segment type
     if dataset_name == 'medalcare-xl' and seg_type:
         tr_metadata = _remap_metadata(tr_metadata, seg_type)
         te_metadata = _remap_metadata(te_metadata, seg_type)
+        if validset is not None:
+            va_metadata = _remap_metadata(va_metadata, seg_type)
+
+    # Combine valid + test into a single evaluation split
+    if validset is not None:
+        eval_latents = {
+            k: np.concatenate([va_latents[k], te_latents[k]], axis=0)
+            for k in te_latents
+        }
+        eval_metadata = va_metadata + te_metadata
+        print(f"  Eval set: valid ({len(va_metadata)}) + test ({len(te_metadata)}) "
+              f"= {len(eval_metadata)} samples")
+    else:
+        eval_latents = te_latents
+        eval_metadata = te_metadata
 
     # Build combined latent key when modulator is present
-    has_m = 'm' in tr_latents and 'm' in te_latents
+    has_m = 'm' in tr_latents and 'm' in eval_latents
     if has_m:
-        tr_latents['z0_m'] = np.concatenate([tr_latents['z0'], tr_latents['m']], axis=1)
-        te_latents['z0_m'] = np.concatenate([te_latents['z0'], te_latents['m']], axis=1)
+        tr_latents['z0_m']   = np.concatenate([tr_latents['z0'],   tr_latents['m']],   axis=1)
+        eval_latents['z0_m'] = np.concatenate([eval_latents['z0'], eval_latents['m']], axis=1)
 
     run_label     = seg_type if seg_type else 'all_classes'
     finetune_root = os.path.join(args.save, 'finetune_results', run_label)
@@ -1681,8 +1698,8 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
         print(f"\n=== Linear probes ({lkey}) ===")
         with np.errstate(all='ignore'):
             probe_results = run_linear_probes(
-                tr_latents, tr_metadata,
-                te_latents, te_metadata,
+                tr_latents,   tr_metadata,
+                eval_latents, eval_metadata,
                 latent_key=lkey,
                 out_root=os.path.join(finetune_root, lkey),
                 methods={'ols'},
@@ -1694,8 +1711,8 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
         print(f"\n=== GMM clustering ({lkey}) ===")
         with np.errstate(all='ignore'):
             run_gmm_clustering(
-                tr_latents, tr_metadata,
-                te_latents, te_metadata,
+                tr_latents,   tr_metadata,
+                eval_latents, eval_metadata,
                 latent_key=lkey,
                 dataset_name=dataset_name,
                 n_clusters=gmm_n_clusters,
@@ -1709,8 +1726,8 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
             print(f"\n=== Patient-ID clustering ({lkey}) ===")
             with np.errstate(all='ignore'):
                 run_gmm_clustering(
-                    tr_latents, tr_metadata,
-                    te_latents, te_metadata,
+                    tr_latents,   tr_metadata,
+                    eval_latents, eval_metadata,
                     latent_key=lkey,
                     dataset_name=dataset_name,
                     n_clusters=2,
@@ -1729,8 +1746,9 @@ if __name__ == '__main__':
         description='Run linear probes on pre-saved latents.')
     parser.add_argument('--root_dir', type=str, required=True,
                         help='Directory containing the saved latent .npz and metadata .json files.')
-    parser.add_argument('--splits', nargs='+', default=['train', 'test'],
-                        help='Splits to load (default: train test).')
+    parser.add_argument('--splits', nargs='+', default=['train', 'valid', 'test'],
+                        help='Splits to load; first is training, rest are combined for eval '
+                             '(default: train valid test).')
     parser.add_argument('--seg_type', type=str, choices=['atrial', 'ventricular'], default=None,
                         help='Segment type of the model. When set, class labels in MedalCare-XL '
                              'metadata are remapped so that out-of-domain classes become "sinus". '
@@ -1783,35 +1801,44 @@ if __name__ == '__main__':
         latents_dict[split] = {'latents': latents, 'metadata': metadata}
 
     train_split = args.splits[0]
-    test_split  = args.splits[-1]
+    eval_splits = args.splits[1:]   # e.g. ['valid', 'test']
 
-    # Require m in both splits before running m-dependent probes
-    has_m = all('m' in latents_dict[s]['latents'] for s in [train_split, test_split])
+    all_probe_splits = [train_split] + eval_splits
+    has_m = all('m' in latents_dict[s]['latents'] for s in all_probe_splits)
 
     if has_m:
-        for split in [train_split, test_split]:
+        for split in all_probe_splits:
             lats = latents_dict[split]['latents']
             lats['z0_m'] = np.concatenate([lats['z0'], lats['m']], axis=1)
 
-    def _lats(split):
-        return latents_dict[split]['latents']
+    # Combine all eval splits (valid + test, or just test if only one)
+    def _combine(splits):
+        lats_list = [latents_dict[s]['latents'] for s in splits]
+        meta_list = [latents_dict[s]['metadata'] for s in splits]
+        keys = lats_list[0].keys()
+        combined_lats = {k: np.concatenate([l[k] for l in lats_list], axis=0) for k in keys}
+        combined_meta = [entry for m in meta_list for entry in m]
+        return combined_lats, combined_meta
 
-    def _meta(split):
-        return latents_dict[split]['metadata']
+    eval_latents, eval_metadata = _combine(eval_splits)
+    tr_latents  = latents_dict[train_split]['latents']
+    tr_metadata = latents_dict[train_split]['metadata']
 
-    print(f"\nOutput directory: {finetune_root}")
+    n_eval = len(eval_metadata)
+    print(f"\nEval set: {' + '.join(eval_splits)} = {n_eval} samples")
+    print(f"Output directory: {finetune_root}")
     print(f"Methods: {sorted(methods)}\n")
 
-    dataset_name  = args.dataset.lower()
-    probe_skip    = {'patient_id'} if dataset_name == 'medalcare-xl' else None
+    dataset_name   = args.dataset.lower()
+    probe_skip     = {'patient_id'} if dataset_name == 'medalcare-xl' else None
     gmm_n_clusters = None if dataset_name == 'medalcare-xl' else 8
 
     latent_keys = ['z0'] + (['m', 'z0_m'] if has_m else [])
     for lkey in latent_keys:
         print(f"\n=== Linear probes ({lkey}) ===")
         run_linear_probes(
-            _lats(train_split), _meta(train_split),
-            _lats(test_split),  _meta(test_split),
+            tr_latents,   tr_metadata,
+            eval_latents, eval_metadata,
             latent_key=lkey,
             out_root=os.path.join(finetune_root, lkey),
             methods=methods,
@@ -1821,8 +1848,8 @@ if __name__ == '__main__':
         print(f"\n=== GMM clustering ({lkey}) ===")
         with np.errstate(all='ignore'):
             run_gmm_clustering(
-                _lats(train_split), _meta(train_split),
-                _lats(test_split),  _meta(test_split),
+                tr_latents,   tr_metadata,
+                eval_latents, eval_metadata,
                 latent_key=lkey,
                 dataset_name=dataset_name,
                 n_clusters=gmm_n_clusters,
@@ -1834,8 +1861,8 @@ if __name__ == '__main__':
             print(f"\n=== Patient-ID clustering ({lkey}) ===")
             with np.errstate(all='ignore'):
                 run_gmm_clustering(
-                    _lats(train_split), _meta(train_split),
-                    _lats(test_split),  _meta(test_split),
+                    tr_latents,   tr_metadata,
+                    eval_latents, eval_metadata,
                     latent_key=lkey,
                     dataset_name=dataset_name,
                     n_clusters=2,
