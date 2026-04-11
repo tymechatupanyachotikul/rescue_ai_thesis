@@ -442,12 +442,75 @@ def _plot_summary_classification(all_results, out_dir):
 
 
 # ---------------------------------------------------------------------------
+# Evaluation-set resampling for class-balanced 'class' probe (MedalCare-XL)
+# ---------------------------------------------------------------------------
+
+def _resample_sinus_balanced(X_te: np.ndarray, y_te: list,
+                              seed: int = 42) -> tuple[np.ndarray, list]:
+    """Resample the evaluation set so that 'sinus' count equals the max count
+    of any other class.
+
+    Strategy (deterministic via fixed seed):
+      1. Keep all non-sinus samples unchanged.
+      2. Determine target_n = max count among non-sinus classes.
+      3. Take as many original sinus samples as possible (up to target_n),
+         selected by sorted index for reproducibility.
+      4. If original sinus count < target_n, fill the remainder by sampling
+         (with replacement if necessary) from the remaining non-sinus pool,
+         using a seeded RNG so results are identical across runs.
+
+    Returns resampled (X_te, y_te) with sinus count == target_n.
+    """
+    from collections import Counter as _Counter
+    import numpy as np
+
+    y_arr     = np.array(y_te)
+    classes   = [c for c in _Counter(y_te) if c != 'sinus']
+    if not classes:
+        return X_te, y_te          # no non-sinus class → nothing to do
+
+    counts    = _Counter(y_te)
+    target_n  = max(counts[c] for c in classes)
+    n_sinus   = counts.get('sinus', 0)
+
+    if n_sinus == target_n:
+        return X_te, y_te          # already balanced
+
+    sinus_idx     = np.where(y_arr == 'sinus')[0]
+    non_sinus_idx = np.where(y_arr != 'sinus')[0]
+
+    # Sort for reproducibility before any RNG is involved
+    sinus_idx     = np.sort(sinus_idx)
+    non_sinus_idx = np.sort(non_sinus_idx)
+
+    rng = np.random.default_rng(seed)
+
+    if n_sinus >= target_n:
+        # Downsample: keep first target_n sinus samples (sorted index → deterministic)
+        chosen_sinus = sinus_idx[:target_n]
+    else:
+        # Use all original sinus samples, then fill from non-sinus pool
+        n_extra  = target_n - n_sinus
+        extra    = rng.choice(non_sinus_idx, size=n_extra,
+                              replace=(n_extra > len(non_sinus_idx)))
+        extra    = np.sort(extra)
+        chosen_sinus = np.concatenate([sinus_idx, extra])
+
+    all_idx = np.concatenate([non_sinus_idx, chosen_sinus])
+    all_idx = np.sort(all_idx)   # keep original relative order
+
+    X_new = X_te[all_idx]
+    y_new = [y_te[i] for i in all_idx]
+    return X_new, y_new
+
+
+# ---------------------------------------------------------------------------
 # Main probing entry-point
 # ---------------------------------------------------------------------------
 
 def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata,
                       latent_key='z0', out_root=None, methods=None,
-                      skip_params=None):
+                      skip_params=None, balance_sinus: bool = False):
     """Train four probes per phenotype and evaluate on the test set.
 
     Models
@@ -523,6 +586,10 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
         scaler = StandardScaler()
         X_tr = scaler.fit_transform(X_tr_full[tr_idx])
         X_te = scaler.transform(X_te_full[te_idx])
+
+        # Resample eval set for 'class' probe so sinus == max other-class count
+        if balance_sinus and param == 'class' and is_categorical:
+            X_te, y_te = _resample_sinus_balanced(X_te, y_te)
 
         if is_categorical or is_binary:
             if is_binary:
@@ -1872,6 +1939,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                 out_root=os.path.join(finetune_root, lkey),
                 methods={'ols'},
                 skip_params=probe_skip,
+                balance_sinus=(dataset_name == 'medalcare-xl'),
             )
         log_probe_metrics(probe_results, lkey, seg_type, run)
 
@@ -2025,6 +2093,7 @@ if __name__ == '__main__':
             out_root=os.path.join(finetune_root, lkey),
             methods=methods,
             skip_params=probe_skip,
+            balance_sinus=(dataset_name == 'medalcare-xl'),
         )
 
         print(f"\n=== GMM clustering ({lkey}) ===")
