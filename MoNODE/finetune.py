@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from scipy.stats import (
     skew as sp_skew, kurtosis as sp_kurtosis, norm as sp_norm,
-    kruskal as sp_kruskal,
+    kruskal as sp_kruskal, chi2_contingency as sp_chi2,
 )
 from tqdm import tqdm
 from sklearn.decomposition import PCA
@@ -852,17 +852,18 @@ def run_gmm_clustering(
                                          for v, ok in zip(raw_true, valid_mask)])
             print(f"  [GMM/{latent_key}] ARI vs '{class_label_key}': {ari:.4f}")
 
-    # ── 8. Per-cluster label statistics + Kruskal-Wallis ε² ──────────────────
-    # Collect all continuous parameters present in test metadata
+    # ── 8. Per-cluster label statistics + Kruskal-Wallis ε² + Chi-square ────────
+    _SKIP_LABEL_KEYS = {'class', 'patient_id'}
+
+    # ── Continuous parameters ──────────────────────────────────────────────────
     all_params: set[str] = set()
     for m in test_metadata:
         for k, v in m.get('labels', {}).items():
-            if k in ('class', 'patient_id'):
+            if k in _SKIP_LABEL_KEYS:
                 continue
-            if isinstance(v, (int, float)) and not (isinstance(v, bool)):
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
                 all_params.add(k)
 
-    # Build param → array of values aligned with test samples (NaN where missing)
     param_values: dict[str, np.ndarray] = {}
     for param in all_params:
         arr = np.array([
@@ -873,23 +874,57 @@ def run_gmm_clustering(
         ])
         param_values[param] = arr
 
-    # Per-cluster mean/std
+    # ── Categorical parameters ─────────────────────────────────────────────────
+    cat_params: set[str] = set()
+    for m in test_metadata:
+        for k, v in m.get('labels', {}).items():
+            if k in _SKIP_LABEL_KEYS:
+                continue
+            if isinstance(v, bool):
+                cat_params.add(k)
+            elif isinstance(v, str) and v.lower() not in ('nan', 'none', ''):
+                cat_params.add(k)
+
+    # param → list[str | None] aligned with test samples
+    cat_param_values: dict[str, list] = {}
+    for param in cat_params:
+        vals: list = []
+        for m in test_metadata:
+            v = m.get('labels', {}).get(param)
+            if v is None or (isinstance(v, float) and np.isnan(v)) \
+                    or str(v).lower() in ('nan', 'none', ''):
+                vals.append(None)
+            else:
+                vals.append(str(v))
+        cat_param_values[param] = vals
+
+    # ── Per-cluster statistics (continuous + categorical) ──────────────────────
     cluster_stats: dict[int, dict] = {}
     for k in range(n_clusters):
         mask = labels_te == k
-        cstats: dict = {'n': int(mask.sum()), 'params': {}}
+        cstats: dict = {'n': int(mask.sum()), 'continuous': {}, 'categorical': {}}
+
         for param, arr in param_values.items():
             vals = arr[mask]
             valid = vals[~np.isnan(vals)]
             if len(valid) == 0:
-                cstats['params'][param] = {'mean': None, 'std': None, 'n_valid': 0}
+                cstats['continuous'][param] = {'mean': None, 'std': None, 'n_valid': 0}
             else:
-                cstats['params'][param] = {
+                cstats['continuous'][param] = {
                     'mean':    round(float(valid.mean()), 6),
                     'std':     round(float(valid.std()),  6),
                     'median':  round(float(np.median(valid)), 6),
                     'n_valid': int(len(valid)),
                 }
+
+        for param, vals_list in cat_param_values.items():
+            cluster_vals = [v for v, in_k in zip(vals_list, mask) if in_k and v is not None]
+            from collections import Counter as _Counter
+            counts = dict(_Counter(cluster_vals))
+            total  = sum(counts.values())
+            freqs  = {cat: round(cnt / total, 4) for cat, cnt in counts.items()} if total else {}
+            cstats['categorical'][param] = {'counts': counts, 'freq': freqs, 'n_valid': total}
+
         cluster_stats[k] = cstats
 
     # Kruskal-Wallis + epsilon-squared per parameter
@@ -921,7 +956,50 @@ def run_gmm_clustering(
             eps_sq_results[param] = {'H': None, 'p_value': None, 'epsilon_squared': None,
                                       'error': str(e)}
 
-    # ── 9. OLS regression of each continuous param on cluster one-hot ─────────
+    # ── 9a. Chi-square + Cramér's V for categorical parameters ───────────────
+    # Contingency table: rows = clusters, cols = unique categories.
+    # Cramér's V = sqrt(χ² / (n · min(r-1, c-1))) — analogous to ε² for KW.
+    chi2_results: dict[str, dict] = {}
+    for param, vals_list in cat_param_values.items():
+        categories = sorted({v for v in vals_list if v is not None})
+        if len(categories) < 2:
+            chi2_results[param] = {'chi2': None, 'dof': None, 'p_value': None,
+                                   'cramers_v': None}
+            continue
+
+        cat_idx = {c: i for i, c in enumerate(categories)}
+        table = np.zeros((n_clusters, len(categories)), dtype=int)
+        for v, lbl in zip(vals_list, labels_te):
+            if v is not None:
+                table[lbl, cat_idx[v]] += 1
+
+        # Remove all-zero rows/cols before running the test
+        row_mask = table.sum(axis=1) > 0
+        col_mask = table.sum(axis=0) > 0
+        table_trimmed = table[np.ix_(row_mask, col_mask)]
+
+        if table_trimmed.shape[0] < 2 or table_trimmed.shape[1] < 2:
+            chi2_results[param] = {'chi2': None, 'dof': None, 'p_value': None,
+                                   'cramers_v': None}
+            continue
+
+        try:
+            chi2_stat, pval, dof, _ = sp_chi2(table_trimmed)
+            n       = int(table_trimmed.sum())
+            min_dim = min(table_trimmed.shape[0] - 1, table_trimmed.shape[1] - 1)
+            cramers_v = float(np.sqrt(chi2_stat / (n * min_dim))) \
+                if min_dim > 0 and n > 0 else float('nan')
+            chi2_results[param] = {
+                'chi2':      round(float(chi2_stat), 6),
+                'dof':       int(dof),
+                'p_value':   round(float(pval),      8),
+                'cramers_v': round(cramers_v,         6),
+            }
+        except Exception as e:
+            chi2_results[param] = {'chi2': None, 'dof': None, 'p_value': None,
+                                   'cramers_v': None, 'error': str(e)}
+
+    # ── 9b. OLS regression of each continuous param on cluster one-hot ────────
     cluster_regression: dict[str, dict] = {}
     if n_clusters >= 2:
         # One-hot encode cluster assignments
@@ -947,12 +1025,13 @@ def run_gmm_clustering(
         _plot_latent_embed(X_te_scaled, labels_te, true_classes_te, n_clusters, out_dir)
         _plot_gmm_silhouette(sil_sample, labels_te, n_clusters, sil_global, out_dir)
         _plot_gmm_epsilon_squared(eps_sq_results, out_dir)
+        _plot_gmm_cramers_v(chi2_results, out_dir)
         _plot_gmm_cluster_violins(param_values, labels_te, n_clusters, out_dir)
 
     # ── 11. Wandb logging ─────────────────────────────────────────────────────
     if run is not None:
         _log_gmm_to_wandb(run, latent_key, sil_global, sil_per_cluster, ari,
-                          eps_sq_results, out_dir)
+                          eps_sq_results, chi2_results, out_dir)
 
     # ── 12. Assemble and save results ─────────────────────────────────────────
     results = {
@@ -970,6 +1049,7 @@ def run_gmm_clustering(
                                 for k in range(n_clusters)},
         'cluster_stats':       {str(k): v for k, v in cluster_stats.items()},
         'epsilon_squared':     eps_sq_results,
+        'chi_square':          chi2_results,
         'cluster_regression':  cluster_regression,
     }
 
@@ -1201,6 +1281,51 @@ def _plot_gmm_cluster_violins(param_values: dict, labels: np.ndarray,
         plt.close(fig)
 
 
+def _plot_gmm_cramers_v(chi2_results: dict, out_dir: str) -> None:
+    """Bar chart of Cramér's V effect sizes for categorical parameters."""
+    params = [p for p, v in chi2_results.items()
+              if v.get('cramers_v') is not None and not math.isnan(v['cramers_v'])]
+    if not params:
+        return
+
+    params     = sorted(params, key=lambda p: chi2_results[p]['cramers_v'], reverse=True)
+    cramers_vals = [chi2_results[p]['cramers_v'] for p in params]
+    pvals        = [chi2_results[p]['p_value']   for p in params]
+
+    fig, ax = plt.subplots(figsize=(max(6, len(params) * 0.55 + 2), 4))
+    colours = ['#d62728' if p is not None and p < 0.05 else '#aec7e8' for p in pvals]
+    bars = ax.bar(range(len(params)), cramers_vals, color=colours, edgecolor='white')
+
+    for bar, p in zip(bars, pvals):
+        if p is None:
+            continue
+        if p < 0.001:
+            marker = '***'
+        elif p < 0.01:
+            marker = '**'
+        elif p < 0.05:
+            marker = '*'
+        else:
+            marker = ''
+        if marker:
+            ax.text(bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.005,
+                    marker, ha='center', va='bottom', fontsize=8)
+
+    ax.set_xticks(range(len(params)))
+    ax.set_xticklabels(params, rotation=45, ha='right', fontsize=7)
+    ax.set_ylabel("Cramér's V (χ² effect size)", fontsize=9)
+    ax.set_title("Cramér's V per categorical parameter across GMM clusters",
+                 fontsize=11, fontweight='bold')
+    ax.spines[['top', 'right']].set_visible(False)
+    ax.legend(handles=[mpl_patches.Patch(color='#d62728', label='p < 0.05'),
+                       mpl_patches.Patch(color='#aec7e8', label='p ≥ 0.05')],
+              fontsize=7, framealpha=0.7)
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, 'param_cramers_v.png'), dpi=130)
+    plt.close(fig)
+
+
 def _print_gmm_summary(results: dict) -> None:
     """Print a concise human-readable summary to stdout."""
     lkey  = results['latent_key']
@@ -1226,12 +1351,26 @@ def _print_gmm_summary(results: dict) -> None:
         sig = '*' if v['p_value'] < 0.05 else ''
         print(f"    {p:30s}  ε²={v['epsilon_squared']:.4f}  "
               f"H={v['H']:.2f}  p={v['p_value']:.4g}{sig}")
+
+    chi2 = results.get('chi_square', {})
+    valid_chi2 = {p: v for p, v in chi2.items()
+                  if v.get('cramers_v') is not None and not math.isnan(v['cramers_v'])}
+    if valid_chi2:
+        print(f"\n  Top-5 parameters by Cramér's V (chi-square):")
+        for p, v in sorted(valid_chi2.items(),
+                           key=lambda x: x[1]['cramers_v'], reverse=True)[:5]:
+            pval = v['p_value']
+            sig  = '*' if pval is not None and pval < 0.05 else ''
+            pstr = f"{pval:.4g}" if pval is not None else 'N/A'
+            print(f"    {p:30s}  V={v['cramers_v']:.4f}  "
+                  f"χ²={v['chi2']:.2f}  p={pstr}{sig}")
     print(f"{'─'*60}\n")
 
 
 def _log_gmm_to_wandb(run, latent_key: str, sil_global: float,
                        sil_per_cluster: dict, ari: float | None,
-                       eps_sq_results: dict, out_dir: str | None) -> None:
+                       eps_sq_results: dict, chi2_results: dict,
+                       out_dir: str | None) -> None:
     """Log GMM metrics and images to an active wandb run."""
     import wandb as _wandb
     panel    = 'clustering'
@@ -1248,12 +1387,21 @@ def _log_gmm_to_wandb(run, latent_key: str, sil_global: float,
             log_dict[f'{panel}/{latent_key}/epsilon_sq/{param}'] = v['epsilon_squared']
             log_dict[f'{panel}/{latent_key}/kw_pvalue/{param}']  = v['p_value']
 
+    for param, v in chi2_results.items():
+        cv = v.get('cramers_v')
+        if cv is not None and not math.isnan(cv):
+            log_dict[f'{panel}/{latent_key}/cramers_v/{param}']   = cv
+            pval = v.get('p_value')
+            if pval is not None:
+                log_dict[f'{panel}/{latent_key}/chi2_pvalue/{param}'] = pval
+
     if out_dir:
         for fname, key_suffix in [
             ('latent_umap.png',           'embed_umap'),
             ('latent_tsne.png',           'embed_tsne'),
             ('silhouette.png',            'silhouette'),
             ('param_epsilon_squared.png', 'epsilon_squared'),
+            ('param_cramers_v.png',       'cramers_v'),
         ]:
             fpath = os.path.join(out_dir, fname)
             if os.path.exists(fpath):
