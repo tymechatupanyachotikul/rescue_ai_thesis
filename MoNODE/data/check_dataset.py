@@ -880,7 +880,7 @@ def refine_metadata_labels(metadata_path, split):
 def fix_age(root_dir):
 
     for split in ['train', 'valid', 'text']:
-        data_path = os.path.join(root_dir, f'{split}_metadata')
+        data_path = os.path.join(root_dir, f'{split}_metadata.json')
         with open(data_path, 'r') as f:
             data = json.load(f)
 

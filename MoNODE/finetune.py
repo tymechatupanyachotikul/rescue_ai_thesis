@@ -132,7 +132,7 @@ def _load_split(latents_dir: str, split: str,
             if aladin_entry is not None:
                 entry['labels'] = aladin_entry.get('labels', {})
             else:
-                print(uid)
+                print(entry)
                 not_found += 1
         if not_found:
             print(f"  [{split}] {not_found} UIDs not found in ALADIN metadata — labels left as-is.")
