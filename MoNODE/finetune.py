@@ -295,9 +295,8 @@ def _plot_regression_param(param, model_results, out_dir):
         ax.scatter(y_true, y_pred, alpha=0.4, s=8, rasterized=True)
         lims = [min(y_true.min(), y_pred.min()), max(y_true.max(), y_pred.max())]
         ax.plot(lims, lims, 'r--', lw=1)
-        r2  = res['metrics']['r2']
-        mse = res['metrics']['mse']
-        ax.set_title(f"{name}\nR²={r2:.3f}  MSE={mse:.3f}", fontsize=9)
+        r2 = res['metrics']['r2']
+        ax.set_title(f"{name}\nR²={r2:.3f}", fontsize=9)
         ax.set_xlabel('True')
         ax.set_ylabel('Predicted')
     fig.suptitle(param, fontsize=11, fontweight='bold')
