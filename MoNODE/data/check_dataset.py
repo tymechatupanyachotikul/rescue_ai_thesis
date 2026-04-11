@@ -872,6 +872,6 @@ def refine_metadata_labels(metadata_path, split):
 
 root_dir = '/projects/prjs1890/MedalCare-XL/segments'
 for split in ['train', 'valid', 'test']:
-    metadata_path = os.path.join(root_dir, f'{split}_metadat.json')
+    metadata_path = os.path.join(root_dir, f'{split}_metadata.json')
     refine_metadata_labels(metadata_path, split)
 
