@@ -1056,11 +1056,15 @@ def _embed_2d(X: np.ndarray):
         except Exception as e:
             print(f"  UMAP failed: {e}")
 
-    n_iter = 1000
-    perp   = min(30, max(5, len(X) // 100))
+    perp = min(30, max(5, len(X) // 100))
     try:
-        emb = TSNE(n_components=2, perplexity=perp, n_iter=n_iter,
-                   random_state=42).fit_transform(X)
+        # max_iter replaced n_iter in scikit-learn 1.4; try both
+        try:
+            emb = TSNE(n_components=2, perplexity=perp, max_iter=1000,
+                       random_state=42).fit_transform(X)
+        except TypeError:
+            emb = TSNE(n_components=2, perplexity=perp, n_iter=1000,  # type: ignore[call-arg]
+                       random_state=42).fit_transform(X)
         yield 'tSNE', emb
     except Exception as e:
         print(f"  t-SNE failed: {e}")
@@ -1595,7 +1599,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
 
     Results are saved to:
         {args.save}/latents/           — z0/m arrays + metadata JSON
-        {args.save}/finetune_results/  — per-param metrics.json + plots
+        {args.save}/final_finetune_results/  — per-param metrics.json + plots
 
     The saved latent files follow the finetune.py naming convention so the
     standalone ``finetune.py`` can be re-run on them for full probe analysis.
@@ -1684,7 +1688,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
         eval_latents['z0_m'] = np.concatenate([eval_latents['z0'], eval_latents['m']], axis=1)
 
     run_label     = seg_type if seg_type else 'all_classes'
-    finetune_root = os.path.join(args.save, 'finetune_results', run_label)
+    finetune_root = os.path.join(args.save, 'final_finetune_results', run_label)
 
     # Params to skip in linear probing (patient_id is not a useful probe target)
     probe_skip = {'patient_id'} if dataset_name == 'medalcare-xl' else None
@@ -1720,7 +1724,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                 run=run,
             )
 
-        # ── Patient-ID clustering (MedalCare-XL only, n_clusters=2) ──────────
+        # ── MedalCare-XL extra clusterings ───────────────────────────────────
         if dataset_name == 'medalcare-xl':
             print(f"\n=== Patient-ID clustering ({lkey}) ===")
             with np.errstate(all='ignore'):
@@ -1735,6 +1739,20 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                     run=run,
                     class_label_key='patient_id',
                     tag='patient_id',
+                )
+
+            print(f"\n=== GMM clustering k=10 ({lkey}) ===")
+            with np.errstate(all='ignore'):
+                run_gmm_clustering(
+                    tr_latents,   tr_metadata,
+                    eval_latents, eval_metadata,
+                    latent_key=lkey,
+                    dataset_name=dataset_name,
+                    n_clusters=10,
+                    pca_dim=10,
+                    out_root=finetune_root,
+                    run=run,
+                    tag='k10',
                 )
 
     print("========== Post-training probes complete ==========\n")
@@ -1775,7 +1793,7 @@ if __name__ == '__main__':
     else:
         run_label = 'all_classes'
 
-    finetune_root = os.path.normpath(os.path.join(root_dir, 'finetune_results', run_label))
+    finetune_root = os.path.normpath(os.path.join(root_dir, 'final_finetune_results', run_label))
 
     # Optionally load ALADIN metadata for label override.
     def _load_aladin_meta_for_split(split: str) -> dict | None:
@@ -1869,4 +1887,17 @@ if __name__ == '__main__':
                     out_root=finetune_root,
                     class_label_key='patient_id',
                     tag='patient_id',
+                )
+
+            print(f"\n=== GMM clustering k=10 ({lkey}) ===")
+            with np.errstate(all='ignore'):
+                run_gmm_clustering(
+                    tr_latents,   tr_metadata,
+                    eval_latents, eval_metadata,
+                    latent_key=lkey,
+                    dataset_name=dataset_name,
+                    n_clusters=10,
+                    pca_dim=10,
+                    out_root=finetune_root,
+                    tag='k10',
                 )
