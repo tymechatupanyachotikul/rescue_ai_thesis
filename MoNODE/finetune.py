@@ -80,7 +80,6 @@ def _load_split(latents_dir: str, split: str,
         os.path.join(latents_dir, f'latent_tensors_{split}.npz'),
     ]
     json_candidates = [
-        os.path.join(latents_dir, f'{split}_metadata.json'),
         os.path.join(latents_dir, f'latent_meta_dict_{split}.json'),
     ]
 
