@@ -360,7 +360,21 @@ def _collect_sample_latents(dataloader, model, split, args):
                         continue
     
     print(f"Finished collecting latents. {not_found} patient_ids were not found in phenotypes and were skipped.")
-    stacked_tensors = {k: np.stack(v, axis=0) for k, v in latent_tensors.items() if v}
+
+    stacked_tensors = {}
+    for k, v in latent_tensors.items():
+        if not v:
+            continue
+        if k == 'zTL':
+            # Variable T across batches — pad to the global max T with zeros
+            max_T = max(arr.shape[0] for arr in v)
+            q     = v[0].shape[-1]
+            padded = np.zeros((len(v), max_T, q), dtype=v[0].dtype)
+            for idx, arr in enumerate(v):
+                padded[idx, :arr.shape[0], :] = arr
+            stacked_tensors[k] = padded
+        else:
+            stacked_tensors[k] = np.stack(v, axis=0)
     os.makedirs(save_directory, exist_ok=True)
     with open(os.path.join(save_directory, f'latent_meta_dict_{split}.json'), 'w') as f:
         json.dump(metadata_dict, f, indent=2)

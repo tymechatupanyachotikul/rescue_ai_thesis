@@ -1677,7 +1677,13 @@ def collect_latents(dataloader, model, task_params, args, device,
     if has_m and m_list:
         latents['m'] = np.stack(m_list, axis=0)
     if ztL_list:
-        latents['ztL'] = np.stack(ztL_list, axis=0)   # [N, T, q]
+        # Variable T across batches — pad to global max T with zeros
+        max_T = max(arr.shape[0] for arr in ztL_list)
+        q_dim = ztL_list[0].shape[-1]
+        ztL_padded = np.zeros((len(ztL_list), max_T, q_dim), dtype=ztL_list[0].dtype)
+        for idx, arr in enumerate(ztL_list):
+            ztL_padded[idx, :arr.shape[0], :] = arr
+        latents['ztL'] = ztL_padded   # [N, max_T, q]
 
     model.return_latent = False
     return latents, metadata
