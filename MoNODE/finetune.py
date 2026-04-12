@@ -2385,3 +2385,16 @@ if __name__ == '__main__':
                     out_root=finetune_root,
                     tag='k10',
                 )
+
+    # ── Latent trajectory analysis ────────────────────────────────────────────
+    if 'ztL' in eval_latents:
+        print("\n=== Latent trajectory analysis ===")
+        run_trajectory_analysis(
+            eval_latents, eval_metadata,
+            dataset_name=dataset_name,
+            out_root=finetune_root,
+            seg_type=args.seg_type,
+        )
+    else:
+        print("\n[skip] No ztL in latents — trajectory analysis requires latents "
+              "saved by finetune.py (not inference_analysis.py).")
