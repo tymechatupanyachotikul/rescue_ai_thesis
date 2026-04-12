@@ -76,7 +76,6 @@ def _load_split(latents_dir: str, split: str,
     entry.  This overrides whatever labels were saved in the metadata JSON.
     """
     npz_candidates = [
-        os.path.join(latents_dir, f'{split}_latents.npz'),
         os.path.join(latents_dir, f'latent_tensors_{split}.npz'),
     ]
     json_candidates = [
