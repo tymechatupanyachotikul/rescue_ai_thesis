@@ -1855,19 +1855,19 @@ def run_trajectory_analysis(eval_latents: dict, eval_metadata: list,
 
     Parameters
     ----------
-    eval_latents  : dict with key 'ztL' → ndarray [N, T, q]
+    eval_latents  : dict with key 'zTL' → ndarray [N, T, q]
     eval_metadata : list of N metadata dicts with 'labels' key
     dataset_name  : used to gate MedalCare-XL-specific plots
     out_root      : directory under which 'trajectory/' sub-folder is created
     seg_type      : 'atrial' | 'ventricular' | None — used only for plot titles
     """
-    if 'ztL' not in eval_latents:
-        print("  [trajectory] No 'ztL' in eval_latents — skipping trajectory analysis.")
+    if 'zTL' not in eval_latents:
+        print("  [trajectory] No 'zTL' in eval_latents — skipping trajectory analysis.")
         return
 
     from sklearn.decomposition import PCA as _PCA
 
-    zt_mean = eval_latents['ztL']          # [N, T, q]  (already numpy)
+    zt_mean = eval_latents['zTL']          # [N, T, q]  (already numpy)
     N, T, q = zt_mean.shape
     out_dir = os.path.join(out_root, 'trajectory')
     os.makedirs(out_dir, exist_ok=True)
@@ -2387,7 +2387,7 @@ if __name__ == '__main__':
                 )
 
     # ── Latent trajectory analysis ────────────────────────────────────────────
-    if 'ztL' in eval_latents:
+    if 'zTL' in eval_latents:
         print("\n=== Latent trajectory analysis ===")
         run_trajectory_analysis(
             eval_latents, eval_metadata,
