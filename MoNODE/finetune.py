@@ -1689,7 +1689,7 @@ def collect_latents(dataloader, model, task_params, args, device,
         ztL_padded = np.zeros((len(ztL_list), max_T, q_dim), dtype=ztL_list[0].dtype)
         for idx, arr in enumerate(ztL_list):
             ztL_padded[idx, :arr.shape[0], :] = arr
-        latents['ztL'] = ztL_padded   # [N, max_T, q]
+        latents['zTL'] = ztL_padded   # [N, max_T, q]
 
     model.return_latent = False
     return latents, metadata
