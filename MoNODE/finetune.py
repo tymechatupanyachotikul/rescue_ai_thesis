@@ -2105,10 +2105,19 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
 
     # Combine valid + test into a single evaluation split
     if validset is not None:
-        eval_latents = {
-            k: np.concatenate([va_latents[k], te_latents[k]], axis=0)
-            for k in te_latents
-        }
+        eval_latents = {}
+        for k in te_latents:
+            arrs = [va_latents[k], te_latents[k]]
+            if arrs[0].ndim == 3:
+                global_max_T = max(a.shape[1] for a in arrs)
+                padded = []
+                for a in arrs:
+                    if a.shape[1] < global_max_T:
+                        a = np.pad(a, [(0, 0), (0, global_max_T - a.shape[1]), (0, 0)])
+                    padded.append(a)
+                eval_latents[k] = np.concatenate(padded, axis=0)
+            else:
+                eval_latents[k] = np.concatenate(arrs, axis=0)
         eval_metadata = va_metadata + te_metadata
         print(f"  Eval set: valid ({len(va_metadata)}) + test ({len(te_metadata)}) "
               f"= {len(eval_metadata)} samples")
@@ -2291,7 +2300,21 @@ if __name__ == '__main__':
         lats_list = [latents_dict[s]['latents'] for s in splits]
         meta_list = [latents_dict[s]['metadata'] for s in splits]
         keys = lats_list[0].keys()
-        combined_lats = {k: np.concatenate([l[k] for l in lats_list], axis=0) for k in keys}
+        combined_lats = {}
+        for k in keys:
+            arrs = [l[k] for l in lats_list]
+            if arrs[0].ndim == 3:
+                # Variable-T latents (e.g. ztL): pad each split to the global max_T first
+                global_max_T = max(a.shape[1] for a in arrs)
+                padded = []
+                for a in arrs:
+                    if a.shape[1] < global_max_T:
+                        pad_width = [(0, 0), (0, global_max_T - a.shape[1]), (0, 0)]
+                        a = np.pad(a, pad_width)
+                    padded.append(a)
+                combined_lats[k] = np.concatenate(padded, axis=0)
+            else:
+                combined_lats[k] = np.concatenate(arrs, axis=0)
         combined_meta = [entry for m in meta_list for entry in m]
         return combined_lats, combined_meta
 
