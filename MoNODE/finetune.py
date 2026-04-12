@@ -1595,7 +1595,7 @@ def collect_latents(dataloader, model, task_params, args, device,
     model.eval()
     model.return_latent = True
 
-    z0_list, m_list, ztL_list, metadata = [], [], [], []
+    z0_list, z0_sample_list, m_list, ztL_list, metadata = [], [], [], [], []
     has_m = True   # set False if model returns m=None
     not_found = 0
 
@@ -1604,7 +1604,8 @@ def collect_latents(dataloader, model, task_params, args, device,
             batch = batch.to(device)
             mask  = mask.to(device)
 
-            z0, m, ztL = model(batch, 1, mask=mask)   # [N,d], [N,m] or None, [1,N,T,q]
+            # returns (z0_mean, z0_sample, m, ztL)
+            z0, z0_samp, m, ztL = model(batch, 1, mask=mask)
             if m is None:
                 has_m = False
             # ztL: [L, N, T, q] — mean over MC samples → [N, T, q]
@@ -1624,6 +1625,7 @@ def collect_latents(dataloader, model, task_params, args, device,
                     else:
                         labels = aladin_entry.get('labels', {})
                     z0_list.append(z0[i].detach().cpu().numpy())
+                    z0_sample_list.append(z0_samp[i].detach().cpu().numpy())
                     ztL_list.append(ztL[i].numpy())
                     if has_m:
                         m_list.append(m[i].detach().cpu().numpy())
@@ -1646,6 +1648,7 @@ def collect_latents(dataloader, model, task_params, args, device,
                         labels = {'class': _cls, 'patient_id': run_id}
 
                     z0_list.append(z0[i].detach().cpu().numpy())
+                    z0_sample_list.append(z0_samp[i].detach().cpu().numpy())
                     ztL_list.append(ztL[i].numpy())
                     if has_m:
                         m_list.append(m[i].detach().cpu().numpy())
@@ -1662,6 +1665,7 @@ def collect_latents(dataloader, model, task_params, args, device,
                     labels = {col: targets[eid_idx, j].item()
                               for j, col in enumerate(columns)}
                     z0_list.append(z0[i].detach().cpu().numpy())
+                    z0_sample_list.append(z0_samp[i].detach().cpu().numpy())
                     ztL_list.append(ztL[i].numpy())
                     if has_m:
                         m_list.append(m[i].detach().cpu().numpy())
@@ -1674,6 +1678,8 @@ def collect_latents(dataloader, model, task_params, args, device,
             print(f"  {not_found} patient IDs not found in phenotype targets — skipped.")
 
     latents = {'z0': np.stack(z0_list, axis=0)}
+    if z0_sample_list:
+        latents['z0_sample'] = np.stack(z0_sample_list, axis=0)
     if has_m and m_list:
         latents['m'] = np.stack(m_list, axis=0)
     if ztL_list:
@@ -2111,10 +2117,14 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
         eval_metadata = te_metadata
 
     # Build combined latent key when modulator is present
-    has_m = 'm' in tr_latents and 'm' in eval_latents
+    has_m      = 'm' in tr_latents and 'm' in eval_latents
+    has_sample = 'z0_sample' in tr_latents and 'z0_sample' in eval_latents
     if has_m:
         tr_latents['z0_m']   = np.concatenate([tr_latents['z0'],   tr_latents['m']],   axis=1)
         eval_latents['z0_m'] = np.concatenate([eval_latents['z0'], eval_latents['m']], axis=1)
+    if has_sample and has_m:
+        tr_latents['z0_sample_m']   = np.concatenate([tr_latents['z0_sample'],   tr_latents['m']],   axis=1)
+        eval_latents['z0_sample_m'] = np.concatenate([eval_latents['z0_sample'], eval_latents['m']], axis=1)
 
     run_label     = seg_type if seg_type else 'all_classes'
     finetune_root = os.path.join(args.save, 'final_finetune_results', run_label)
@@ -2126,6 +2136,8 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     gmm_n_clusters = None if dataset_name == 'medalcare-xl' else 8
 
     latent_keys = ['z0'] + (['m', 'z0_m'] if has_m else [])
+    if has_sample:
+        latent_keys += ['z0_sample'] + (['z0_sample_m'] if has_m else [])
     for lkey in latent_keys:
         print(f"\n=== Linear probes ({lkey}) ===")
         with np.errstate(all='ignore'):
@@ -2262,12 +2274,17 @@ if __name__ == '__main__':
     eval_splits = args.splits[1:]   # e.g. ['valid', 'test']
 
     all_probe_splits = [train_split] + eval_splits
-    has_m = all('m' in latents_dict[s]['latents'] for s in all_probe_splits)
+    has_m      = all('m' in latents_dict[s]['latents'] for s in all_probe_splits)
+    has_sample = all('z0_sample' in latents_dict[s]['latents'] for s in all_probe_splits)
 
     if has_m:
         for split in all_probe_splits:
             lats = latents_dict[split]['latents']
             lats['z0_m'] = np.concatenate([lats['z0'], lats['m']], axis=1)
+    if has_sample and has_m:
+        for split in all_probe_splits:
+            lats = latents_dict[split]['latents']
+            lats['z0_sample_m'] = np.concatenate([lats['z0_sample'], lats['m']], axis=1)
 
     # Combine all eval splits (valid + test, or just test if only one)
     def _combine(splits):
@@ -2292,6 +2309,8 @@ if __name__ == '__main__':
     gmm_n_clusters = None if dataset_name == 'medalcare-xl' else 8
 
     latent_keys = ['z0'] + (['m', 'z0_m'] if has_m else [])
+    if has_sample:
+        latent_keys += ['z0_sample'] + (['z0_sample_m'] if has_m else [])
     for lkey in latent_keys:
         print(f"\n=== Linear probes ({lkey}) ===")
         run_linear_probes(

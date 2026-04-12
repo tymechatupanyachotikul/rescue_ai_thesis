@@ -174,16 +174,17 @@ class MoNODE(nn.Module):
             # m is [L, N, m_dim] or None — squeeze L dim
             m_out = m.squeeze(0) if m is not None else None   # [N, m_dim] or None
             if self.model == 'node' or self.model == 'hbnode':
-                # Return the posterior mean s0_mu [N, q] — deterministic, no sampling noise.
-                # s0_mu may cover multiple objects (Nobj); reshape to match z0_flat convention.
-                z0_mean = s0_mu.reshape(N, -1)   # [N, q]  (Nobj already folded into q by encoder)
-                return z0_mean, m_out, ztL
+                # z0_mean : posterior mean s0_mu  [N, q]  — deterministic
+                # z0_sample: one draw from q(z0|X) [N, q] — stochastic (L=1 squeezed)
+                z0_mean   = s0_mu.reshape(N, -1)
+                z0_sample = z0.squeeze(0).reshape(N, -1)
+                return z0_mean, z0_sample, m_out, ztL
             elif self.model == 'sonode':
-                # SONODE has no VAE posterior — sampled z0 is the best available representation
+                # SONODE has no VAE posterior — sample and mean are the same
                 z0_flat = z0.squeeze(0).reshape(N, -1)   # [N, Nobj*q]
-                return z0_flat, m_out, ztL
+                return z0_flat, z0_flat, m_out, ztL
             elif self.model == 'vae':
-                # Return posterior mean s0_mu [N, q] instead of the sampled z0
-                return s0_mu, None, ztL
+                z0_sample = z0.squeeze(0).reshape(N, -1)
+                return s0_mu, z0_sample, None, ztL
         else:
             return Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), InvMatrix, c, m

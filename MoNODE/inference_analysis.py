@@ -262,7 +262,7 @@ def _collect_sample_latents(dataloader, model, split, args):
                 print(f"  Warning: ALADIN metadata not found at {meta_path} — storing class label only.")
 
     metadata_dict = []
-    latent_tensors = {'z0': [], 'm': [], 'zTL': []}
+    latent_tensors = {'z0': [], 'z0_sample': [], 'm': [], 'zTL': []}
 
     # ── UK Biobank phenotype targets (loaded lazily only when needed) ─────────
     eids: list   = []
@@ -282,9 +282,10 @@ def _collect_sample_latents(dataloader, model, split, args):
             batch = batch.to(model.device)
             mask  = mask.to(model.device)
 
-            # return_latent=True gives (z0_mean, m, ztL)
-            z0, m, zTL = model(batch, args.plotL, mask=mask)
-            z0 = z0.squeeze(0).squeeze(1) if z0.ndim > 2 else z0
+            # return_latent=True gives (z0_mean, z0_sample, m, ztL)
+            z0, z0_samp, m, zTL = model(batch, args.plotL, mask=mask)
+            z0      = z0.squeeze(0).squeeze(1) if z0.ndim > 2 else z0
+            z0_samp = z0_samp.squeeze(0).squeeze(1) if z0_samp.ndim > 2 else z0_samp
             if m is not None:
                 m = m.squeeze(0)
             # zTL shape: [L, N, T, q] — average over MC samples → [N, T, q]
@@ -321,6 +322,7 @@ def _collect_sample_latents(dataloader, model, split, args):
                         }
 
                     latent_tensors['z0'].append(z0[i].detach().cpu().numpy())
+                    latent_tensors['z0_sample'].append(z0_samp[i].detach().cpu().numpy())
                     latent_tensors['zTL'].append(zTL[i].detach().cpu().numpy())
                     if m is not None:
                         latent_tensors['m'].append(m[i].detach().cpu().numpy())
@@ -346,6 +348,7 @@ def _collect_sample_latents(dataloader, model, split, args):
                                     for j, col in enumerate(columns)}
                             
                         latent_tensors['z0'].append(z0[i].detach().cpu().numpy())
+                        latent_tensors['z0_sample'].append(z0_samp[i].detach().cpu().numpy())
                         latent_tensors['zTL'].append(zTL[i].detach().cpu().numpy())
                         if m is not None:
                             latent_tensors['m'].append(m[i].detach().cpu().numpy())
