@@ -264,10 +264,18 @@ def _eval_classification(model, X_tr, y_tr, X_te, y_te, le, imbalanced: bool = F
         metrics = {'accuracy': float(accuracy_score(y_te_enc, y_pred))}
     else:
         metrics = {
-            'f1_macro':     float(f1_score(y_te_enc, y_pred, average='macro', zero_division=0)),
+            'accuracy':     float(accuracy_score(y_te_enc, y_pred)),
+            'f1':           float(f1_score(y_te_enc, y_pred, average='weighted', zero_division=0)),
+            'f1_macro':     float(f1_score(y_te_enc, y_pred, average='macro',    zero_division=0)),
             'recall_macro': float(recall_score(y_te_enc, y_pred, average='macro', zero_division=0)),
         }
         if y_prob is not None:
+            try:
+                metrics['auroc'] = float(
+                    roc_auc_score(y_te_enc, y_prob, multi_class='ovr', average='weighted')
+                )
+            except ValueError:
+                pass
             try:
                 metrics['auroc_macro'] = float(
                     roc_auc_score(y_te_enc, y_prob, multi_class='ovr', average='macro')
@@ -620,9 +628,11 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
                           f"[imbalanced={majority_frac:.0%}]")
                 else:
                     print(f"  [{param}][{name}]  "
-                          f"f1={m.get('f1_macro', float('nan')):.3f}  "
-                          f"recall={m.get('recall_macro', float('nan')):.3f}  "
-                          f"auroc={m.get('auroc_macro', float('nan')):.3f}")
+                          f"acc={m.get('accuracy', float('nan')):.3f}  "
+                          f"f1={m.get('f1', float('nan')):.3f}  "
+                          f"auroc={m.get('auroc', float('nan')):.3f}  "
+                          f"f1_macro={m.get('f1_macro', float('nan')):.3f}  "
+                          f"auroc_macro={m.get('auroc_macro', float('nan')):.3f}")
 
             clf_results[param] = param_results
 
