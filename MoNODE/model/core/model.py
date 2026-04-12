@@ -177,13 +177,13 @@ class MoNODE(nn.Module):
                 # Return the posterior mean s0_mu [N, q] — deterministic, no sampling noise.
                 # s0_mu may cover multiple objects (Nobj); reshape to match z0_flat convention.
                 z0_mean = s0_mu.reshape(N, -1)   # [N, q]  (Nobj already folded into q by encoder)
-                return z0_mean, m_out
+                return z0_mean, m_out, ztL
             elif self.model == 'sonode':
                 # SONODE has no VAE posterior — sampled z0 is the best available representation
                 z0_flat = z0.squeeze(0).reshape(N, -1)   # [N, Nobj*q]
-                return z0_flat, m_out
+                return z0_flat, m_out, ztL
             elif self.model == 'vae':
                 # Return posterior mean s0_mu [N, q] instead of the sampled z0
-                return s0_mu, None
+                return s0_mu, None, ztL
         else:
             return Xrec, ztL, (s0_mu, s0_logv), (v0_mu, v0_logv), InvMatrix, c, m
