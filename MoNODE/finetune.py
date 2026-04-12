@@ -1112,7 +1112,8 @@ def run_gmm_clustering(
 
     # ── 10. Plots ─────────────────────────────────────────────────────────────
     if out_dir:
-        _plot_latent_embed(X_te_scaled, labels_te, true_classes_te, n_clusters, out_dir)
+        if args.plot_latent_reduct:
+            _plot_latent_embed(X_te_scaled, labels_te, true_classes_te, n_clusters, out_dir)
         _plot_gmm_silhouette(sil_sample, labels_te, n_clusters, sil_global, out_dir)
         _plot_gmm_epsilon_squared(eps_sq_results, out_dir)
         _plot_gmm_cramers_v(chi2_results, out_dir)
@@ -1594,7 +1595,7 @@ def collect_latents(dataloader, model, task_params, args, device,
     model.eval()
     model.return_latent = True
 
-    z0_list, m_list, metadata = [], [], []
+    z0_list, m_list, ztL_list, metadata = [], [], [], []
     has_m = True   # set False if model returns m=None
     not_found = 0
 
@@ -1603,9 +1604,11 @@ def collect_latents(dataloader, model, task_params, args, device,
             batch = batch.to(device)
             mask  = mask.to(device)
 
-            z0, m = model(batch, 1, mask=mask)   # [N, d], [N, m_dim] or None
+            z0, m, ztL = model(batch, 1, mask=mask)   # [N,d], [N,m] or None, [1,N,T,q]
             if m is None:
                 has_m = False
+            # ztL: [L, N, T, q] — mean over MC samples → [N, T, q]
+            ztL = ztL.mean(0).detach().cpu()
 
             patient_ids = [item[1] for item in batch_y]
 
@@ -1621,6 +1624,7 @@ def collect_latents(dataloader, model, task_params, args, device,
                     else:
                         labels = aladin_entry.get('labels', {})
                     z0_list.append(z0[i].detach().cpu().numpy())
+                    ztL_list.append(ztL[i].numpy())
                     if has_m:
                         m_list.append(m[i].detach().cpu().numpy())
                     metadata.append({'uid': uid, 'patient_id': uid, 'labels': labels})
@@ -1642,6 +1646,7 @@ def collect_latents(dataloader, model, task_params, args, device,
                         labels = {'class': _cls, 'patient_id': run_id}
 
                     z0_list.append(z0[i].detach().cpu().numpy())
+                    ztL_list.append(ztL[i].numpy())
                     if has_m:
                         m_list.append(m[i].detach().cpu().numpy())
                     metadata.append({'uid': uid, 'patient_id': run_id, 'labels': labels})
@@ -1657,6 +1662,7 @@ def collect_latents(dataloader, model, task_params, args, device,
                     labels = {col: targets[eid_idx, j].item()
                               for j, col in enumerate(columns)}
                     z0_list.append(z0[i].detach().cpu().numpy())
+                    ztL_list.append(ztL[i].numpy())
                     if has_m:
                         m_list.append(m[i].detach().cpu().numpy())
                     metadata.append({'uid': pid, 'patient_id': pid, 'labels': labels})
@@ -1670,6 +1676,8 @@ def collect_latents(dataloader, model, task_params, args, device,
     latents = {'z0': np.stack(z0_list, axis=0)}
     if has_m and m_list:
         latents['m'] = np.stack(m_list, axis=0)
+    if ztL_list:
+        latents['ztL'] = np.stack(ztL_list, axis=0)   # [N, T, q]
 
     model.return_latent = False
     return latents, metadata
@@ -1826,6 +1834,183 @@ def log_probe_metrics(probe_results, latent_key, seg_type, run):
     if log_dict:
         run.log(log_dict)
         print(f"  Logged {len(log_dict)} probe charts to wandb under '{panel}' panel.")
+
+
+def run_trajectory_analysis(eval_latents: dict, eval_metadata: list,
+                             dataset_name: str, out_root: str,
+                             seg_type: str | None = None) -> None:
+    """PCA decomposition of latent trajectories + per-class phase portrait and speed.
+
+    Parameters
+    ----------
+    eval_latents  : dict with key 'ztL' → ndarray [N, T, q]
+    eval_metadata : list of N metadata dicts with 'labels' key
+    dataset_name  : used to gate MedalCare-XL-specific plots
+    out_root      : directory under which 'trajectory/' sub-folder is created
+    seg_type      : 'atrial' | 'ventricular' | None — used only for plot titles
+    """
+    if 'ztL' not in eval_latents:
+        print("  [trajectory] No 'ztL' in eval_latents — skipping trajectory analysis.")
+        return
+
+    from sklearn.decomposition import PCA as _PCA
+
+    zt_mean = eval_latents['ztL']          # [N, T, q]  (already numpy)
+    N, T, q = zt_mean.shape
+    out_dir = os.path.join(out_root, 'trajectory')
+    os.makedirs(out_dir, exist_ok=True)
+
+    print(f"\n  [trajectory] N={N}  T={T}  q={q}  → fitting PCA(2) on {N*T} points")
+
+    # ── PCA on all (N*T) latent points ───────────────────────────────────────
+    zt_flat = zt_mean.reshape(N * T, q)
+    pca     = _PCA(n_components=2)
+    zt_2d   = pca.fit_transform(zt_flat).reshape(N, T, 2)   # [N, T, 2]
+    var_exp = pca.explained_variance_ratio_
+    print(f"  [trajectory] PCA explained variance: PC1={var_exp[0]:.1%}  PC2={var_exp[1]:.1%}")
+
+    # ── Speed in original latent space ────────────────────────────────────────
+    zt_velocity = np.diff(zt_mean, axis=1)              # [N, T-1, q]
+    zt_speed    = np.linalg.norm(zt_velocity, axis=-1)  # [N, T-1]
+
+    # ── Class labels ──────────────────────────────────────────────────────────
+    classes = np.array([m.get('labels', {}).get('class', None) for m in eval_metadata])
+
+    # ── Balanced sinus resampling (MedalCare-XL only) ────────────────────────
+    if dataset_name == 'medalcare-xl':
+        _, bal_idx = _resample_sinus_balanced_idx(classes)
+        zt_2d_bal   = zt_2d[bal_idx]
+        speed_bal   = zt_speed[bal_idx]
+        classes_bal = classes[bal_idx]
+    else:
+        zt_2d_bal   = zt_2d
+        speed_bal   = zt_speed
+        classes_bal = classes
+
+    unique_classes = [c for c in sorted(set(classes_bal)) if c is not None]
+    cmap           = plt.cm.tab20
+    n_cls          = len(unique_classes)
+    cls_colours    = {cls: cmap(i / max(n_cls - 1, 1)) for i, cls in enumerate(unique_classes)}
+
+    # ── Plot 1: Phase portrait (PC1 vs PC2, time as colour) per class ────────
+    time_cmap = plt.cm.plasma
+    t_norm    = plt.Normalize(vmin=0, vmax=T - 1)
+
+    fig, axes = plt.subplots(
+        1, n_cls,
+        figsize=(max(4 * n_cls, 8), 4),
+        squeeze=False,
+    )
+    fig.suptitle(
+        f"Phase Portrait — mean latent trajectory per class\n"
+        f"({seg_type or dataset_name})  "
+        f"PC1={var_exp[0]:.1%}  PC2={var_exp[1]:.1%}",
+        fontsize=11, fontweight='bold',
+    )
+
+    for ci, cls in enumerate(unique_classes):
+        ax   = axes[0][ci]
+        mask = classes_bal == cls
+        traj = zt_2d_bal[mask]          # [n_cls, T, 2]
+        mean_traj = traj.mean(axis=0)   # [T, 2]
+
+        # Draw individual trajectories faintly
+        for n in range(min(len(traj), 50)):   # cap at 50 to avoid overplotting
+            ax.plot(traj[n, :, 0], traj[n, :, 1],
+                    color=cls_colours[cls], alpha=0.08, linewidth=0.6, zorder=1)
+
+        # Draw mean trajectory with time-coloured scatter
+        sc = ax.scatter(mean_traj[:, 0], mean_traj[:, 1],
+                        c=np.arange(T), cmap=time_cmap, norm=t_norm,
+                        s=20, zorder=3, edgecolors='none')
+        ax.plot(mean_traj[:, 0], mean_traj[:, 1],
+                color=cls_colours[cls], linewidth=1.8, zorder=2, alpha=0.85)
+
+        # Start / end markers
+        ax.scatter(*mean_traj[0],  marker='o', s=60, color='black',  zorder=5, label='start')
+        ax.scatter(*mean_traj[-1], marker='X', s=60, color='red',    zorder=5, label='end')
+
+        ax.set_title(f"{cls}\n(n={mask.sum()})", fontsize=9, fontweight='bold')
+        ax.set_xlabel('PC1', fontsize=8)
+        if ci == 0:
+            ax.set_ylabel('PC2', fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.spines[['top', 'right']].set_visible(False)
+
+    # Shared colourbar for time
+    sm = plt.cm.ScalarMappable(cmap=time_cmap, norm=t_norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=axes[0], shrink=0.7, pad=0.02)
+    cbar.set_label('Time step', fontsize=8)
+
+    fig.tight_layout()
+    out_path = os.path.join(out_dir, 'phase_portrait.png')
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  [trajectory] Saved {out_path}")
+
+    # ── Plot 2: Mean latent speed per timepoint per class ────────────────────
+    fig2, ax2 = plt.subplots(figsize=(8, 4))
+    t_axis = np.arange(T - 1)
+
+    for cls in unique_classes:
+        mask      = classes_bal == cls
+        cls_speed = speed_bal[mask]          # [n_cls, T-1]
+        mean_spd  = cls_speed.mean(axis=0)   # [T-1]
+        std_spd   = cls_speed.std(axis=0)
+
+        colour = cls_colours[cls]
+        ax2.plot(t_axis, mean_spd, color=colour, linewidth=1.8,
+                 label=f"{cls} (n={mask.sum()})", zorder=3)
+        ax2.fill_between(t_axis,
+                         mean_spd - std_spd,
+                         mean_spd + std_spd,
+                         color=colour, alpha=0.15, zorder=2)
+
+    ax2.set_xlabel('Time step', fontsize=10)
+    ax2.set_ylabel('Latent speed  ‖Δz‖₂', fontsize=10)
+    ax2.set_title(
+        f"Mean latent speed per class  ({seg_type or dataset_name})",
+        fontsize=11, fontweight='bold',
+    )
+    ax2.legend(fontsize=8, framealpha=0.85, ncol=2)
+    ax2.spines[['top', 'right']].set_visible(False)
+    fig2.tight_layout()
+    out_path2 = os.path.join(out_dir, 'latent_speed.png')
+    fig2.savefig(out_path2, dpi=150)
+    plt.close(fig2)
+    print(f"  [trajectory] Saved {out_path2}")
+
+
+def _resample_sinus_balanced_idx(classes: np.ndarray,
+                                  seed: int = 42) -> tuple[np.ndarray, np.ndarray]:
+    """Return (full_idx_array, balanced_idx_array) for the balanced sinus set.
+
+    Mirrors the logic of _resample_sinus_balanced but works on raw class arrays
+    and returns indices rather than resampled arrays, so it can be applied to
+    any derived array (zt_2d, zt_speed, …).
+    """
+    rng = np.random.default_rng(seed)
+    sinus_idx     = np.where(classes == 'sinus')[0]
+    non_sinus_idx = np.where(classes != 'sinus')[0]
+
+    if len(non_sinus_idx) == 0 or len(sinus_idx) == 0:
+        all_idx = np.arange(len(classes))
+        return all_idx, all_idx
+
+    cls_counts = {}
+    for c in classes[non_sinus_idx]:
+        cls_counts[c] = cls_counts.get(c, 0) + 1
+    target_n = max(cls_counts.values())
+
+    if len(sinus_idx) >= target_n:
+        sel_sinus = np.sort(sinus_idx)[:target_n]
+    else:
+        extra = rng.choice(non_sinus_idx, size=target_n - len(sinus_idx), replace=True)
+        sel_sinus = np.concatenate([sinus_idx, extra])
+
+    all_idx = np.sort(np.concatenate([sel_sinus, non_sinus_idx]))
+    return np.arange(len(classes)), all_idx
 
 
 def run_post_training_probes(args, model, device, trainset, testset, task_params, run,
@@ -1994,6 +2179,15 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                     tag='k10',
                 )
 
+    # ── Latent trajectory analysis ────────────────────────────────────────────
+    print("\n=== Latent trajectory analysis ===")
+    run_trajectory_analysis(
+        eval_latents, eval_metadata,
+        dataset_name=dataset_name,
+        out_root=finetune_root,
+        seg_type=seg_type,
+    )
+
     print("========== Post-training probes complete ==========\n")
 
 
@@ -2020,6 +2214,8 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='medalcare-xl',
                         choices=['medalcare-xl', 'uk-biobank'],
                         help='Dataset name — controls GMM cluster count and patient_id handling.')
+    parser.add_argument('--plot_latent_reduct', type=bool, default=False,
+                        help='Plot UMP and T-SNE')
     args = parser.parse_args()
 
     root_dir = args.root_dir
