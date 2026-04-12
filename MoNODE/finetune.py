@@ -1877,8 +1877,23 @@ def run_trajectory_analysis(eval_latents: dict, eval_metadata: list,
 
     from sklearn.decomposition import PCA as _PCA
 
+    # Segment-type cutoff: only use the first N timesteps of each trajectory.
+    # Pads are zeros (from variable-length batching), so trimming avoids fitting
+    # PCA on padded zeros that would distort the latent geometry.
+    _SEG_T_CUTOFF = {
+        'atrial':      45,
+        'ventricular': 180,
+    }
+
     zt_mean = eval_latents['zTL']          # [N, T, q]  (already numpy)
     N, T, q = zt_mean.shape
+
+    cutoff = _SEG_T_CUTOFF.get(seg_type) if seg_type else None
+    if cutoff is not None and cutoff < T:
+        print(f"  [trajectory] Applying T cutoff: {T} → {cutoff} timesteps ({seg_type})")
+        zt_mean = zt_mean[:, :cutoff, :]
+        T = cutoff
+
     out_dir = os.path.join(out_root, 'trajectory')
     os.makedirs(out_dir, exist_ok=True)
 
