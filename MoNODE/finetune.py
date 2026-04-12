@@ -136,7 +136,12 @@ def _load_split(latents_dir: str, split: str,
         if not_found:
             print(f"  [{split}] {not_found} UIDs not found in ALADIN metadata — labels left as-is.")
 
-    print(f"  [{split}] loaded {latents['z0'].shape[0]} samples "
+    n_latents = latents['z0'].shape[0]
+    if len(metadata) != n_latents:
+        print(f"  [{split}] WARNING: metadata has {len(metadata)} entries but "
+              f"latents have {n_latents} rows — truncating metadata to match.")
+        metadata = metadata[:n_latents]
+    print(f"  [{split}] loaded {n_latents} samples "
           f"from {os.path.basename(npz_path)}")
     return latents, metadata
 
