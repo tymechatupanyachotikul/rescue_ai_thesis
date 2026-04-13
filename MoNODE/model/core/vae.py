@@ -370,7 +370,7 @@ class RNNDecoder(nn.Module):
 
     def __init__(self, latent_dim, rnn_hidden, dec_H, data_dim, act='relu'):
         super().__init__()
-        self.rnn_hidden = rnn_hidden
+        self.rnn_hidden = 32
         self.data_dim = data_dim
         self.dec_out_dim = data_dim  # match Decoder.dec_out_dim interface
         self.w_dt = 0               # match Decoder interface (unused for VAE)
@@ -396,17 +396,25 @@ class RNNDecoder(nn.Module):
         stL  : (L, N, T, q)  — z0 expanded across T (from model.py VAE branch)
         _dims: unused; kept to match Decoder.forward signature
         Returns: (L, N, T, D)
+
+        Side-effect: caches GRU hidden states in self._ztL  (L, N, T, rnn_hidden)
+        so that model.py can retrieve the actual latent trajectory instead of
+        the repeated z0 broadcast.
         """
         L, _, T, _ = stL.shape
         z0 = stL[:, :, 0, :]                              # (L, N, q)
-        h0 = self.z_to_h(z0)                 # (L, N, rnn_hidden)
-        
-        outputs = []
+        h0 = self.z_to_h(z0)                              # (L, N, rnn_hidden)
+
+        outputs       = []
+        hidden_states = []
         for l in range(L):
             inp = z0[l].unsqueeze(1).expand(-1, T, -1)    # (N, T, q)
             out, _ = self.gru(inp, h0[l].unsqueeze(0))    # (N, T, rnn_hidden)
             xrec = self.mlp(out)                           # (N, T, D)
             outputs.append(xrec)
+            hidden_states.append(out)
+
+        self._ztL = torch.stack(hidden_states)             # (L, N, T, rnn_hidden)
         return torch.stack(outputs)                        # (L, N, T, D)
 
     @property

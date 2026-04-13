@@ -199,7 +199,10 @@ class ECGDataset(data.Dataset):
 			# if self.dataset.lower() != 'medalcare-xl':
 			# 	X = filter_bandpass(X, 500) 
 			if self.cache is not None and idx not in self.cache:
-				self.cache[idx] = X
+				try:
+					self.cache[idx] = X
+				except Exception:
+					pass  # manager IPC can fail under multiprocessing load; skip caching this sample
 		
 		if self.return_file_path:
 			y = (self.labels[idx], self.run_id[idx], self.file_paths[idx]) if self.labels is not None \

@@ -157,9 +157,13 @@ class MoNODE(nn.Module):
             out_shape.extend(X.shape[2:])
 
         if self.model == 'vae':
-            # No ODE: broadcast z across time axis
+            # No ODE: broadcast z across time axis as input to the decoder
             ztL = z0.unsqueeze(2).expand(-1, -1, T, -1).contiguous()  # L,N,T,q
             Xrec = self.build_decoding(ztL, out_shape, c)
+            # If using RNNDecoder, replace broadcast z0 with the actual GRU hidden
+            # states cached during forward — these are the true latent trajectory
+            if hasattr(self.vae.decoder, '_ztL'):
+                ztL = self.vae.decoder._ztL  # L,N,T,rnn_hidden
         elif self.aug:
             mL = m.reshape((L,N,self.Nobj,-1)) #L,N,Nobj,q
             ztL  = self.sample_augmented_trajectories(z0, mL, T, L) # L,N,T,Nobj, 2q
