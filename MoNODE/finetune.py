@@ -28,7 +28,6 @@ from sklearn.metrics import (
     silhouette_score, silhouette_samples,
     ConfusionMatrixDisplay,
 )
-from sklearn.manifold import TSNE
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 from sklearn.neural_network import MLPRegressor, MLPClassifier
@@ -852,7 +851,6 @@ def run_gmm_clustering(
     {out_root}/clustering/{latent_key}/
       gmm_results.json          — all metrics and per-cluster stats
       latent_umap.png           — UMAP 2-D: predicted | ground-truth panels
-      latent_tsne.png           — t-SNE 2-D: predicted | ground-truth panels
       silhouette.png            — per-cluster silhouette bar chart
       param_epsilon_squared.png — effect-size bar chart across parameters
       cluster_{k}/
@@ -873,7 +871,7 @@ def run_gmm_clustering(
     # ── 2. Standardise ────────────────────────────────────────────────────────
     scaler = StandardScaler()
     X_tr        = scaler.fit_transform(X_tr)
-    X_te_scaled = scaler.transform(X_te)   # kept for UMAP/t-SNE embedding (full dim)
+    X_te_scaled = scaler.transform(X_te)   # kept for UMAP embedding (full dim)
 
     # ── 3. PCA (fit on train) ─────────────────────────────────────────────────
     actual_pca_dim = min(pca_dim, X_tr.shape[1], X_tr.shape[0])
@@ -1197,11 +1195,10 @@ def _scatter_panel(ax, E2d, labels, unique_labels, cmap_fn, title, xlabel, ylabe
 
 def _plot_latent_embed(X: np.ndarray, labels_pred: np.ndarray,
                        true_classes, n_clusters: int, out_dir: str) -> None:
-    """UMAP and t-SNE 2-D embedding of the scaled latent space.
+    """UMAP 2-D embedding of the scaled latent space.
 
-    Produces two figures, each with side-by-side predicted / ground-truth panels:
+    Produces a figure with side-by-side predicted / ground-truth panels:
       latent_umap.png
-      latent_tsne.png
 
     *true_classes* may be None (skips the ground-truth panel).
     """
@@ -1241,7 +1238,7 @@ def _plot_latent_embed(X: np.ndarray, labels_pred: np.ndarray,
 
 
 def _embed_2d(X: np.ndarray):
-    """Yield (method_name, 2-D embedding) for UMAP (if available) and t-SNE."""
+    """Yield (method_name, 2-D embedding) for UMAP (if available)."""
     if HAS_UMAP:
         try:
             emb = _UMAP(n_components=2, random_state=42,
@@ -1249,19 +1246,6 @@ def _embed_2d(X: np.ndarray):
             yield 'UMAP', emb
         except Exception as e:
             print(f"  UMAP failed: {e}")
-
-    perp = min(30, max(5, len(X) // 100))
-    try:
-        # max_iter replaced n_iter in scikit-learn 1.4; try both
-        try:
-            emb = TSNE(n_components=2, perplexity=perp, max_iter=1000,
-                       random_state=42).fit_transform(X)
-        except TypeError:
-            emb = TSNE(n_components=2, perplexity=perp, n_iter=1000,  # type: ignore[call-arg]
-                       random_state=42).fit_transform(X)
-        yield 'tSNE', emb
-    except Exception as e:
-        print(f"  t-SNE failed: {e}")
 
 
 def _plot_gmm_silhouette(sil_sample: np.ndarray, labels: np.ndarray,
@@ -1512,7 +1496,6 @@ def _log_gmm_to_wandb(run, latent_key: str, sil_global: float,
     if out_dir:
         for fname, key_suffix in [
             ('latent_umap.png',           'embed_umap'),
-            ('latent_tsne.png',           'embed_tsne'),
             ('silhouette.png',            'silhouette'),
             ('param_epsilon_squared.png', 'epsilon_squared'),
             ('param_cramers_v.png',       'cramers_v'),
@@ -2316,7 +2299,7 @@ if __name__ == '__main__':
                         choices=['medalcare-xl', 'uk-biobank'],
                         help='Dataset name — controls GMM cluster count and patient_id handling.')
     parser.add_argument('--plot_latent_reduct', type=bool, default=True,
-                        help='Plot UMP and T-SNE')
+                        help='Plot UMAP embedding of the latent space')
     parser.add_argument('--clustering_method', type=str, default='kmeans',
                         choices=['gmm', 'kmeans'],
                         help='Clustering algorithm: gmm (diagonal GMM) or kmeans.')
