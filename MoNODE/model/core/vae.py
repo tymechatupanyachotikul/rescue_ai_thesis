@@ -370,7 +370,7 @@ class RNNDecoder(nn.Module):
 
     def __init__(self, latent_dim, rnn_hidden, dec_H, data_dim, act='relu'):
         super().__init__()
-        rnn_hidden = rnn_hidden / 2
+        rnn_hidden = int(rnn_hidden // 2)
         self.rnn_hidden = rnn_hidden
         self.data_dim = data_dim
         self.dec_out_dim = data_dim  # match Decoder.dec_out_dim interface
