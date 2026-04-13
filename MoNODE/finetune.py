@@ -29,6 +29,7 @@ from sklearn.metrics import (
     ConfusionMatrixDisplay,
 )
 from sklearn.manifold import TSNE
+from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 from sklearn.neural_network import MLPRegressor, MLPClassifier
 from sklearn.preprocessing import StandardScaler, LabelEncoder
@@ -822,8 +823,9 @@ def run_gmm_clustering(
     run=None,
     class_label_key: str = 'class',
     tag: str | None = None,
+    clustering_method: str = 'gmm',
 ) -> dict:
-    """Fit a diagonal-covariance GMM in PCA-reduced latent space and evaluate clustering.
+    """Fit a clustering model (GMM or k-means) in PCA-reduced latent space and evaluate.
 
     Pipeline
     --------
@@ -895,16 +897,27 @@ def run_gmm_clustering(
     else:
         tr_classes = None
 
-    # ── 5. Fit GMM on train ───────────────────────────────────────────────────
-    gmm = GaussianMixture(
-        n_components=n_clusters,
-        covariance_type='diag',
-        max_iter=300,
-        random_state=42,
-        n_init=5,
-    )
-    gmm.fit(Z_tr)
-    labels_te = gmm.predict(Z_te)          # cluster assignment per test sample
+    # ── 5. Fit clustering model on train ─────────────────────────────────────
+    method_tag = clustering_method.lower()
+    if method_tag == 'kmeans':
+        model_cl = KMeans(
+            n_clusters=n_clusters,
+            random_state=42,
+            n_init=10,
+        )
+        model_cl.fit(Z_tr)
+        labels_te = model_cl.predict(Z_te)
+    else:  # gmm (default)
+        model_cl = GaussianMixture(
+            n_components=n_clusters,
+            covariance_type='diag',
+            max_iter=300,
+            random_state=42,
+            n_init=5,
+        )
+        model_cl.fit(Z_tr)
+        labels_te = model_cl.predict(Z_te)
+    print(f"  [{method_tag.upper()}/{latent_key}] Fitted {n_clusters} clusters")
 
     # ── 6. Silhouette ─────────────────────────────────────────────────────────
     sil_global = float(silhouette_score(Z_te, labels_te))
@@ -1124,7 +1137,7 @@ def run_gmm_clustering(
     if out_dir:
         if args.plot_latent_reduct:
             _plot_latent_embed(X_te_scaled, labels_te, true_classes_te, n_clusters, out_dir)
-        _plot_gmm_silhouette(sil_sample, labels_te, n_clusters, sil_global, out_dir)
+            _plot_gmm_silhouette(sil_sample, labels_te, n_clusters, sil_global, out_dir)
         _plot_gmm_epsilon_squared(eps_sq_results, out_dir)
         _plot_gmm_cramers_v(chi2_results, out_dir)
         _plot_gmm_cluster_violins(param_values, labels_te, n_clusters, out_dir)
@@ -1929,15 +1942,43 @@ def run_trajectory_analysis(eval_latents: dict, eval_metadata: list,
     n_cls          = len(unique_classes)
     cls_colours    = {cls: cmap(i / max(n_cls - 1, 1)) for i, cls in enumerate(unique_classes)}
 
-    # ── Plot 1: Phase portrait (PC1 vs PC2, time as colour) per class ────────
+    # ── Build per-class mean trajectories (needed for plot + save) ────────────
+    mean_trajs = {}   # cls → [T, 2]
+    for cls in unique_classes:
+        mask = classes_bal == cls
+        mean_trajs[cls] = zt_2d_bal[mask].mean(axis=0)   # [T, 2]
+
+    # ── Save trajectory data as .npy for offline re-plotting ─────────────────
+    # Structured dict with everything needed to reconstruct both plots:
+    #   zt_2d_bal   : [N_bal, T, 2]  — all per-sample PCA trajectories (balanced)
+    #   classes_bal : [N_bal]         — class label per sample
+    #   mean_trajs  : {cls: [T, 2]}  — pre-computed per-class mean
+    #   speed_bal   : [N_bal, T-1]   — per-sample latent speed
+    #   var_exp     : [2]             — PCA explained variance ratios
+    #   pca_components: [2, q]        — PCA components for projecting new points
+    #   pca_mean    : [q]             — PCA mean (for inverse transform)
+    #   seg_type    : str | None
+    #   T_cutoff    : int
+    save_dict = {
+        'zt_2d_bal':      zt_2d_bal,
+        'classes_bal':    classes_bal,
+        'mean_trajs':     mean_trajs,
+        'speed_bal':      speed_bal,
+        'var_exp':        var_exp,
+        'pca_components': pca.components_,
+        'pca_mean':       pca.mean_,
+        'seg_type':       seg_type,
+        'T_cutoff':       T,
+    }
+    npy_path = os.path.join(out_dir, 'trajectory_data.npy')
+    np.save(npy_path, save_dict, allow_pickle=True)
+    print(f"  [trajectory] Saved data → {npy_path}")
+
+    # ── Plot 1: Phase portrait — all classes on one axes ─────────────────────
     time_cmap = plt.cm.plasma
     t_norm    = plt.Normalize(vmin=0, vmax=T - 1)
 
-    fig, axes = plt.subplots(
-        1, n_cls,
-        figsize=(max(4 * n_cls, 8), 4),
-        squeeze=False,
-    )
+    fig, ax = plt.subplots(figsize=(7, 6))
     fig.suptitle(
         f"Phase Portrait — mean latent trajectory per class\n"
         f"({seg_type or dataset_name})  "
@@ -1945,39 +1986,43 @@ def run_trajectory_analysis(eval_latents: dict, eval_metadata: list,
         fontsize=11, fontweight='bold',
     )
 
-    for ci, cls in enumerate(unique_classes):
-        ax   = axes[0][ci]
-        mask = classes_bal == cls
-        traj = zt_2d_bal[mask]          # [n_cls, T, 2]
-        mean_traj = traj.mean(axis=0)   # [T, 2]
+    for cls in unique_classes:
+        mask      = classes_bal == cls
+        traj      = zt_2d_bal[mask]           # [n_cls, T, 2]
+        mean_traj = mean_trajs[cls]            # [T, 2]
 
-        # Draw individual trajectories faintly
-        for n in range(min(len(traj), 50)):   # cap at 50 to avoid overplotting
+        # Faint individual traces
+        for n in range(min(len(traj), 30)):    # cap at 30 per class
             ax.plot(traj[n, :, 0], traj[n, :, 1],
-                    color=cls_colours[cls], alpha=0.08, linewidth=0.6, zorder=1)
+                    color=cls_colours[cls], alpha=0.06, linewidth=0.5, zorder=1)
 
-        # Draw mean trajectory with time-coloured scatter
-        sc = ax.scatter(mean_traj[:, 0], mean_traj[:, 1],
-                        c=np.arange(T), cmap=time_cmap, norm=t_norm,
-                        s=20, zorder=3, edgecolors='none')
+        # Mean trajectory line (class colour)
         ax.plot(mean_traj[:, 0], mean_traj[:, 1],
-                color=cls_colours[cls], linewidth=1.8, zorder=2, alpha=0.85)
+                color=cls_colours[cls], linewidth=2.0, zorder=2, alpha=0.9,
+                label=f"{cls} (n={mask.sum()})")
+
+        # Mean trajectory time-coloured scatter on top
+        ax.scatter(mean_traj[:, 0], mean_traj[:, 1],
+                   c=np.arange(T), cmap=time_cmap, norm=t_norm,
+                   s=18, zorder=3, edgecolors='none')
 
         # Start / end markers
-        ax.scatter(*mean_traj[0],  marker='o', s=60, color='black',  zorder=5, label='start')
-        ax.scatter(*mean_traj[-1], marker='X', s=60, color='red',    zorder=5, label='end')
+        ax.scatter(*mean_traj[0],  marker='o', s=55, color=cls_colours[cls],
+                   edgecolors='black', linewidths=0.8, zorder=5)
+        ax.scatter(*mean_traj[-1], marker='X', s=55, color=cls_colours[cls],
+                   edgecolors='black', linewidths=0.8, zorder=5)
 
-        ax.set_title(f"{cls}\n(n={mask.sum()})", fontsize=9, fontweight='bold')
-        ax.set_xlabel('PC1', fontsize=8)
-        if ci == 0:
-            ax.set_ylabel('PC2', fontsize=8)
-        ax.tick_params(labelsize=7)
-        ax.spines[['top', 'right']].set_visible(False)
+    ax.set_xlabel('PC1', fontsize=10)
+    ax.set_ylabel('PC2', fontsize=10)
+    ax.tick_params(labelsize=8)
+    ax.spines[['top', 'right']].set_visible(False)
+    ax.legend(fontsize=7.5, framealpha=0.85, ncol=2,
+              loc='best', title='Class', title_fontsize=8)
 
     # Shared colourbar for time
     sm = plt.cm.ScalarMappable(cmap=time_cmap, norm=t_norm)
     sm.set_array([])
-    cbar = fig.colorbar(sm, ax=axes[0], shrink=0.7, pad=0.02)
+    cbar = fig.colorbar(sm, ax=ax, shrink=0.7, pad=0.02)
     cbar.set_label('Time step', fontsize=8)
 
     fig.tight_layout()
@@ -2186,8 +2231,9 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
             )
         log_probe_metrics(probe_results, lkey, seg_type, run)
 
-        # ── GMM clustering ────────────────────────────────────────────────────
-        print(f"\n=== GMM clustering ({lkey}) ===")
+        # ── Clustering ────────────────────────────────────────────────────────
+        _cm = args.clustering_method
+        print(f"\n=== {_cm.upper()} clustering ({lkey}) ===")
         with np.errstate(all='ignore'):
             run_gmm_clustering(
                 tr_latents,   tr_metadata,
@@ -2198,6 +2244,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                 pca_dim=10,
                 out_root=finetune_root,
                 run=run,
+                clustering_method=_cm,
             )
 
         # ── MedalCare-XL extra clusterings ───────────────────────────────────
@@ -2215,9 +2262,10 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                     run=run,
                     class_label_key='patient_id',
                     tag='patient_id',
+                    clustering_method=_cm,
                 )
 
-            print(f"\n=== GMM clustering k=10 ({lkey}) ===")
+            print(f"\n=== {_cm.upper()} clustering k=10 ({lkey}) ===")
             with np.errstate(all='ignore'):
                 run_gmm_clustering(
                     tr_latents,   tr_metadata,
@@ -2229,6 +2277,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                     out_root=finetune_root,
                     run=run,
                     tag='k10',
+                    clustering_method=_cm,
                 )
 
     # ── Latent trajectory analysis ────────────────────────────────────────────
@@ -2266,8 +2315,11 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='medalcare-xl',
                         choices=['medalcare-xl', 'uk-biobank'],
                         help='Dataset name — controls GMM cluster count and patient_id handling.')
-    parser.add_argument('--plot_latent_reduct', type=bool, default=False,
+    parser.add_argument('--plot_latent_reduct', type=bool, default=True,
                         help='Plot UMP and T-SNE')
+    parser.add_argument('--clustering_method', type=str, default='kmeans',
+                        choices=['gmm', 'kmeans'],
+                        help='Clustering algorithm: gmm (diagonal GMM) or kmeans.')
     args = parser.parse_args()
 
     root_dir = args.root_dir
@@ -2371,7 +2423,8 @@ if __name__ == '__main__':
             balance_sinus=(dataset_name == 'medalcare-xl'),
         )
 
-        print(f"\n=== GMM clustering ({lkey}) ===")
+        _cm = args.clustering_method
+        print(f"\n=== {_cm.upper()} clustering ({lkey}) ===")
         with np.errstate(all='ignore'):
             run_gmm_clustering(
                 tr_latents,   tr_metadata,
@@ -2381,6 +2434,7 @@ if __name__ == '__main__':
                 n_clusters=gmm_n_clusters,
                 pca_dim=10,
                 out_root=finetune_root,
+                clustering_method=_cm,
             )
 
         if dataset_name == 'medalcare-xl':
@@ -2396,9 +2450,10 @@ if __name__ == '__main__':
                     out_root=finetune_root,
                     class_label_key='patient_id',
                     tag='patient_id',
+                    clustering_method=_cm,
                 )
 
-            print(f"\n=== GMM clustering k=10 ({lkey}) ===")
+            print(f"\n=== {_cm.upper()} clustering k=10 ({lkey}) ===")
             with np.errstate(all='ignore'):
                 run_gmm_clustering(
                     tr_latents,   tr_metadata,
@@ -2409,6 +2464,7 @@ if __name__ == '__main__':
                     pca_dim=10,
                     out_root=finetune_root,
                     tag='k10',
+                    clustering_method=_cm,
                 )
 
     # ── Latent trajectory analysis ────────────────────────────────────────────
