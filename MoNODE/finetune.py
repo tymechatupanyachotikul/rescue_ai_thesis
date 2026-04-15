@@ -2173,15 +2173,6 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
 
         # ── Clustering ────────────────────────────────────────────────────────
 
-    # ── Latent trajectory analysis ────────────────────────────────────────────
-    print("\n=== Latent trajectory analysis ===")
-    run_trajectory_analysis(
-        eval_latents, eval_metadata,
-        dataset_name=dataset_name,
-        out_root=finetune_root,
-        seg_type=seg_type,
-    )
-
     print("========== Post-training probes complete ==========\n")
 
 
