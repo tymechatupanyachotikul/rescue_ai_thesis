@@ -110,7 +110,7 @@ def build_mov_mnist_cnn_dec(n_filt, n_in):
 class VAE(nn.Module):
 
     def __init__(self, task, cnn_filt_enc=8, cnn_filt_de=8, dec_H=100, rnn_hidden=10, dec_act='relu',
-                 ode_latent_dim=8, content_dim=0, T_in=10, device='cpu', order=1, enc_H=50, inp_dim=None, w_dt=0, l_w=0, out_dim=None, use_rnn_decoder=False):
+                 ode_latent_dim=8, content_dim=0, T_in=10, device='cpu', order=1, enc_H=50, dec_L=2, inp_dim=None, w_dt=0, l_w=0, out_dim=None, use_rnn_decoder=False):
         super(VAE, self).__init__()
 
         ### build encoder
@@ -156,7 +156,7 @@ class VAE(nn.Module):
                 if use_rnn_decoder:
                     self.decoder = RNNDecoder(ode_latent_dim+content_dim, rnn_hidden=rnn_hidden, dec_H=dec_H, data_dim=out_dim, act=dec_act).to(device)
                 else:
-                    self.decoder = Decoder(task, ode_latent_dim+content_dim, H=dec_H, distribution=lhood_distribution, dec_out_dim=out_dim, act=dec_act, w_dt=w_dt, l_w=l_w).to(device)
+                    self.decoder = Decoder(task, ode_latent_dim+content_dim, H=dec_H, L=dec_L, distribution=lhood_distribution, dec_out_dim=out_dim, act=dec_act, w_dt=w_dt, l_w=l_w).to(device)
                 if order==2:
                     self.encoder_v = EncoderRNN(data_dim, rnn_hidden=rnn_hidden, enc_out_dim=ode_latent_dim, out_distr='normal', H=enc_H).to(device)
                     self.prior = Normal(torch.zeros(ode_latent_dim*order).to(device), torch.ones(ode_latent_dim*order).to(device))
@@ -430,7 +430,7 @@ class RNNDecoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, task, dec_inp_dim, n_filt=8, H=100, distribution='bernoulli', dec_out_dim=None, act='relu', w_dt=0, l_w=0):
+    def __init__(self, task, dec_inp_dim, L=2, n_filt=8, H=100, distribution='bernoulli', dec_out_dim=None, act='relu', w_dt=0, l_w=0):
         super(Decoder, self).__init__()
         self.distribution = distribution
         self.dec_out_dim = dec_out_dim
@@ -441,7 +441,7 @@ class Decoder(nn.Module):
         elif task=='bb':
             self.net = build_rot_mnist_cnn_dec(n_filt, dec_inp_dim)
         elif task=='sin' or task=='spiral' or task=='lv' or 'mocap' in task or 'ecg' in task:
-            self.net = MLP(dec_inp_dim, dec_out_dim, L=2, H=H, act=act)
+            self.net = MLP(dec_inp_dim, dec_out_dim, L=L, H=H, act=act)
             self.w_dt = w_dt
             self.l_w = l_w
             self.out_logsig = torch.nn.Parameter(torch.zeros(dec_out_dim)*0.0)
