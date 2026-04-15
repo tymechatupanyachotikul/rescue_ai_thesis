@@ -1735,123 +1735,57 @@ def _probe_bar_chart(title, x_labels, bar_groups, ylabel, ylim=(0, 1)):
 
 
 def log_probe_metrics(probe_results, latent_key, seg_type, run):
-    """Log linear probe results to wandb under the 'linear probe' panel.
+    """Log linear probe classification metrics to wandb as scalars.
 
-    Logs:
-    - Dataset stats: n_train / n_test / class-freq or continuous distribution
-                     plots per parameter (logged once, independent of latent_key)
-    - Regression   : bar chart of R² per parameter (one bar per probe method)
-    - Classification: bar chart of per-class accuracy + bar chart of overall
-                      metrics (binary: accuracy; multi-class: macro F1 / Recall / AUROC)
+    Only classification results are logged:
+      - Overall metrics per parameter (accuracy, f1, auroc where available)
+      - Per-class accuracy per parameter
+
+    Regression results and dataset statistics are printed but not logged.
     """
-    import wandb as _wandb
+    if run is None:
+        return
+
     panel    = "linear probe"
     suffix   = f"{seg_type}/{latent_key}" if seg_type else latent_key
     log_dict = {}
 
-    # ── Dataset statistics (sample counts + distribution per param) ───────────
-    dstats_all = probe_results.get('dataset_stats', {})
-    for param, dstats in dstats_all.items():
-        kind   = dstats['type']
-        n_tr   = dstats['n_train']
-        n_te   = dstats['n_test']
-        # Scalar metrics logged as wandb summary values
-        log_dict[f"{panel}/dataset/{param}/n_train"] = n_tr
-        log_dict[f"{panel}/dataset/{param}/n_test"]  = n_te
-        log_dict[f"{panel}/dataset/{param}/n_total"] = n_tr + n_te
-
-        if kind == 'classification':
-            log_dict[f"{panel}/dataset/{param}/n_classes"] = dstats['n_classes']
-            for cls in dstats['classes']:
-                log_dict[f"{panel}/dataset/{param}/train_freq/{cls}"] = \
-                    dstats['train_class_freq'][cls]
-                log_dict[f"{panel}/dataset/{param}/test_freq/{cls}"] = \
-                    dstats['test_class_freq'][cls]
-        else:
-            for split_name in ('train', 'test'):
-                d = dstats[split_name]
-                for metric in ('mean', 'std', 'min', 'max', 'median',
-                               'iqr', 'skewness', 'kurtosis', 'pct_zero'):
-                    log_dict[f"{panel}/dataset/{param}/{split_name}/{metric}"] = d[metric]
-
-        # Distribution image (already saved to disk; re-render for wandb)
-        fig = _make_dataset_stats_fig(param, dstats)
-        log_dict[f"{panel}/dataset/{param}/distribution"] = _wandb.Image(fig)
-        plt.close(fig)
-
-    # ── Regression: R² per parameter ──────────────────────────────────────────
+    # ── Regression: print only, do not log ───────────────────────────────────
     reg = probe_results.get('regression', {})
     if reg:
-        params  = sorted(reg.keys())
-        methods = sorted(next(iter(reg.values())).keys())
-        groups  = [
-            (method, [reg[p][method]['metrics'].get('r2', float('nan')) for p in params])
-            for method in methods
-        ]
-        fig = _probe_bar_chart(
-            title=f"R² per parameter — {suffix}",
-            x_labels=params,
-            bar_groups=groups,
-            ylabel="R²",
-            ylim=(min(0, min(v for _, vs in groups for v in vs if not np.isnan(v)) - 0.05), 1.0),
-        )
-        log_dict[f"{panel}/regression/{suffix}"] = _wandb.Image(fig)
-        plt.close(fig)
+        for param, method_results in reg.items():
+            for method, res in method_results.items():
+                r2 = res['metrics'].get('r2', float('nan'))
+                print(f"  [probe/{suffix}] regression/{param}/{method}  R²={r2:.4f}")
 
-    # ── Classification: per-class accuracy + overall metrics ──────────────────
+    # ── Classification: log overall metrics + per-class accuracy ─────────────
     clf = probe_results.get('classification', {})
-    if clf:
-        for param, model_results in clf.items():
-            methods = sorted(model_results.keys())
+    for param, model_results in clf.items():
+        for method, res in model_results.items():
+            metrics = res['metrics']
+            key_base = f"{panel}/classification/{suffix}/{param}/{method}"
 
-            # Per-class accuracy bar chart
-            sample_res = next(iter(model_results.values()))
-            le_classes = list(range(max(sample_res['y_true']) + 1))
-            # Use string class labels if available from per_class_accuracy computation
-            pca = {m: _per_class_accuracy(model_results[m]['y_true'],
-                                           model_results[m]['y_pred'],
-                                           le_classes)
-                   for m in methods}
-            # Try to get string class names from the label encoder stored in results
-            class_labels = [str(c) for c in le_classes]
-            pca_groups = [
-                (m, [pca[m].get(c, float('nan')) for c in le_classes])
-                for m in methods
-            ]
-            fig = _probe_bar_chart(
-                title=f"Per-class accuracy — {param} ({suffix})",
-                x_labels=class_labels,
-                bar_groups=pca_groups,
-                ylabel="Accuracy",
-                ylim=(0, 1.08),
-            )
-            log_dict[f"{panel}/classification/per_class_accuracy/{param}/{suffix}"] = _wandb.Image(fig)
-            plt.close(fig)
+            # Overall scalar metrics
+            for metric_key in ('accuracy', 'balanced_accuracy', 'f1', 'f1_macro',
+                               'auroc', 'auroc_macro', 'recall_macro'):
+                if metric_key in metrics and not np.isnan(float(metrics[metric_key])):
+                    log_dict[f"{key_base}/{metric_key}"] = float(metrics[metric_key])
+                    print(f"  [probe/{suffix}] {param}/{method}  {metric_key}={metrics[metric_key]:.4f}")
 
-            # Overall metrics bar chart
-            # Binary: accuracy only; multi-class: f1_macro / recall_macro / auroc_macro
-            sample_metrics = next(iter(model_results.values()))['metrics']
-            if 'accuracy' in sample_metrics:
-                metric_keys = ['accuracy']
-            else:
-                metric_keys = ['f1_macro', 'recall_macro', 'auroc_macro']
-            metric_groups = [
-                (m, [model_results[m]['metrics'].get(k, float('nan')) for k in metric_keys])
-                for m in methods
-            ]
-            fig = _probe_bar_chart(
-                title=f"Overall metrics — {param} ({suffix})",
-                x_labels=metric_keys,
-                bar_groups=metric_groups,
-                ylabel="Score",
-                ylim=(0, 1.08),
-            )
-            log_dict[f"{panel}/classification/overall_metrics/{param}/{suffix}"] = _wandb.Image(fig)
-            plt.close(fig)
+            # Per-class accuracy
+            y_true = res['y_true']
+            y_pred = res['y_pred']
+            le_classes = list(range(max(y_true) + 1))
+            pca = _per_class_accuracy(y_true, y_pred, le_classes)
+            for cls_idx, acc in pca.items():
+                if not np.isnan(float(acc)):
+                    log_dict[f"{key_base}/per_class_accuracy/class_{cls_idx}"] = float(acc)
+            print(f"  [probe/{suffix}] {param}/{method}  per-class acc: "
+                  f"{[round(pca.get(c, float('nan')), 3) for c in le_classes]}")
 
     if log_dict:
         run.log(log_dict)
-        print(f"  Logged {len(log_dict)} probe charts to wandb under '{panel}' panel.")
+        print(f"  Logged {len(log_dict)} classification scalars to wandb under '{panel}'.")
 
 
 def run_trajectory_analysis(eval_latents: dict, eval_metadata: list,
@@ -2238,53 +2172,6 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
         log_probe_metrics(probe_results, lkey, seg_type, run)
 
         # ── Clustering ────────────────────────────────────────────────────────
-        _cm = args.clustering_method
-        print(f"\n=== {_cm.upper()} clustering ({lkey}) ===")
-        with np.errstate(all='ignore'):
-            run_gmm_clustering(
-                tr_latents,   tr_metadata,
-                eval_latents, eval_metadata,
-                latent_key=lkey,
-                dataset_name=dataset_name,
-                n_clusters=gmm_n_clusters,
-                pca_dim=10,
-                out_root=finetune_root,
-                run=run,
-                clustering_method=_cm,
-            )
-
-        # ── MedalCare-XL extra clusterings ───────────────────────────────────
-        if dataset_name == 'medalcare-xl':
-            print(f"\n=== Patient-ID clustering ({lkey}) ===")
-            with np.errstate(all='ignore'):
-                run_gmm_clustering(
-                    tr_latents,   tr_metadata,
-                    eval_latents, eval_metadata,
-                    latent_key=lkey,
-                    dataset_name=dataset_name,
-                    n_clusters=2,
-                    pca_dim=10,
-                    out_root=finetune_root,
-                    run=run,
-                    class_label_key='patient_id',
-                    tag='patient_id',
-                    clustering_method=_cm,
-                )
-
-            print(f"\n=== {_cm.upper()} clustering k=10 ({lkey}) ===")
-            with np.errstate(all='ignore'):
-                run_gmm_clustering(
-                    tr_latents,   tr_metadata,
-                    eval_latents, eval_metadata,
-                    latent_key=lkey,
-                    dataset_name=dataset_name,
-                    n_clusters=10,
-                    pca_dim=10,
-                    out_root=finetune_root,
-                    run=run,
-                    tag='k10',
-                    clustering_method=_cm,
-                )
 
     # ── Latent trajectory analysis ────────────────────────────────────────────
     print("\n=== Latent trajectory analysis ===")
