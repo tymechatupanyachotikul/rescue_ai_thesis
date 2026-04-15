@@ -533,8 +533,10 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
     # ── Epoch loop ───────────────────────────────────────────────────────────
     start_time     = datetime.now()
     global_itr     = 0
-    best_valid_loss = 1e9
-    dict_test_mses = {}  # populated when best model is found
+    best_valid_loss  = 1e9
+    dict_test_mses   = {}  # populated when best model is found
+    patience         = getattr(args, 'early_stopping_patience', 0)
+    epochs_no_improv = 0
 
     for ep in range(args.Nepoch):
         # VAE has no stochastic latent trajectory — use L=1 always
@@ -643,7 +645,8 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
 
             # ── Test evaluation on best model ─────────────────────────────
             if valid_mse_rec < best_valid_loss:
-                best_valid_loss = valid_mse_rec
+                best_valid_loss  = valid_mse_rec
+                epochs_no_improv = 0
 
                 torch.save(
                     {'args': args, 'state_dict': model.state_dict()},
@@ -660,6 +663,14 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                 _log_split_metrics(
                     run, 'test', *test_results, custom_channel, has_label, logger=logger
                 )
+            else:
+                epochs_no_improv += 1
+                if patience > 0 and epochs_no_improv >= patience:
+                    logger.info(
+                        f'Early stopping at epoch {ep}: no improvement for {patience} consecutive '
+                        f'validation checks (best val MSE: {best_valid_loss:.4f})'
+                    )
+                    break
 
         # ── Periodic visualisation ────────────────────────────────────────────
         if ep % args.plot_every == 0 or (ep + 1) == args.Nepoch:

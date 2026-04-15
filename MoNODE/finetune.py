@@ -2104,6 +2104,29 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     dataset_name = task_params.get('dataset', 'medalcare-xl').lower()
     seg_type     = getattr(args, 'segment_type', None)
 
+    # Reinitialise dataloaders with return_file_path=True so collect_latents
+    # can read the file path from batch_y[i][2] (needed for MedalCare-XL UID
+    # derivation and ALADIN metadata lookup).
+    def _with_file_path(loader) -> torch.utils.data.DataLoader:
+        ds = loader.dataset
+        ds.return_file_path = True
+        return torch.utils.data.DataLoader(
+            ds,
+            batch_size=loader.batch_size,
+            shuffle=False,
+            num_workers=loader.num_workers,
+            drop_last=False,
+            collate_fn=loader.collate_fn,
+            pin_memory=loader.pin_memory,
+            persistent_workers=loader.num_workers > 0,
+            prefetch_factor=2 if loader.num_workers > 0 else None,
+        )
+
+    trainset = _with_file_path(trainset)
+    testset  = _with_file_path(testset)
+    if validset is not None:
+        validset = _with_file_path(validset)
+
     # Load ALADIN metadata files when --aladin_metadata_dir is given.
     def _load_aladin_meta(split: str) -> dict | None:
         d = getattr(args, 'aladin_metadata_dir', None)

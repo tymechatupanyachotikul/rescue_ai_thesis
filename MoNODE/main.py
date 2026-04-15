@@ -125,6 +125,12 @@ parser.add_argument('--exp_id', type=int, default=0,
 #log 
 parser.add_argument('--save', type=str, default='results/',
                     help="Directory name for saving all the model outputs")
+parser.add_argument('--aladin_metadata_dir', type=str, default=None,
+                    help="Path to directory containing ALADIN metadata JSON files "
+                         "(train_metadata.json, valid_metadata.json, test_metadata.json)")
+parser.add_argument('--early_stopping_patience', type=int, default=10,
+                    help="Stop training if validation MSE does not improve for this many "
+                         "consecutive validation checks. Set to 0 to disable.")
 parser.add_argument('--continue_dir', type=str, default='results/',
                     help="Directory name for continue training")
 
