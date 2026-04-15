@@ -52,7 +52,7 @@ def build_model(args, device, dtype, **kwargs):
     # encoder & decoder
     if args.model in ('node', 'hbnode', 'vae'):
         vae = VAE(task=args.task, cnn_filt_enc=args.cnn_filt_enc, cnn_filt_de=args.cnn_filt_de, ode_latent_dim=args.ode_latent_dim//args.order,
-            dec_act=args.dec_act, rnn_hidden=args.rnn_hidden, dec_H=args.dec_H, enc_H=args.enc_H,
+            dec_act=args.dec_act, rnn_hidden=args.rnn_hidden, dec_H=args.dec_H, dec_L=args.dec_L, enc_H=args.enc_H,
             content_dim=args.content_dim, T_in=args.T_in, order=args.order, device=device,
             use_rnn_decoder=(args.model == 'vae'), **kwargs).to(dtype)
     elif args.model == 'sonode':
