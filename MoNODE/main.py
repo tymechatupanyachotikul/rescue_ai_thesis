@@ -153,6 +153,9 @@ if __name__ == '__main__':
     io_utils.makedirs(os.path.join(args.save, 'plots', 'latents'))
     logger = io_utils.get_logger(logpath=os.path.join(args.save, 'logs.txt'))
     logger.info('Results stored in {}'.format(args.save))
+    import json as _json
+    with open(os.path.join(args.save, 'args.json'), 'w') as _f:
+        _json.dump(vars(args), _f, indent=2)
 
     ########## set global random seed ###########
     if args.seed==-1:
