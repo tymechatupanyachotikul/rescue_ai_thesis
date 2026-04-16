@@ -2107,7 +2107,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     print(f"  Saved latents to {latents_dir}")
 
     # Remap MedalCare-XL class labels for the segment type
-    if dataset_name == 'medalcare-xl' and seg_type:
+    if dataset_name == 'medalcare-xl' and seg_type and seg_type != 'whole':
         tr_metadata = _remap_metadata(tr_metadata, seg_type)
         te_metadata = _remap_metadata(te_metadata, seg_type)
         if validset is not None:
@@ -2167,7 +2167,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                 out_root=os.path.join(finetune_root, lkey),
                 methods={'ols'},
                 skip_params=probe_skip,
-                balance_sinus=(dataset_name == 'medalcare-xl'),
+                balance_sinus=(dataset_name == 'medalcare-xl' and seg_type != 'whole'),
             )
         log_probe_metrics(probe_results, lkey, seg_type, run)
 

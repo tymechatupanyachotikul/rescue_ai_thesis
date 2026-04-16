@@ -739,3 +739,17 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
     )
     for h, vals in dict_test_mses.items():
         logger.info(f'T={h} test_mse {np.mean(vals):.3f} (±{np.std(vals):.3f})')
+
+    # Save training metrics so downstream summarisation can read them
+    import json as _json
+    training_metrics = {
+        'best_val_mse': float(best_valid_loss),
+        'test_mse': {
+            str(h): {'mean': float(np.mean(vals)), 'std': float(np.std(vals))}
+            for h, vals in dict_test_mses.items()
+        },
+        'epochs_trained': ep + 1,
+    }
+    with open(os.path.join(args.save, 'training_metrics.json'), 'w') as _f:
+        _json.dump(training_metrics, _f, indent=2)
+    logger.info(f'Saved training metrics to {args.save}/training_metrics.json')

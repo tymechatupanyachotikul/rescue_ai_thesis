@@ -9,6 +9,7 @@ from model.misc import io_utils
 from model.misc.torch_utils import seed_everything, count_params
 from data.data_utils import load_data
 from finetune import run_post_training_probes
+from summarize_results import save_run_summary
 import wandb
 
 SOLVERS   = ["euler", "bdf", "rk4", "midpoint", "adams", "explicit_adams", "fixed_adams", "dopri5"]
@@ -131,6 +132,10 @@ parser.add_argument('--aladin_metadata_dir', type=str, default=None,
 parser.add_argument('--early_stopping_patience', type=int, default=10,
                     help="Stop training if validation MSE does not improve for this many "
                          "consecutive validation checks. Set to 0 to disable.")
+parser.add_argument('--summary_output_dir', type=str, default=None,
+                    help="Directory to save the run summary JSON "
+                         "({segment_type}_{model}_{dataset}.json). "
+                         "Skipped if not provided.")
 parser.add_argument('--continue_dir', type=str, default='results/',
                     help="Directory name for continue training")
 
@@ -213,6 +218,15 @@ if __name__ == '__main__':
     if args.task == 'ecg':
         run_post_training_probes(args, model, device, trainset, testset, params[args.task], run,
                                   validset=validset)
+
+    if args.summary_output_dir:
+        save_run_summary(
+            run_dir=args.save,
+            output_dir=args.summary_output_dir,
+            model=args.model,
+            dataset=params[args.task]['dataset'],
+            segment_type=getattr(args, 'segment_type', None),
+        )
 
     run.finish()
 
