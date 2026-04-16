@@ -202,7 +202,7 @@ class ECGDataset(data.Dataset):
 				try:
 					self.cache[idx] = X
 				except Exception:
-					pass  # manager IPC can fail under multiprocessing load; skip caching this sample
+					pass  # cache write can fail under load; skip silently
 		
 		if self.return_file_path:
 			y = (self.labels[idx], self.run_id[idx], self.file_paths[idx]) if self.labels is not None \
@@ -254,19 +254,17 @@ def pad_collate(batch):
 
 def __build_dataset(num_workers, batch_size, train_params, valid_params, test_params, dtype, dataset, use_cache=True, shuffle=True):
 	# Data generators
+	# Note: Manager().dict() IPC proxies cannot be used from DataLoader worker
+	# subprocesses (workers can't reconnect to the manager server after spawn).
+	# Plain dicts are used instead — each worker caches independently in its
+	# own memory, which is safe and avoids EOFError / connection failures.
 	manager = None
-	if num_workers>0:
-		import multiprocessing
-		torch.multiprocessing.set_start_method('spawn', force="True")
-		manager = multiprocessing.Manager() 
+	if num_workers > 0:
+		torch.multiprocessing.set_start_method('spawn', force=True)
 
-		train_cache = manager.dict() if use_cache else None
-		valid_cache = manager.dict() if use_cache else None
-		test_cache  = manager.dict() if use_cache else None
-	else:
-		train_cache = {} if use_cache else None
-		valid_cache = {} if use_cache else None
-		test_cache  = {} if use_cache else None
+	train_cache = {} if use_cache else None
+	valid_cache = {} if use_cache else None
+	test_cache  = {} if use_cache else None
 
 	tr_params = {
 		'batch_size': min(batch_size, len(train_params['file_paths'])), 
