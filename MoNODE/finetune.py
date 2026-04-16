@@ -2166,7 +2166,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     finetune_root = os.path.join(args.save, 'final_finetune_results', run_label)
 
     # Params to skip in linear probing (patient_id is not a useful probe target)
-    probe_skip = {'patient_id'} if dataset_name == 'medalcare-xl' else None
+    probe_skip = {'patient_id'}
 
     # n_clusters: inferred from classes for MedalCare-XL, fixed 8 for UK Biobank
     gmm_n_clusters = None if dataset_name == 'medalcare-xl' else 8
