@@ -464,7 +464,7 @@ def log_gradients(model, run):
 # Main training loop
 # ─────────────────────────────────────────────────────────────────────────────
 
-def train_model(args, model, plotter, trainset, validset, testset, logger, params, run, freeze_dyn=False):
+def train_model(args, model, plotter, trainset, validset, testset, logger, params, run, freeze_dyn=False, epoch_callback=None):
     """Full training loop with curriculum learning, validation, and test evaluation.
 
     Training is structured in three phases:
@@ -671,6 +671,10 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
                         f'validation checks (best val MSE: {best_valid_loss:.4f})'
                     )
                     break
+
+            # Optuna pruning callback — returns True to stop this trial early
+            if epoch_callback is not None and epoch_callback(ep, valid_mse_rec):
+                break
 
         # ── Periodic visualisation ────────────────────────────────────────────
         if ep % args.plot_every == 0 or (ep + 1) == args.Nepoch:

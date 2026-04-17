@@ -81,7 +81,9 @@ parser.add_argument('--cnn_filt_enc', type=int, default=16,
 parser.add_argument('--cnn_filt_de', type=int, default=16,
                     help="Number of filters in the cnn decoder")
 parser.add_argument('--rnn_hidden', type=int, default=10,
-                    help="Encoder RNN latent dimensionality") 
+                    help="Encoder RNN latent dimensionality")
+parser.add_argument('--rnn_hidden_dec', type=int, default=None,
+                    help="RNN decoder hidden dimensionality (VAE only). Defaults to rnn_hidden if not set.")
 parser.add_argument('--dec_H', type=int, default=100,
                     help="Number of hidden neurons in MLP decoder") 
 parser.add_argument('--dec_L', type=int, default=2,

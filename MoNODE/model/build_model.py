@@ -54,7 +54,9 @@ def build_model(args, device, dtype, **kwargs):
         vae = VAE(task=args.task, cnn_filt_enc=args.cnn_filt_enc, cnn_filt_de=args.cnn_filt_de, ode_latent_dim=args.ode_latent_dim//args.order,
             dec_act=args.dec_act, rnn_hidden=args.rnn_hidden, dec_H=args.dec_H, dec_L=args.dec_L, enc_H=args.enc_H,
             content_dim=args.content_dim, T_in=args.T_in, order=args.order, device=device,
-            use_rnn_decoder=(args.model == 'vae'), **kwargs).to(dtype)
+            use_rnn_decoder=(args.model == 'vae'),
+            rnn_hidden_dec=getattr(args, 'rnn_hidden_dec', None),
+            **kwargs).to(dtype)
     elif args.model == 'sonode':
         if args.sonode_v == 'MLP':
             vae = SONODE_init_velocity(dim=args.ode_latent_dim//2, nhidden=args.dec_H, Tin=args.T_in) #improved SONODE
