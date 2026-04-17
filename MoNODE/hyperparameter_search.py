@@ -299,12 +299,19 @@ def objective(trial, base_args, subset_path: str, gpu_id: int, ecg_cfg: dict) ->
     args = copy.deepcopy(base_args)
 
     if args.model == 'node':
-        args.de_L  = trial.suggest_int('de_L',  1, 4)
-        args.de_H  = trial.suggest_int('de_H',  50, 300, step=50)
-        args.dec_L = trial.suggest_int('dec_L', 1, 4)
-        args.dec_H = trial.suggest_int('dec_H', 50, 300, step=50)
+        args.de_L  = trial.suggest_int('de_L',  2, 4)
+        args.de_H  = trial.suggest_int('de_H',  100, 300, step=50)
+        args.dec_L = trial.suggest_int('dec_L', 2, 4)
+        args.dec_H = trial.suggest_int('dec_H', 100, 300, step=50)
     elif args.model == 'vae':
-        args.rnn_hidden_dec = trial.suggest_int('rnn_hidden_dec', 32, 128, step=16)
+        args.rnn_hidden_dec = trial.suggest_int('rnn_hidden_dec', 32, 64, step=32)
+    
+    if args.segment_type == 'whole':
+        args.rnn_hidden = 128 
+        args.ode_latent_dim = 64
+    else:
+        args.rnn_hidden = 64 
+        args.ode_latent_dim = 32
 
     args.save = os.path.join(
         base_args.hp_output_dir,
@@ -565,17 +572,17 @@ def main():
     ecg_cfg = full_cfg['ecg']
     ecg_cfg['T'] = ecg_cfg['train']['T']
 
-    # ── Ensure subset data_params exists ──────────────────────────────────────
-    orig_path   = _original_params_path(args.segment_type)
-    subset_path = _subset_params_path(args.segment_type, fraction=args.fraction)
+    # ── Resolve data_params path ──────────────────────────────────────────────
+    orig_path = _original_params_path(args.segment_type)
 
-    if not os.path.exists(subset_path):
+    if args.fraction >= 1.0:
+        # Use the full dataset — no sampling needed
+        subset_path = orig_path
         if not os.path.exists(orig_path):
             print(f"Original data_params not found at:\n  {orig_path}")
             print("Generating from dataset directory…")
             sys.path.insert(0, _script_dir())
             from data.data_utils import get_data_params
-            # get_data_params saves the JSON as a side-effect
             get_data_params(args.dataset_root, 'MedalCare-XL', 'median',
                             args.segment_type, 'ecg')
             if not os.path.exists(orig_path):
@@ -583,14 +590,32 @@ def main():
                     f"Could not generate {orig_path}. "
                     "Check --dataset_root points to the MedalCare-XL root.")
             print(f"Generated → {orig_path}")
-
-        pct = int(args.fraction * 100)
-        print(f"\nGenerating {pct}% subset for segment='{args.segment_type}':")
-        generate_subset_data_params(
-            orig_path, subset_path, args.segment_type, args.fraction, args.seed)
+        print(f"Using full dataset (fraction=1): {orig_path}")
+        _print_dist(orig_path)
     else:
-        print(f"Subset data_params found: {subset_path}")
-        _print_dist(subset_path)
+        subset_path = _subset_params_path(args.segment_type, fraction=args.fraction)
+
+        if not os.path.exists(subset_path):
+            if not os.path.exists(orig_path):
+                print(f"Original data_params not found at:\n  {orig_path}")
+                print("Generating from dataset directory…")
+                sys.path.insert(0, _script_dir())
+                from data.data_utils import get_data_params
+                get_data_params(args.dataset_root, 'MedalCare-XL', 'median',
+                                args.segment_type, 'ecg')
+                if not os.path.exists(orig_path):
+                    raise FileNotFoundError(
+                        f"Could not generate {orig_path}. "
+                        "Check --dataset_root points to the MedalCare-XL root.")
+                print(f"Generated → {orig_path}")
+
+            pct = int(args.fraction * 100)
+            print(f"\nGenerating {pct}% subset for segment='{args.segment_type}':")
+            generate_subset_data_params(
+                orig_path, subset_path, args.segment_type, args.fraction, args.seed)
+        else:
+            print(f"Subset data_params found: {subset_path}")
+            _print_dist(subset_path)
 
     # ── Create / resume Optuna study ──────────────────────────────────────────
     # NOTE: hp_output_dir must be on a shared filesystem (e.g. /scratch or
