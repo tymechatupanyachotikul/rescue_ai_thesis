@@ -55,7 +55,6 @@ def _medalcare_uid_from_stem(stem: str) -> str:
     ``{session_id}_{cls}`` (e.g. ``S62_000069_lae``).  If the stem does not start
     with ``T\\d+_`` it is returned unchanged.
     """
-    stem = os.path.splitext(os.path.basename(stem))[0]
     return _T_PREFIX_RE.sub('', stem)
 
 
@@ -636,6 +635,7 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
 
             clf_results[param] = param_results
 
+            print(f'out root in linear probe : {out_root}')
             if out_root:
                 pdir = os.path.join(out_root, 'classification', param)
                 os.makedirs(pdir, exist_ok=True)
@@ -2057,35 +2057,56 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     va_latents: dict = {}
     va_metadata: list = []
 
-    with np.errstate(all='ignore'):
-        print("Collecting train latents...")
-        tr_latents, tr_metadata = collect_latents(
-            trainset, model, task_params, args, device,
-            aladin_metadata=_load_aladin_meta('train'))
-        if validset is not None:
-            print("Collecting valid latents...")
-            va_latents, va_metadata = collect_latents(
-                validset, model, task_params, args, device,
-                aladin_metadata=_load_aladin_meta('valid'))
-        print("Collecting test latents...")
-        te_latents, te_metadata = collect_latents(
-            testset,  model, task_params, args, device,
-            aladin_metadata=_load_aladin_meta('test'))
-
-    # Persist to disk — finetune.py _load_split() can read these back
     latents_dir = os.path.join(args.save, 'latents')
-    os.makedirs(latents_dir, exist_ok=True)
-    np.savez(os.path.join(latents_dir, 'train_latents.npz'), **tr_latents)
-    np.savez(os.path.join(latents_dir, 'test_latents.npz'),  **te_latents)
-    with open(os.path.join(latents_dir, 'train_metadata.json'), 'w') as f:
-        json.dump(tr_metadata, f, indent=2)
-    with open(os.path.join(latents_dir, 'test_metadata.json'), 'w') as f:
-        json.dump(te_metadata, f, indent=2)
-    if validset is not None:
-        np.savez(os.path.join(latents_dir, 'valid_latents.npz'), **va_latents)
-        with open(os.path.join(latents_dir, 'valid_metadata.json'), 'w') as f:
-            json.dump(va_metadata, f, indent=2)
-    print(f"  Saved latents to {latents_dir}")
+
+    def _latents_cached(split: str) -> bool:
+        return (os.path.exists(os.path.join(latents_dir, f'{split}_latents.npz')) and
+                os.path.exists(os.path.join(latents_dir, f'{split}_metadata.json')))
+
+    def _load_cached(split: str) -> tuple[dict, list]:
+        latents = dict(np.load(os.path.join(latents_dir, f'{split}_latents.npz')))
+        with open(os.path.join(latents_dir, f'{split}_metadata.json')) as f:
+            metadata = json.load(f)
+        return latents, metadata
+
+    splits_needed = ['train', 'test'] + (['valid'] if validset is not None else [])
+    all_cached = all(_latents_cached(s) for s in splits_needed)
+
+    if all_cached:
+        print(f"  Latents already saved in {latents_dir} — loading from disk.")
+        tr_latents, tr_metadata = _load_cached('train')
+        te_latents, te_metadata = _load_cached('test')
+        if validset is not None:
+            va_latents, va_metadata = _load_cached('valid')
+    else:
+        with np.errstate(all='ignore'):
+            print("Collecting train latents...")
+            tr_latents, tr_metadata = collect_latents(
+                trainset, model, task_params, args, device,
+                aladin_metadata=_load_aladin_meta('train'))
+            if validset is not None:
+                print("Collecting valid latents...")
+                va_latents, va_metadata = collect_latents(
+                    validset, model, task_params, args, device,
+                    aladin_metadata=_load_aladin_meta('valid'))
+            print("Collecting test latents...")
+            te_latents, te_metadata = collect_latents(
+                testset,  model, task_params, args, device,
+                aladin_metadata=_load_aladin_meta('test'))
+
+        # Persist to disk — finetune.py _load_split() can read these back
+        os.makedirs(latents_dir, exist_ok=True)
+        np.savez(os.path.join(latents_dir, 'train_latents.npz'), **tr_latents)
+        np.savez(os.path.join(latents_dir, 'test_latents.npz'),  **te_latents)
+        with open(os.path.join(latents_dir, 'train_metadata.json'), 'w') as f:
+            json.dump(tr_metadata, f, indent=2)
+        with open(os.path.join(latents_dir, 'test_metadata.json'), 'w') as f:
+            json.dump(te_metadata, f, indent=2)
+        if validset is not None:
+            np.savez(os.path.join(latents_dir, 'valid_latents.npz'), **va_latents)
+            with open(os.path.join(latents_dir, 'valid_metadata.json'), 'w') as f:
+                json.dump(va_metadata, f, indent=2)
+        print(f"  Saved latents to {latents_dir}")
 
     # Remap MedalCare-XL class labels for the segment type
     if dataset_name == 'medalcare-xl' and seg_type:
@@ -2141,6 +2162,8 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
 
     run_label     = seg_type if seg_type else 'all_classes'
     finetune_root = os.path.join(args.save, 'final_finetune_results', run_label)
+
+    print(finetune_root)
 
     # Params to skip in linear probing (patient_id is not a useful probe target)
     probe_skip = {'patient_id'}
