@@ -1601,8 +1601,10 @@ def collect_latents(dataloader, model, task_params, args, device,
     model.eval()
     model.return_latent = True
 
-    z0_list, z0_sample_list, m_list, ztL_list, metadata = [], [], [], [], []
-    has_m = True   # set False if model returns m=None
+    # z0_sample and zTL are not used in post-training probes; skip them to save
+    # significant GPU→CPU transfer and RAM (zTL alone is [N, T, q] float64).
+    z0_list, m_list, metadata = [], [], []
+    has_m     = True   # set False if model returns m=None
     not_found = 0
 
     with torch.no_grad():
@@ -1611,18 +1613,21 @@ def collect_latents(dataloader, model, task_params, args, device,
             mask  = mask.to(device)
 
             # returns (z0_mean, z0_sample, m, ztL)
-            z0, z0_samp, m, ztL = model(batch, 1, mask=mask)
+            z0, _z0_samp, m, _ztL = model(batch, 1, mask=mask)
             if m is None:
                 has_m = False
-            # ztL: [L, N, T, q] — mean over MC samples → [N, T, q]
-            ztL = ztL.mean(0).detach().cpu()
+
+            # Move to CPU immediately; discard GPU tensors
+            z0_cpu = z0.detach().cpu()
+            m_cpu  = m.detach().cpu() if (has_m and m is not None) else None
+            del _z0_samp, _ztL  # free GPU memory right away
 
             patient_ids = [item[1] for item in batch_y]
 
             for i in range(batch.shape[0]):
-                # ── ALADIN metadata path (takes priority over dataset_name logic) ──
+                # ── ALADIN metadata path ──────────────────────────────────────
                 if aladin_metadata is not None:
-                    file_path = batch_y[i][2]   # set by return_file_path=True
+                    file_path = batch_y[i][2]
                     uid = _medalcare_uid_from_stem(os.path.splitext(os.path.basename(file_path))[0])
                     aladin_entry = aladin_metadata.get(uid)
                     if aladin_entry is None:
@@ -1630,37 +1635,25 @@ def collect_latents(dataloader, model, task_params, args, device,
                         labels = {}
                     else:
                         labels = aladin_entry.get('labels', {})
-                    z0_list.append(z0[i].detach().cpu().numpy())
-                    z0_sample_list.append(z0_samp[i].detach().cpu().numpy())
-                    ztL_list.append(ztL[i].numpy())
-                    if has_m:
-                        m_list.append(m[i].detach().cpu().numpy())
+                    z0_list.append(z0_cpu[i].numpy())
+                    if has_m and m_cpu is not None:
+                        m_list.append(m_cpu[i].numpy())
                     metadata.append({'uid': uid, 'patient_id': uid, 'labels': labels})
 
-                # ── MedalCare-XL: derive UID from file path, labels from metadata ──
+                # ── MedalCare-XL ──────────────────────────────────────────────
                 elif dataset_name == 'medalcare-xl':
                     file_path = batch_y[i][2]
                     uid       = _medalcare_uid_from_stem(os.path.splitext(os.path.basename(file_path))[0])
                     uid_parts = uid.split('_')
                     run_id    = uid_parts[0]
-                    _cls      = '_'.join(uid_parts[2:])   # everything after run_id_session_id
-
-                    # Look up full labels from ALADIN metadata when available;
-                    # otherwise fall back to the class parsed from the UID.
-                    aladin_entry = aladin_metadata.get(uid) if aladin_metadata is not None else None
-                    if aladin_entry is not None:
-                        labels = aladin_entry.get('labels', {})
-                    else:
-                        labels = {'class': _cls, 'patient_id': run_id}
-
-                    z0_list.append(z0[i].detach().cpu().numpy())
-                    z0_sample_list.append(z0_samp[i].detach().cpu().numpy())
-                    ztL_list.append(ztL[i].numpy())
-                    if has_m:
-                        m_list.append(m[i].detach().cpu().numpy())
+                    _cls      = '_'.join(uid_parts[2:])
+                    labels    = {'class': _cls, 'patient_id': run_id}
+                    z0_list.append(z0_cpu[i].numpy())
+                    if has_m and m_cpu is not None:
+                        m_list.append(m_cpu[i].numpy())
                     metadata.append({'uid': uid, 'patient_id': run_id, 'labels': labels})
 
-                # ── UK Biobank / other: look up phenotype targets by EID ──────────
+                # ── UK Biobank / other ────────────────────────────────────────
                 else:
                     pid = patient_ids[i]
                     try:
@@ -1670,11 +1663,9 @@ def collect_latents(dataloader, model, task_params, args, device,
                         continue
                     labels = {col: targets[eid_idx, j].item()
                               for j, col in enumerate(columns)}
-                    z0_list.append(z0[i].detach().cpu().numpy())
-                    z0_sample_list.append(z0_samp[i].detach().cpu().numpy())
-                    ztL_list.append(ztL[i].numpy())
-                    if has_m:
-                        m_list.append(m[i].detach().cpu().numpy())
+                    z0_list.append(z0_cpu[i].numpy())
+                    if has_m and m_cpu is not None:
+                        m_list.append(m_cpu[i].numpy())
                     metadata.append({'uid': pid, 'patient_id': pid, 'labels': labels})
 
     if not_found:
@@ -1684,18 +1675,8 @@ def collect_latents(dataloader, model, task_params, args, device,
             print(f"  {not_found} patient IDs not found in phenotype targets — skipped.")
 
     latents = {'z0': np.stack(z0_list, axis=0)}
-    if z0_sample_list:
-        latents['z0_sample'] = np.stack(z0_sample_list, axis=0)
     if has_m and m_list:
         latents['m'] = np.stack(m_list, axis=0)
-    if ztL_list:
-        # Variable T across batches — pad to global max T with zeros
-        max_T = max(arr.shape[0] for arr in ztL_list)
-        q_dim = ztL_list[0].shape[-1]
-        ztL_padded = np.zeros((len(ztL_list), max_T, q_dim), dtype=ztL_list[0].dtype)
-        for idx, arr in enumerate(ztL_list):
-            ztL_padded[idx, :arr.shape[0], :] = arr
-        latents['zTL'] = ztL_padded   # [N, max_T, q]
 
     model.return_latent = False
     return latents, metadata
@@ -2153,14 +2134,10 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
         eval_metadata = te_metadata
 
     # Build combined latent key when modulator is present
-    has_m      = 'm' in tr_latents and 'm' in eval_latents
-    has_sample = 'z0_sample' in tr_latents and 'z0_sample' in eval_latents
+    has_m = 'm' in tr_latents and 'm' in eval_latents
     if has_m:
         tr_latents['z0_m']   = np.concatenate([tr_latents['z0'],   tr_latents['m']],   axis=1)
         eval_latents['z0_m'] = np.concatenate([eval_latents['z0'], eval_latents['m']], axis=1)
-    if has_sample and has_m:
-        tr_latents['z0_sample_m']   = np.concatenate([tr_latents['z0_sample'],   tr_latents['m']],   axis=1)
-        eval_latents['z0_sample_m'] = np.concatenate([eval_latents['z0_sample'], eval_latents['m']], axis=1)
 
     run_label     = seg_type if seg_type else 'all_classes'
     finetune_root = os.path.join(args.save, 'final_finetune_results', run_label)
@@ -2172,8 +2149,6 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     gmm_n_clusters = None if dataset_name == 'medalcare-xl' else 8
 
     latent_keys = ['z0'] + (['m', 'z0_m'] if has_m else [])
-    if has_sample:
-        latent_keys += ['z0_sample'] + (['z0_sample_m'] if has_m else [])
     for lkey in latent_keys:
         print(f"\n=== Linear probes ({lkey}) ===")
         with np.errstate(all='ignore'):
