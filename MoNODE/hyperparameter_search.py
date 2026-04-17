@@ -300,9 +300,9 @@ def objective(trial, base_args, subset_path: str, gpu_id: int, ecg_cfg: dict) ->
 
     if args.model == 'node':
         args.de_L  = trial.suggest_int('de_L',  2, 4)
-        args.de_H  = trial.suggest_int('de_H',  100, 300, step=50)
+        args.de_H  = trial.suggest_int('de_H',  100, 300, step=100)
         args.dec_L = trial.suggest_int('dec_L', 2, 4)
-        args.dec_H = trial.suggest_int('dec_H', 100, 300, step=50)
+        args.dec_H = trial.suggest_int('dec_H', 100, 300, step=100)
     elif args.model == 'vae':
         args.rnn_hidden_dec = trial.suggest_int('rnn_hidden_dec', 32, 64, step=32)
     
