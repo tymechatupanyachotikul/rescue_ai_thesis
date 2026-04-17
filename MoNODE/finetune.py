@@ -1994,7 +1994,7 @@ def _resample_sinus_balanced_idx(classes: np.ndarray,
 
 
 def run_post_training_probes(args, model, device, trainset, testset, task_params, run,
-                              validset=None):
+                              validset=None, ckpt_path=None):
     """Load best checkpoint, collect latents, run OLS linear probes, log to wandb.
 
     Evaluation is done on the **combined valid + test** set (when validset is
@@ -2007,7 +2007,8 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     The saved latent files follow the finetune.py naming convention so the
     standalone ``finetune.py`` can be re-run on them for full probe analysis.
     """
-    ckpt_path = os.path.join(args.save, 'model.pth')
+    if ckpt_path is None:
+        ckpt_path = os.path.join(args.save, 'model.pth')
     if not os.path.exists(ckpt_path):
         print(f"No checkpoint at {ckpt_path} — skipping post-training probes.")
         return

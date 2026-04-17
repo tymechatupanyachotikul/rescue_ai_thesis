@@ -221,7 +221,7 @@ if __name__ == '__main__':
 
     if args.task == 'ecg':
         run_post_training_probes(args, model, device, trainset, testset, params[args.task], run,
-                                  validset=validset)
+                                  validset=validset, ckpt_path=fname)
 
     if args.summary_output_dir:
         save_run_summary(
