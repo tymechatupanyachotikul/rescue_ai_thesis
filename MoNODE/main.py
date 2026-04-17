@@ -216,7 +216,8 @@ if __name__ == '__main__':
         model.load_state_dict(ckpt["state_dict"])
         logger.info('********** Resume training for model {} ********** '.format(fname))
 
-    train_model(args, model, plotter, trainset, validset, testset, logger, params[args.task], run)
+    if args.Nepoch > 0:
+        train_model(args, model, plotter, trainset, validset, testset, logger, params[args.task], run)
 
     if args.task == 'ecg':
         run_post_training_probes(args, model, device, trainset, testset, params[args.task], run,
