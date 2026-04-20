@@ -234,6 +234,7 @@ if __name__ == '__main__':
             model=args.model,
             dataset=params[args.task]['dataset'],
             segment_type=getattr(args, 'segment_type', None),
+            original_dir=None
         )
 
     run.finish()
