@@ -364,11 +364,21 @@ def main() -> None:
     # ── Load latents for each split ──────────────────────────────────────────
     print(f"\n── Model 1 ({args.model1_segment}) ──")
     tr_lat1, tr_meta1 = _load_split(args.model1_latents_dir, 'train', aladin_meta)
+    va_lat1, va_meta1 = _load_split(args.model1_latents_dir, 'valid', aladin_meta)
     te_lat1, te_meta1 = _load_split(args.model1_latents_dir, 'test',  aladin_meta)
 
     print(f"\n── Model 2 ({args.model2_segment}) ──")
     tr_lat2, tr_meta2 = _load_split(args.model2_latents_dir, 'train', aladin_meta)
+    va_lat2, va_meta2 = _load_split(args.model2_latents_dir, 'valid', aladin_meta)
     te_lat2, te_meta2 = _load_split(args.model2_latents_dir, 'test',  aladin_meta)
+
+    # Merge valid + test into a single evaluation split per model
+    common_keys1 = set(va_lat1) & set(te_lat1)
+    common_keys2 = set(va_lat2) & set(te_lat2)
+    ev_lat1 = {k: np.concatenate([va_lat1[k], te_lat1[k]], axis=0) for k in common_keys1}
+    ev_lat2 = {k: np.concatenate([va_lat2[k], te_lat2[k]], axis=0) for k in common_keys2}
+    ev_meta1 = va_meta1 + te_meta1
+    ev_meta2 = va_meta2 + te_meta2
 
     # ── Match and concatenate ─────────────────────────────────────────────────
     print(f"\n── Matching train splits ──")
@@ -377,18 +387,19 @@ def main() -> None:
         latent_key=args.latent_key,
         prefer_labels=args.prefer_labels,
     )
-    print(f"\n── Matching test splits ──")
+    print(f"\n── Matching eval splits (valid + test) ──")
     te_combined, te_meta = _match_and_combine(
-        te_lat1, te_meta1, te_lat2, te_meta2,
+        ev_lat1, ev_meta1, ev_lat2, ev_meta2,
         latent_key=args.latent_key,
         prefer_labels=args.prefer_labels,
     )
 
     d1 = tr_lat1[args.latent_key].shape[1]
     d2 = tr_lat2[args.latent_key].shape[1]
-    print(f"\n  Combined latent dim: {d1} + {d2} = {d1 + d2}")
-    print(f"  Train samples: {tr_combined[args.latent_key].shape[0]}")
-    print(f"  Test  samples: {te_combined[args.latent_key].shape[0]}")
+    print(f"\n  Combined latent dim : {d1} + {d2} = {d1 + d2}")
+    print(f"  Train samples       : {tr_combined[args.latent_key].shape[0]}")
+    print(f"  Eval  samples       : {te_combined[args.latent_key].shape[0]}"
+          f"  (valid={len(va_meta1 + va_meta2) // 2}, test={len(te_meta1 + te_meta2) // 2})")
 
     # ── Mutual information between the two latent spaces ─────────────────────
     # Computed on the TRAIN split (more samples → better estimates)
@@ -461,7 +472,8 @@ def main() -> None:
         'latent_key':     args.latent_key,
         'latent_dim':     d1 + d2,
         'n_train':        int(tr_combined[args.latent_key].shape[0]),
-        'n_test':         int(te_combined[args.latent_key].shape[0]),
+        'n_eval':         int(te_combined[args.latent_key].shape[0]),
+        'eval_note':      'valid + test combined',
     }
     with open(os.path.join(args.output_dir, 'training_metrics.json'), 'w') as f:
         json.dump(training_stub, f, indent=2)
