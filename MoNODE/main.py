@@ -229,7 +229,7 @@ if __name__ == '__main__':
 
     if args.summary_output_dir:
         save_run_summary(
-            run_dir=args.save if args.continue_dir is None else args.continue_dir,
+            run_dir=args.save if not args.continue_training else args.continue_dir,
             output_dir=args.summary_output_dir,
             model=args.model,
             dataset=params[args.task]['dataset'],
