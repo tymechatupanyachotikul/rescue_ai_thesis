@@ -54,6 +54,21 @@ def _parse_medalcare_ids(path: str) -> tuple[str, str, str]:
     return run_id, session_id, _cls
 
 
+def _uid_from_row(row, dataset: str) -> str:
+    """Derive the base UID from a CSV row without loading the ECG file.
+
+    Mirrors get_unique_id() but works on raw path strings.
+    """
+    path = str(row.data_path)
+    if dataset == 'medalcare-xl':
+        parts = path.split('/')
+        run_id     = parts[-2].split('_')[1]
+        session_id = parts[-1].split('_')[0]
+        _cls       = parts[-4]
+        return f'{run_id}_{session_id}_{_cls}'
+    return os.path.splitext(os.path.basename(path))[0]
+
+
 def get_unique_id(record, dataset: str, idx: int | None = None) -> str:
     """Stable, human-readable identifier for one ECG recording.
 
@@ -290,6 +305,7 @@ def process_and_save_segments(
     beat_type: str,
     dataset: str,
     phenotype_data: dict | None = None,
+    out_beat_type: str | None = None,
 ) -> dict:
     """Segment and save one ECG record.  No shared mutable state is touched.
 
@@ -353,10 +369,11 @@ def process_and_save_segments(
         return result
 
     # ── Save ─────────────────────────────────────────────────────────────────
-    base_uid = get_unique_id(record, dataset)
+    base_uid  = get_unique_id(record, dataset)
+    _save_bt  = out_beat_type if out_beat_type is not None else beat_type
 
     for seg_type, (segs, _) in collected.items():
-        save_dir = os.path.join(out_dir, seg_type, beat_type)
+        save_dir = os.path.join(out_dir, seg_type, _save_bt)
         save_ecg_segment(segs, raw_ecg, base_uid, seg_type, save_dir, beat_type)
 
     # Segment lengths: int for median (one segment per type), list for sampled.
@@ -437,6 +454,64 @@ def _to_serialisable(obj):
 
 
 # ---------------------------------------------------------------------------
+# Retry preflight
+# ---------------------------------------------------------------------------
+
+def _retry_preflight(
+    df,
+    dataset: str,
+    out_dir: str,
+    split: str,
+    segment_type: str,
+    beat_type: str,
+    beat_type_save: str,
+) -> set[str]:
+    """Copy already-processed files to the retry directory; return UIDs to skip.
+
+    For each CSV row we derive the base UID without loading the ECG file.
+    If any output file for that UID exists in the original {beat_type} directory
+    (under any required segment sub-folder), we copy ALL matching files for that
+    UID into the {beat_type_save} directory and mark the UID to be skipped during
+    processing.
+    """
+    import glob as _glob
+    import shutil
+
+    seg_types = _SEG_MODE[segment_type][0]
+    skip_uids: set[str] = set()
+    n_copied = 0
+    n_to_process = 0
+
+    # Pre-create all retry destination directories
+    for st in seg_types:
+        os.makedirs(os.path.join(out_dir, split, st, beat_type_save), exist_ok=True)
+
+    print(f"\nRetry pre-flight: scanning {len(df)} records …")
+    for row in tqdm(df.itertuples(index=False), total=len(df), desc="Checking cache"):
+        uid = _uid_from_row(row, dataset)
+        found_any = False
+
+        for st in seg_types:
+            src_dir = os.path.join(out_dir, split, st, beat_type)
+            dst_dir = os.path.join(out_dir, split, st, beat_type_save)
+            # glob covers both median ({uid}.pth) and sampled ({uid}_0.pth, …)
+            matches = _glob.glob(os.path.join(src_dir, f'{uid}*.pth'))
+            for src in matches:
+                shutil.copy2(src, os.path.join(dst_dir, os.path.basename(src)))
+                found_any = True
+
+        if found_any:
+            skip_uids.add(uid)
+            n_copied += 1
+        else:
+            n_to_process += 1
+
+    print(f"  Found in original dir  : {n_copied:>6}  → copied to '{beat_type_save}/'")
+    print(f"  Not found (will process): {n_to_process:>6}")
+    return skip_uids
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -469,6 +544,12 @@ if __name__ == "__main__":
                            help="Generate diagnostic plots only, do not save segments")
     argparser.add_argument("--plot_dir",     type=str,
                            default='/home/tchatupanyacho/rescue_ai_thesis/results/plots')
+    argparser.add_argument("--retry",        action='store_true',
+                           help=(
+                               "Retry mode: save to {beat_type}_retry directories. "
+                               "Files already present in the original {beat_type} dir are "
+                               "copied over and skipped; only missing records are re-processed."
+                           ))
     args = argparser.parse_args()
 
     # ── Dataset and split detection ───────────────────────────────────────────
@@ -492,6 +573,8 @@ if __name__ == "__main__":
 
     split = args.split
 
+    beat_type_save = beat_type + '_retry' if args.retry else beat_type
+
     out_dir   = os.path.join(args.out_dir, split)
     error_dir = os.path.join(args.out_dir, 'errors')
     os.makedirs(out_dir,   exist_ok=True)
@@ -501,12 +584,14 @@ if __name__ == "__main__":
     print(f"Split        : {split}")
     print(f"Segment type : {segment_type}")
     print(f"Beat type    : {beat_type}")
+    if args.retry:
+        print(f"Retry mode   : ON  (saving to '{beat_type_save}/')")
 
     # ── Pre-create all output directories ────────────────────────────────────
     # Done once here so workers never pay the makedirs syscall cost.
     if not args.plot_only:
         for st in _SEG_MODE[segment_type][0]:
-            os.makedirs(os.path.join(out_dir, st, beat_type), exist_ok=True)
+            os.makedirs(os.path.join(out_dir, st, beat_type_save), exist_ok=True)
 
     # ── Optional: load UK Biobank phenotype targets ───────────────────────────
     phenotype_data: dict | None = None
@@ -526,6 +611,17 @@ if __name__ == "__main__":
         }
         print(f"  {len(raw['eids'])} EIDs, {len(raw['columns'])} phenotypes.")
 
+    # ── Load CSV ──────────────────────────────────────────────────────────────
+    df     = pd.read_csv(args.input_path, nrows=3) if args.demo else pd.read_csv(args.input_path)
+    chunks = [df.iloc[i:i + args.batch_size] for i in range(0, len(df), args.batch_size)]
+
+    # ── Retry pre-flight: copy cached files, build skip set ──────────────────
+    skip_uids: set[str] = set()
+    if args.retry:
+        skip_uids = _retry_preflight(
+            df, dataset, args.out_dir, split, segment_type, beat_type, beat_type_save,
+        )
+
     # ── Load ALADIN ────────────────────────────────────────────────────────────
     print("Loading ALADIN ...")
     aladin = ALADIN(
@@ -533,9 +629,6 @@ if __name__ == "__main__":
         debug={"segmenter": False, "afibdetector": False, "reflection": False, "total": False},
     )
 
-    # ── Load CSV ──────────────────────────────────────────────────────────────
-    df     = pd.read_csv(args.input_path, nrows=3) if args.demo else pd.read_csv(args.input_path)
-    chunks = [df.iloc[i:i + args.batch_size] for i in range(0, len(df), args.batch_size)]
     print(f"Processing {len(df)} records in {len(chunks)} batches ({args.workers} workers) ...")
 
     # ── Error / stats tracking (accessed only by the main thread) ─────────────
@@ -582,6 +675,16 @@ if __name__ == "__main__":
         records          = [d[0] for d in loaded_data]
         original_records = [d[1] for d in loaded_data]
 
+        # In retry mode, drop records whose files were already copied
+        if skip_uids:
+            pairs = [(rec, orig) for rec, orig in zip(records, original_records)
+                     if get_unique_id(rec, dataset) not in skip_uids]
+            records, original_records = ([p[0] for p in pairs],
+                                          [p[1] for p in pairs])
+            if not records:
+                del loaded_data
+                continue
+
         # ALADIN batch segmentation + reflection (must be sequential)
         aladin.segmenter.batch(records)
         aladin.reflection.batch(records)
@@ -617,7 +720,7 @@ if __name__ == "__main__":
                     pool.submit(
                         process_and_save_segments,
                         rec, orig, segment_type, out_dir, beat_type,
-                        dataset, phenotype_data,
+                        dataset, phenotype_data, beat_type_save,
                     )
                     for rec, orig in zip(records, original_records)
                 ]
@@ -679,4 +782,12 @@ if __name__ == "__main__":
             print(f"  Discarded        — class dist : {dis}")
     print(f"\n  Statistics → {stats_path}")
     print(f"  Metadata   → {metadata_path}")
+
+    if args.retry:
+        print(f"\n  Files in '{beat_type_save}' directories:")
+        for st in _SEG_MODE[segment_type][0]:
+            d = os.path.join(out_dir, st, beat_type_save)
+            n = len([f for f in os.listdir(d) if f.endswith('.pth')]) if os.path.isdir(d) else 0
+            print(f"    {st:15s}: {n:>6} files  ({d})")
+
     print("=" * 60)
