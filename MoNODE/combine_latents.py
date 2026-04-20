@@ -452,6 +452,7 @@ def main() -> None:
     os.makedirs(probe_out_root, exist_ok=True)
 
     is_medalcare = 'medalcare' in args.dataset.lower()
+    _skip = set(args.skip_params or []) | {'patient_id'}
     print(f"\n── Running linear probes ──")
     run_linear_probes(
         train_latents=tr_combined,
@@ -460,7 +461,8 @@ def main() -> None:
         test_metadata=te_meta,
         latent_key=args.latent_key,
         out_root=probe_out_root,
-        skip_params=args.skip_params,
+        skip_params=_skip,
+        methods={'ols'},
         balance_sinus=(is_medalcare and args.balance_sinus),
     )
 
