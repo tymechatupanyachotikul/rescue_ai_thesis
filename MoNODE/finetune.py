@@ -76,9 +76,11 @@ def _load_split(latents_dir: str, split: str,
     """
     npz_candidates = [
         os.path.join(latents_dir, f'latent_tensors_{split}.npz'),
+        os.path.join(latents_dir, f'{split}_latents.npz'),
     ]
     json_candidates = [
         os.path.join(latents_dir, f'latent_meta_dict_{split}.json'),
+        os.path.join(latents_dir, f'{split}_metadata.json'),
     ]
 
     npz_path  = next((p for p in npz_candidates  if os.path.exists(p)), None)
