@@ -154,6 +154,7 @@ def save_run_summary(
     model: str,
     dataset: str,
     segment_type: str | None,
+    original_dir: str | None,
 ) -> str:
     """Compile and save a summary JSON for one run.
 
@@ -186,8 +187,12 @@ def save_run_summary(
     if train_mj is not None:
         summary['training'] = train_mj
     else:
-        print(f"  [summary] Warning: training_metrics.json not found in {run_dir}")
-        summary['training'] = {}
+        if original_dir is not None:
+            train_mj = _load_json(os.path.join(original_dir, 'training_metrics.json'))
+        
+        if train_mj is None:
+            print(f"  [summary] Warning: training_metrics.json not found in {run_dir}")
+            summary['training'] = {}
 
     # ── Probe results ─────────────────────────────────────────────────────────
     finetune_root = os.path.join(run_dir, 'final_finetune_results')
@@ -218,6 +223,8 @@ def main():
     )
     parser.add_argument('--run_dir',      required=True,
                         help="Run directory (args.save from main.py)")
+    parser.add_argument('--original_dir',      required=False, default=None,
+                        help="Original directory (args.save from main.py)")
     parser.add_argument('--output_dir',   required=True,
                         help="Where to write the summary JSON")
     parser.add_argument('--model',        required=True,
@@ -235,6 +242,7 @@ def main():
         model=args.model,
         dataset=args.dataset,
         segment_type=args.segment_type,
+        original_dir=args.original_dir,
     )
     print(f"Done: {path}")
 

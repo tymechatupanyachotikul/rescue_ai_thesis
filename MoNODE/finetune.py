@@ -2162,7 +2162,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
         eval_latents['z0_m'] = np.concatenate([eval_latents['z0'], eval_latents['m']], axis=1)
 
     run_label     = seg_type if seg_type else 'all_classes'
-    finetune_root = os.path.join(args.save, 'final_finetune_results', run_label)
+    finetune_root = os.path.join(args.save if not args.continue_training else args.continue_dir, 'final_finetune_results', run_label)
 
     print(finetune_root)
 
