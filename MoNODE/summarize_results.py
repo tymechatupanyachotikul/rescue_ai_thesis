@@ -232,7 +232,7 @@ def main():
     parser.add_argument('--dataset',      required=True,
                         help="Dataset name (medalcare-xl / uk-biobank)")
     parser.add_argument('--segment_type', default=None,
-                        choices=['atrial', 'ventricular', 'whole'],
+                        choices=['atrial', 'ventricular', 'whole', 'combined'],
                         help="Segment type (leave blank for no segmentation)")
     args = parser.parse_args()
 
