@@ -1995,6 +1995,249 @@ def _resample_sinus_balanced_idx(classes: np.ndarray,
     return np.arange(len(classes)), all_idx
 
 
+# ---------------------------------------------------------------------------
+# Pearson correlation heatmap
+# ---------------------------------------------------------------------------
+
+def compute_pearson_correlations(train_latents: dict, train_metadata: list,
+                                  latent_key: str = 'z0',
+                                  out_root: str | None = None) -> dict:
+    """Compute Pearson correlation between each latent dimension and each
+    continuous phenotype parameter.
+
+    Only continuous (non-categorical, non-binary) parameters are included.
+    NaN labels are dropped per-parameter before computing the correlation.
+
+    Returns
+    -------
+    corr_dict : dict  param -> list[float]  (length = latent dim)
+                Pearson r for each latent dimension.
+    """
+    from scipy.stats import pearsonr as _pearsonr
+
+    X = train_latents[latent_key].astype(np.float64)   # [N, D]
+    D = X.shape[1]
+
+    _, valid_indices, valid_labels = prepare_latents_and_labels(train_latents, train_metadata)
+
+    # Keep only continuous parameters (same heuristic as run_linear_probes)
+    cont_params = {}
+    for param, indices in valid_indices.items():
+        labels = valid_labels[param]
+        if len(indices) < 10:
+            continue
+        if isinstance(labels[0], str):
+            continue
+        arr = np.array(labels, dtype=float)
+        n_distinct = len(set(arr.tolist()))
+        if n_distinct <= 2:
+            continue
+        cont_params[param] = (np.array(indices), arr)
+
+    if not cont_params:
+        print(f"  [Pearson/{latent_key}] No continuous parameters found — skipping.")
+        return {}
+
+    params_sorted = sorted(cont_params.keys())
+    # corr_matrix: rows = params, cols = latent dims
+    corr_matrix = np.full((len(params_sorted), D), float('nan'))
+    pval_matrix = np.full((len(params_sorted), D), float('nan'))
+
+    for i, param in enumerate(params_sorted):
+        idx, y = cont_params[param]
+        X_sub = X[idx]                    # [n_valid, D]
+        for j in range(D):
+            x_col = X_sub[:, j]
+            # Skip if near-constant
+            if x_col.std() < 1e-10:
+                continue
+            try:
+                r, p = _pearsonr(x_col, y)
+                corr_matrix[i, j] = float(r)
+                pval_matrix[i, j] = float(p)
+            except Exception:
+                pass
+
+    corr_dict = {param: corr_matrix[i].tolist() for i, param in enumerate(params_sorted)}
+    pval_dict = {param: pval_matrix[i].tolist() for i, param in enumerate(params_sorted)}
+
+    if out_root:
+        out_dir = os.path.join(out_root, 'pearson')
+        os.makedirs(out_dir, exist_ok=True)
+
+        # Save JSON
+        results = {'correlations': corr_dict, 'p_values': pval_dict,
+                   'latent_key': latent_key, 'n_latent_dims': D,
+                   'params': params_sorted}
+        with open(os.path.join(out_dir, 'pearson_correlations.json'), 'w') as f:
+            json.dump(results, f, indent=2)
+
+        # Plot heatmap
+        fig, ax = plt.subplots(figsize=(max(8, D * 0.4 + 2), max(4, len(params_sorted) * 0.5 + 1)))
+        im = ax.imshow(corr_matrix, aspect='auto', cmap='RdBu_r', vmin=-1, vmax=1)
+        ax.set_xticks(np.arange(D))
+        ax.set_xticklabels([f'z{j}' for j in range(D)], fontsize=max(5, 8 - D // 10),
+                           rotation=90)
+        ax.set_yticks(np.arange(len(params_sorted)))
+        ax.set_yticklabels(params_sorted, fontsize=8)
+        ax.set_xlabel('Latent dimension', fontsize=10)
+        ax.set_ylabel('Phenotype parameter', fontsize=10)
+        ax.set_title(f'Pearson correlation — {latent_key}', fontsize=11, fontweight='bold')
+        plt.colorbar(im, ax=ax, label='Pearson r')
+        fig.tight_layout()
+        fig.savefig(os.path.join(out_dir, 'pearson_heatmap.png'), dpi=150)
+        plt.close(fig)
+        print(f"  [Pearson/{latent_key}] Saved heatmap + JSON → {out_dir}")
+
+    return corr_dict
+
+
+# ---------------------------------------------------------------------------
+# Label efficiency probes
+# ---------------------------------------------------------------------------
+
+def run_label_efficiency_probes(tr_latents: dict, tr_metadata: list,
+                                 eval_latents: dict, eval_metadata: list,
+                                 latent_key: str = 'z0',
+                                 out_root: str | None = None,
+                                 fractions: list | None = None,
+                                 methods: set | None = None,
+                                 skip_params: set | None = None,
+                                 balance_sinus: bool = False,
+                                 seed: int = 42) -> dict:
+    """Run linear probes at multiple training-set fractions.
+
+    For each fraction in *fractions* (default: [0.01, 0.10, 0.50, 1.00]):
+      - Randomly subsample that fraction of the training indices (fixed seed).
+      - Run ``run_linear_probes`` using only those samples.
+      - Save per-fraction metrics.
+
+    A summary JSON and a learning-curve plot (fraction vs best R² / F1) are
+    written to ``{out_root}/label_efficiency/{latent_key}/``.
+
+    Returns
+    -------
+    all_results : dict  fraction_str -> probe_results dict
+    """
+    if fractions is None:
+        fractions = [0.01, 0.10, 0.50, 1.00]
+
+    rng = np.random.default_rng(seed)
+    N   = len(tr_metadata)
+
+    all_results: dict = {}
+
+    for frac in fractions:
+        n_samples = max(1, int(round(frac * N)))
+        frac_str  = f'{frac:.0%}'
+
+        # Subsample training indices (without replacement)
+        indices = np.sort(rng.choice(N, size=n_samples, replace=False))
+        sub_latents  = {k: v[indices] for k, v in tr_latents.items()}
+        sub_metadata = [tr_metadata[i] for i in indices]
+
+        frac_out = os.path.join(out_root, 'label_efficiency', latent_key, frac_str) \
+            if out_root else None
+        if frac_out:
+            os.makedirs(frac_out, exist_ok=True)
+
+        print(f"\n  [label efficiency] {latent_key}  fraction={frac_str}  "
+              f"n_train={n_samples} / {N}")
+
+        with np.errstate(all='ignore'):
+            results = run_linear_probes(
+                sub_latents,  sub_metadata,
+                eval_latents, eval_metadata,
+                latent_key=latent_key,
+                out_root=frac_out,
+                methods=methods or {'ols'},
+                skip_params=skip_params,
+                balance_sinus=balance_sinus,
+            )
+
+        all_results[frac_str] = results
+
+    # ── Persist summary JSON ─────────────────────────────────────────────────
+    if out_root:
+        summary_dir = os.path.join(out_root, 'label_efficiency', latent_key)
+        os.makedirs(summary_dir, exist_ok=True)
+
+        serialisable: dict = {}
+        for frac_str, res in all_results.items():
+            serialisable[frac_str] = {
+                'regression':     {p: {m: r['metrics'] for m, r in mr.items()}
+                                   for p, mr in res.get('regression', {}).items()},
+                'classification': {p: {m: r['metrics'] for m, r in mr.items()}
+                                   for p, mr in res.get('classification', {}).items()},
+            }
+        with open(os.path.join(summary_dir, 'label_efficiency_summary.json'), 'w') as f:
+            json.dump(serialisable, f, indent=2)
+
+        # ── Learning-curve plots ──────────────────────────────────────────────
+        frac_vals = [float(f.rstrip('%')) / 100 for f in serialisable.keys()]
+        frac_labels = list(serialisable.keys())
+
+        # Regression: best R² per param across methods
+        reg_params: dict[str, list[float]] = {}
+        for frac_str, res in serialisable.items():
+            for param, method_metrics in res['regression'].items():
+                r2_vals = [m.get('r2', float('nan')) for m in method_metrics.values()
+                           if isinstance(m.get('r2'), float)]
+                best_r2 = max(r2_vals) if r2_vals else float('nan')
+                reg_params.setdefault(param, []).append(best_r2)
+
+        if reg_params:
+            fig, ax = plt.subplots(figsize=(7, 4))
+            for param, r2s in sorted(reg_params.items()):
+                ax.plot(frac_vals, r2s, marker='o', label=param)
+            ax.set_xscale('log')
+            ax.set_xticks(frac_vals)
+            ax.set_xticklabels(frac_labels, fontsize=8)
+            ax.set_xlabel('Training fraction', fontsize=10)
+            ax.set_ylabel('Best R²', fontsize=10)
+            ax.set_title(f'Label efficiency — regression ({latent_key})',
+                         fontsize=11, fontweight='bold')
+            ax.legend(fontsize=7, framealpha=0.8, bbox_to_anchor=(1, 1), loc='upper left')
+            ax.spines[['top', 'right']].set_visible(False)
+            fig.tight_layout()
+            fig.savefig(os.path.join(summary_dir, 'label_efficiency_regression.png'), dpi=130)
+            plt.close(fig)
+
+        # Classification: best primary metric (f1_binary | f1_macro | accuracy) per param
+        clf_params: dict[str, list[float]] = {}
+        for frac_str, res in serialisable.items():
+            for param, method_metrics in res['classification'].items():
+                best_score = float('nan')
+                for m in method_metrics.values():
+                    score = next((m.get(k) for k in ('f1_binary', 'f1_macro', 'accuracy')
+                                  if m.get(k) is not None), float('nan'))
+                    if not np.isnan(float(score)):
+                        best_score = max(best_score, float(score)) \
+                            if not np.isnan(best_score) else float(score)
+                clf_params.setdefault(param, []).append(best_score)
+
+        if clf_params:
+            fig, ax = plt.subplots(figsize=(7, 4))
+            for param, scores in sorted(clf_params.items()):
+                ax.plot(frac_vals, scores, marker='o', label=param)
+            ax.set_xscale('log')
+            ax.set_xticks(frac_vals)
+            ax.set_xticklabels(frac_labels, fontsize=8)
+            ax.set_xlabel('Training fraction', fontsize=10)
+            ax.set_ylabel('Best score', fontsize=10)
+            ax.set_title(f'Label efficiency — classification ({latent_key})',
+                         fontsize=11, fontweight='bold')
+            ax.legend(fontsize=7, framealpha=0.8, bbox_to_anchor=(1, 1), loc='upper left')
+            ax.spines[['top', 'right']].set_visible(False)
+            fig.tight_layout()
+            fig.savefig(os.path.join(summary_dir, 'label_efficiency_classification.png'), dpi=130)
+            plt.close(fig)
+
+        print(f"  [label efficiency/{latent_key}] Summary → {summary_dir}")
+
+    return all_results
+
+
 def run_post_training_probes(args, model, device, trainset, testset, task_params, run,
                               validset=None, ckpt_path=None):
     """Load best checkpoint, collect latents, run OLS linear probes, log to wandb.
@@ -2191,6 +2434,27 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
 
         # ── Clustering ────────────────────────────────────────────────────────
 
+    # ── Label efficiency & Pearson correlations (UK Biobank) ──────────────────
+    if dataset_name != 'medalcare-xl':
+        for lkey in latent_keys:
+            print(f"\n=== Label efficiency probes ({lkey}) ===")
+            run_label_efficiency_probes(
+                tr_latents,   tr_metadata,
+                eval_latents, eval_metadata,
+                latent_key=lkey,
+                out_root=finetune_root,
+                fractions=[0.01, 0.10, 0.50, 1.00],
+                methods={'ols'},
+                skip_params=probe_skip,
+            )
+
+            print(f"\n=== Pearson correlations ({lkey}) ===")
+            compute_pearson_correlations(
+                tr_latents, tr_metadata,
+                latent_key=lkey,
+                out_root=os.path.join(finetune_root, lkey),
+            )
+
     print("========== Post-training probes complete ==========\n")
 
 
@@ -2222,6 +2486,12 @@ if __name__ == '__main__':
     parser.add_argument('--clustering_method', type=str, default='kmeans',
                         choices=['gmm', 'kmeans'],
                         help='Clustering algorithm: gmm (diagonal GMM) or kmeans.')
+    parser.add_argument('--label_efficiency', action='store_true', default=False,
+                        help='Run probes at 1%%, 10%%, 50%%, 100%% of training data '
+                             'and plot learning curves.')
+    parser.add_argument('--pearson', action='store_true', default=False,
+                        help='Compute Pearson correlation between latent dims and '
+                             'phenotype parameters, and save a heatmap.')
     args = parser.parse_args()
 
     root_dir = args.root_dir
@@ -2368,6 +2638,31 @@ if __name__ == '__main__':
                     tag='k10',
                     clustering_method=_cm,
                 )
+
+    # ── Label efficiency probes ───────────────────────────────────────────────
+    if args.label_efficiency:
+        for lkey in latent_keys:
+            print(f"\n=== Label efficiency probes ({lkey}) ===")
+            run_label_efficiency_probes(
+                tr_latents,   tr_metadata,
+                eval_latents, eval_metadata,
+                latent_key=lkey,
+                out_root=finetune_root,
+                fractions=[0.01, 0.10, 0.50, 1.00],
+                methods=methods,
+                skip_params=probe_skip,
+                balance_sinus=(dataset_name == 'medalcare-xl'),
+            )
+
+    # ── Pearson correlation heatmaps ──────────────────────────────────────────
+    if args.pearson:
+        for lkey in latent_keys:
+            print(f"\n=== Pearson correlations ({lkey}) ===")
+            compute_pearson_correlations(
+                tr_latents, tr_metadata,
+                latent_key=lkey,
+                out_root=os.path.join(finetune_root, lkey),
+            )
 
     # ── Latent trajectory analysis ────────────────────────────────────────────
     if 'zTL' in eval_latents:

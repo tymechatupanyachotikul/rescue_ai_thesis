@@ -142,6 +142,10 @@ parser.add_argument('--summary_output_dir', type=str, default=None,
                     help="Directory to save the run summary JSON "
                          "({segment_type}_{model}_{dataset}.json). "
                          "Skipped if not provided.")
+parser.add_argument('--summary_filename', type=str, default=None,
+                    help="Override the auto-generated summary JSON filename "
+                         "(e.g. my_run.json). Must include the .json extension. "
+                         "Ignored if --summary_output_dir is not set.")
 parser.add_argument('--continue_dir', type=str, default='results/',
                     help="Directory name for continue training")
 
@@ -240,7 +244,8 @@ if __name__ == '__main__':
             model='monode' if args.modulator_dim > 0 else args.model,
             dataset=params[args.task]['dataset'],
             segment_type=getattr(args, 'segment_type', None),
-            original_dir=None
+            original_dir=None,
+            filename=args.summary_filename,
         )
 
     run.finish()
