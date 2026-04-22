@@ -69,10 +69,10 @@ def build_model(args, device, dtype, **kwargs):
     if args.modulator_dim>0 or args.content_dim>0:
         if args.task == 'bb':
             inv_enc = INV_ENC(task=args.task, modulator_dim=args.modulator_dim, content_dim = args.content_dim,
-                cnn_filt=args.cnn_filt_inv, rnn_hidden=10, T_inv=args.T_inv, vae_enc=vae.encoder, device=device, **kwargs).to(dtype)
+                cnn_filt=args.cnn_filt_inv, rnn_hidden=args.inv_rnn_hidden, T_inv=args.T_inv, vae_enc=vae.encoder, device=device, **kwargs).to(dtype)
         else:
             inv_enc = INV_ENC(task=args.task, modulator_dim=args.modulator_dim, content_dim = args.content_dim,
-                cnn_filt=args.cnn_filt_inv, rnn_hidden=10, T_inv=args.T_inv, vae_enc=None, device=device, inp_dim=kwargs['inp_dim']).to(dtype)
+                cnn_filt=args.cnn_filt_inv, rnn_hidden=args.inv_rnn_hidden, T_inv=args.T_inv, vae_enc=None, device=device, inp_dim=kwargs['inp_dim']).to(dtype)
     else:
         inv_enc = None
 

@@ -36,8 +36,10 @@ parser.add_argument('--dataset_root', type=str, default='/projects/prjs1890/',
                     help="dataset location for ecg")
 parser.add_argument('--segment_type', choices=['atrial', 'ventricular', 'whole'],
                     help="Segment type of heart beat", type=str)
-parser.add_argument('--dataset', type=str, default='MedalCare-XL', 
+parser.add_argument('--dataset', type=str, default='MedalCare-XL',
                     help='Dataset to use')
+parser.add_argument('--exclude_leads_out', action='store_true', default=False,
+                    help="If set, exclude leads ['II', 'III', 'aVR', 'aVL'] from output (overrides config.yml)")
 
 #de model
 parser.add_argument('--model', type=str, default='node', choices=MODELS,
@@ -84,6 +86,8 @@ parser.add_argument('--rnn_hidden', type=int, default=10,
                     help="Encoder RNN latent dimensionality")
 parser.add_argument('--rnn_hidden_dec', type=int, default=None,
                     help="RNN decoder hidden dimensionality (VAE only). Defaults to rnn_hidden if not set.")
+parser.add_argument('--inv_rnn_hidden', type=int, default=10,
+                    help="RNN hidden dimensionality for the invariance encoder (INV_ENC)")
 parser.add_argument('--dec_H', type=int, default=100,
                     help="Number of hidden neurons in MLP decoder") 
 parser.add_argument('--dec_L', type=int, default=2,
@@ -179,6 +183,8 @@ if __name__ == '__main__':
 
     ########### data ############ ``
     trainset, validset, testset, manager, params = load_data(args, dtype)
+    if args.exclude_leads_out:
+        params[args.task]['exclude_leads_out'] = ['II', 'III', 'aVR', 'aVL']
     run = wandb.init(
         entity="tymechatu-university-of-amsterdam",
         name=f'{args.model}_ode-{args.ode_latent_dim}_mod-{args.modulator_dim}_batch-{args.batch_size}_lr-{args.lr}_sample-{params[args.task]["sample_type"]}',
@@ -231,7 +237,7 @@ if __name__ == '__main__':
         save_run_summary(
             run_dir=args.save if not args.continue_training else args.continue_dir,
             output_dir=args.summary_output_dir,
-            model=args.model,
+            model='monode' if args.modulator_dim > 0 else args.model,
             dataset=params[args.task]['dataset'],
             segment_type=getattr(args, 'segment_type', None),
             original_dir=None
