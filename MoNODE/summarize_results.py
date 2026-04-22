@@ -169,10 +169,10 @@ def save_run_summary(
 
     Returns the path to the saved JSON.
     """
+    seg_label    = segment_type or 'all'
+    dataset_slug = dataset.lower().replace('-', '_').replace(' ', '_')
     if filename is None:
-        seg_label    = segment_type or 'all'
-        dataset_slug = dataset.lower().replace('-', '_').replace(' ', '_')
-        filename     = f"{seg_label}_{model}_{dataset_slug}.json"
+        filename = f"{seg_label}_{model}_{dataset_slug}.json"
 
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, filename)
