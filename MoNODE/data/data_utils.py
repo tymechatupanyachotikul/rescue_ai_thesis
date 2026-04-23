@@ -141,7 +141,7 @@ def __load_data(args, dtype, dataset=None):
 	io_utils.makedirs(folder_path)
 	train_params, valid_params, test_params = get_data_params(args.dataset_root, params[dataset]['dataset'], params[dataset]['sample_type'], params[dataset]['beat_type'], dataset, params[dataset]['exclude_leads_in'])
 
-	return __build_dataset(args.num_workers, args.batch_size, train_params, valid_params, test_params, dtype, params[dataset]['dataset'], use_cache=params[dataset]['use_cache']), params
+	return __build_dataset(args.num_workers, args.batch_size, train_params, valid_params, test_params, dtype, params[dataset]['dataset'], use_cache=params[dataset]['use_cache'], shuffle=args.Nepoch>0), params
 
 
 class ECGDataset(data.Dataset):
@@ -262,6 +262,7 @@ def __build_dataset(num_workers, batch_size, train_params, valid_params, test_pa
 	if num_workers > 0:
 		torch.multiprocessing.set_start_method('spawn', force=True)
 
+	print(f'Shuffle : {shuffle}')
 	train_cache = {} if use_cache else None
 	valid_cache = {} if use_cache else None
 	test_cache  = {} if use_cache else None

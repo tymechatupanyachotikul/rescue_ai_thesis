@@ -20,8 +20,9 @@ from sklearn.linear_model import (
     LinearRegression, RidgeCV, LassoCV,
     LogisticRegression, LogisticRegressionCV,
 )
+from sklearn.compose import TransformedTargetRegressor
 from sklearn.metrics import (
-    r2_score, mean_squared_error,
+    r2_score, mean_squared_error, mean_absolute_error,
     roc_auc_score, accuracy_score, f1_score, recall_score,
     balanced_accuracy_score,
     adjusted_rand_score,
@@ -182,16 +183,29 @@ def prepare_latents_and_labels(latents, metadata):
     return clean_latents, valid_indices, valid_labels
 
 
-def _regression_models():
-    """Return (name, model) pairs for the four regression probes."""
-    return [
+def _regression_models(use_target_scaling: bool = False):
+    """Return (name, model) pairs for the regression probes.
+
+    When *use_target_scaling* is True each regressor is wrapped in
+    TransformedTargetRegressor with a StandardScaler so that the target is
+    standardised before fitting and predictions are back-transformed before
+    scoring.  This is recommended for UK Biobank phenotypes whose scales vary
+    widely across parameters.
+    """
+    base = [
         ('ols',   LinearRegression()),
         ('ridge', RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0])),
-        ('lasso', LassoCV(cv=5, max_iter=5000, n_jobs=-1)),
         ('mlp',   MLPRegressor(hidden_layer_sizes=(128,), activation='relu',
                                max_iter=500, early_stopping=True,
                                validation_fraction=0.1, random_state=0)),
     ]
+    if use_target_scaling:
+        return [
+            (name, TransformedTargetRegressor(regressor=mdl,
+                                              transformer=StandardScaler()))
+            for name, mdl in base
+        ]
+    return base
 
 
 def _classification_models(binary: bool = False, imbalanced: bool = False):
@@ -226,7 +240,8 @@ def _eval_regression(model, X_tr, y_tr, X_te, y_te):
         'y_pred':  y_pred,
         'y_true':  y_te_arr,
         'metrics': {
-            'r2': float(r2_score(y_te_arr, y_pred)),
+            'r2':  float(r2_score(y_te_arr, y_pred)),
+            'mae': float(mean_absolute_error(y_te_arr, y_pred)),
         },
     }
 
@@ -522,7 +537,8 @@ def _resample_sinus_balanced(X_te: np.ndarray, y_te: list,
 
 def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata,
                       latent_key='z0', out_root=None, methods=None,
-                      skip_params=None, balance_sinus: bool = False):
+                      skip_params=None, balance_sinus: bool = False,
+                      use_target_scaling: bool = False):
     """Train four probes per phenotype and evaluate on the test set.
 
     Models
@@ -644,7 +660,7 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
                 _plot_classification_param(param, param_results, pdir, le)
         else:  # continuous regression
             param_results = {}
-            for name, mdl in _regression_models():
+            for name, mdl in _regression_models(use_target_scaling=use_target_scaling):
                 if methods and name not in methods:
                     continue
                 param_results[name] = _eval_regression(mdl, X_tr, y_tr, X_te, y_te)
@@ -2101,141 +2117,182 @@ def run_label_efficiency_probes(tr_latents: dict, tr_metadata: list,
                                  latent_key: str = 'z0',
                                  out_root: str | None = None,
                                  fractions: list | None = None,
-                                 methods: set | None = None,
                                  skip_params: set | None = None,
                                  balance_sinus: bool = False,
-                                 seed: int = 42) -> dict:
-    """Run linear probes at multiple training-set fractions.
+                                 use_target_scaling: bool = False,
+                                 seeds: list | None = None) -> dict:
+    """Run OLS linear probes at multiple training-set fractions, repeated over
+    several seeds, and report mean ± std across seeds.
 
-    For each fraction in *fractions* (default: [0.01, 0.10, 0.50, 1.00]):
-      - Randomly subsample that fraction of the training indices (fixed seed).
-      - Run ``run_linear_probes`` using only those samples.
-      - Save per-fraction metrics.
+    For each seed a single random permutation of the training indices is drawn.
+    Fractions are always nested within that permutation:
+        indices_1% ⊂ indices_10% ⊂ indices_50% ⊂ indices_100%
 
-    A summary JSON and a learning-curve plot (fraction vs best R² / F1) are
-    written to ``{out_root}/label_efficiency/{latent_key}/``.
+    Only OLS regression is used (fast, deterministic given the data split).
+
+    Parameters
+    ----------
+    seeds : list of ints, default [42, 123, 456]
+        Each seed produces an independent permutation.  Mean and std are
+        computed across the len(seeds) runs per fraction.
 
     Returns
     -------
-    all_results : dict  fraction_str -> probe_results dict
+    summary : dict  fraction_str -> {regression: {param: {r2_mean, r2_std,
+                                                           mae_mean, mae_std}},
+                                     classification: {param: {metric_mean, ...}}}
     """
     if fractions is None:
         fractions = [0.01, 0.10, 0.50, 1.00]
+    if seeds is None:
+        seeds = [42, 123, 456]
 
-    rng = np.random.default_rng(seed)
-    N   = len(tr_metadata)
+    N = len(tr_metadata)
 
-    all_results: dict = {}
+    # raw_runs[frac_str][param][metric] = list of float (one per seed)
+    raw_runs: dict = {}
 
-    for frac in fractions:
-        n_samples = max(1, int(round(frac * N)))
-        frac_str  = f'{frac:.0%}'
+    for seed_val in seeds:
+        rng = np.random.default_rng(seed_val)
+        # Single permutation per seed; each fraction takes its nested prefix
+        full_order = rng.permutation(N)
 
-        # Subsample training indices (without replacement)
-        indices = np.sort(rng.choice(N, size=n_samples, replace=False))
-        sub_latents  = {k: v[indices] for k, v in tr_latents.items()}
-        sub_metadata = [tr_metadata[i] for i in indices]
+        for frac in fractions:
+            n_samples = max(1, int(round(frac * N)))
+            frac_str  = f'{frac:.0%}'
 
-        frac_out = os.path.join(out_root, 'label_efficiency', latent_key, frac_str) \
-            if out_root else None
-        if frac_out:
-            os.makedirs(frac_out, exist_ok=True)
+            indices      = np.sort(full_order[:n_samples])
+            sub_latents  = {k: v[indices] for k, v in tr_latents.items()}
+            sub_metadata = [tr_metadata[i] for i in indices]
 
-        print(f"\n  [label efficiency] {latent_key}  fraction={frac_str}  "
-              f"n_train={n_samples} / {N}")
+            print(f"\n  [label efficiency] {latent_key}  "
+                  f"seed={seed_val}  fraction={frac_str}  n_train={n_samples}/{N}")
 
-        with np.errstate(all='ignore'):
-            results = run_linear_probes(
-                sub_latents,  sub_metadata,
-                eval_latents, eval_metadata,
-                latent_key=latent_key,
-                out_root=frac_out,
-                methods=methods or {'ols'},
-                skip_params=skip_params,
-                balance_sinus=balance_sinus,
-            )
+            with np.errstate(all='ignore'):
+                res = run_linear_probes(
+                    sub_latents,  sub_metadata,
+                    eval_latents, eval_metadata,
+                    latent_key=latent_key,
+                    out_root=None,          # no per-run plots
+                    methods={'ols'},
+                    skip_params=skip_params,
+                    balance_sinus=balance_sinus,
+                    use_target_scaling=use_target_scaling,
+                )
 
-        all_results[frac_str] = results
+            raw_runs.setdefault(frac_str, {})
 
-    # ── Persist summary JSON ─────────────────────────────────────────────────
-    if out_root:
-        summary_dir = os.path.join(out_root, 'label_efficiency', latent_key)
-        os.makedirs(summary_dir, exist_ok=True)
+            for param, method_res in res.get('regression', {}).items():
+                ols = method_res.get('ols', {})
+                m   = ols.get('metrics', ols)
+                for metric in ('r2', 'mae'):
+                    v = m.get(metric)
+                    if v is not None:
+                        raw_runs[frac_str].setdefault(param, {}).setdefault(
+                            f'reg_{metric}', []).append(float(v))
 
-        serialisable: dict = {}
-        for frac_str, res in all_results.items():
-            serialisable[frac_str] = {
-                'regression':     {p: {m: r['metrics'] for m, r in mr.items()}
-                                   for p, mr in res.get('regression', {}).items()},
-                'classification': {p: {m: r['metrics'] for m, r in mr.items()}
-                                   for p, mr in res.get('classification', {}).items()},
-            }
-        with open(os.path.join(summary_dir, 'label_efficiency_summary.json'), 'w') as f:
-            json.dump(serialisable, f, indent=2)
+            for param, method_res in res.get('classification', {}).items():
+                ols = method_res.get('ols', {})
+                m   = ols.get('metrics', ols)
+                for metric in ('accuracy', 'f1_binary', 'f1_macro', 'balanced_accuracy',
+                               'auroc', 'auroc_macro'):
+                    v = m.get(metric)
+                    if v is not None:
+                        raw_runs[frac_str].setdefault(param, {}).setdefault(
+                            f'clf_{metric}', []).append(float(v))
 
-        # ── Learning-curve plots ──────────────────────────────────────────────
-        frac_vals = [float(f.rstrip('%')) / 100 for f in serialisable.keys()]
-        frac_labels = list(serialisable.keys())
+    # ── Aggregate mean ± std across seeds ────────────────────────────────────
+    summary: dict = {}
+    for frac_str, param_dict in raw_runs.items():
+        summary[frac_str] = {}
+        reg_agg: dict = {}
+        clf_agg: dict = {}
+        for param, metric_runs in param_dict.items():
+            for key, vals in metric_runs.items():
+                arr  = np.array(vals)
+                mean = float(arr.mean())
+                std  = float(arr.std())
+                task, metric = key.split('_', 1)
+                if task == 'reg':
+                    reg_agg.setdefault(param, {})[f'{metric}_mean'] = mean
+                    reg_agg.setdefault(param, {})[f'{metric}_std']  = std
+                else:
+                    clf_agg.setdefault(param, {})[f'{metric}_mean'] = mean
+                    clf_agg.setdefault(param, {})[f'{metric}_std']  = std
+        if reg_agg:
+            summary[frac_str]['regression']     = reg_agg
+        if clf_agg:
+            summary[frac_str]['classification'] = clf_agg
 
-        # Regression: best R² per param across methods
-        reg_params: dict[str, list[float]] = {}
-        for frac_str, res in serialisable.items():
-            for param, method_metrics in res['regression'].items():
-                r2_vals = [m.get('r2', float('nan')) for m in method_metrics.values()
-                           if isinstance(m.get('r2'), float)]
-                best_r2 = max(r2_vals) if r2_vals else float('nan')
-                reg_params.setdefault(param, []).append(best_r2)
+    if not out_root:
+        return summary
 
-        if reg_params:
-            fig, ax = plt.subplots(figsize=(7, 4))
-            for param, r2s in sorted(reg_params.items()):
-                ax.plot(frac_vals, r2s, marker='o', label=param)
-            ax.set_xscale('log')
-            ax.set_xticks(frac_vals)
-            ax.set_xticklabels(frac_labels, fontsize=8)
-            ax.set_xlabel('Training fraction', fontsize=10)
-            ax.set_ylabel('Best R²', fontsize=10)
-            ax.set_title(f'Label efficiency — regression ({latent_key})',
-                         fontsize=11, fontweight='bold')
-            ax.legend(fontsize=7, framealpha=0.8, bbox_to_anchor=(1, 1), loc='upper left')
-            ax.spines[['top', 'right']].set_visible(False)
-            fig.tight_layout()
-            fig.savefig(os.path.join(summary_dir, 'label_efficiency_regression.png'), dpi=130)
-            plt.close(fig)
+    summary_dir = os.path.join(out_root, 'label_efficiency', latent_key)
+    os.makedirs(summary_dir, exist_ok=True)
 
-        # Classification: best primary metric (f1_binary | f1_macro | accuracy) per param
-        clf_params: dict[str, list[float]] = {}
-        for frac_str, res in serialisable.items():
-            for param, method_metrics in res['classification'].items():
-                best_score = float('nan')
-                for m in method_metrics.values():
-                    score = next((m.get(k) for k in ('f1_binary', 'f1_macro', 'accuracy')
-                                  if m.get(k) is not None), float('nan'))
-                    if not np.isnan(float(score)):
-                        best_score = max(best_score, float(score)) \
-                            if not np.isnan(best_score) else float(score)
-                clf_params.setdefault(param, []).append(best_score)
+    with open(os.path.join(summary_dir, 'label_efficiency_summary.json'), 'w') as f:
+        json.dump(summary, f, indent=2)
 
-        if clf_params:
-            fig, ax = plt.subplots(figsize=(7, 4))
-            for param, scores in sorted(clf_params.items()):
-                ax.plot(frac_vals, scores, marker='o', label=param)
-            ax.set_xscale('log')
-            ax.set_xticks(frac_vals)
-            ax.set_xticklabels(frac_labels, fontsize=8)
-            ax.set_xlabel('Training fraction', fontsize=10)
-            ax.set_ylabel('Best score', fontsize=10)
-            ax.set_title(f'Label efficiency — classification ({latent_key})',
-                         fontsize=11, fontweight='bold')
-            ax.legend(fontsize=7, framealpha=0.8, bbox_to_anchor=(1, 1), loc='upper left')
-            ax.spines[['top', 'right']].set_visible(False)
-            fig.tight_layout()
-            fig.savefig(os.path.join(summary_dir, 'label_efficiency_classification.png'), dpi=130)
-            plt.close(fig)
+    # ── Learning-curve plots (mean ± 1 std shading) ───────────────────────────
+    frac_order  = [f'{frac:.0%}' for frac in sorted(fractions)]
+    frac_vals   = [float(f.rstrip('%')) / 100 for f in frac_order]
 
-        print(f"  [label efficiency/{latent_key}] Summary → {summary_dir}")
+    def _le_plot(metric_key: str, ylabel: str, fname: str,
+                 higher_better: bool = True) -> None:
+        params_data: dict[str, tuple[list, list]] = {}
+        for frac_str in frac_order:
+            for param, agg in summary.get(frac_str, {}).get(
+                    'regression' if metric_key.startswith('r') else 'classification',
+                    {}).items():
+                mean = agg.get(f'{metric_key}_mean')
+                std  = agg.get(f'{metric_key}_std', 0.0)
+                if mean is not None:
+                    params_data.setdefault(param, ([], []))[0].append(mean)
+                    params_data.setdefault(param, ([], []))[1].append(std)
 
-    return all_results
+        if not params_data:
+            return
+
+        fig, ax = plt.subplots(figsize=(7, 4))
+        for i, (param, (means, stds)) in enumerate(sorted(params_data.items())):
+            xs = frac_vals[:len(means)]
+            ys = np.array(means)
+            es = np.array(stds)
+            ax.plot(xs, ys, marker='o', color=f'C{i}', label=param, linewidth=1.8)
+            ax.fill_between(xs, ys - es, ys + es, alpha=0.15, color=f'C{i}')
+        ax.set_xscale('log')
+        ax.set_xticks(frac_vals)
+        ax.set_xticklabels([f'{int(f*100)}%' for f in frac_vals], fontsize=8)
+        ax.set_xlabel('Training fraction', fontsize=10)
+        ax.set_ylabel(ylabel, fontsize=10)
+        ax.set_title(f'Label efficiency — {ylabel} ({latent_key})  '
+                     f'[{len(seeds)} seeds, mean±std]',
+                     fontsize=10, fontweight='bold')
+        ax.legend(fontsize=7, framealpha=0.8, bbox_to_anchor=(1, 1), loc='upper left')
+        ax.spines[['top', 'right']].set_visible(False)
+        fig.tight_layout()
+        fig.savefig(os.path.join(summary_dir, fname), dpi=130)
+        plt.close(fig)
+
+    _le_plot('r2',  'R²',  'label_efficiency_r2.png')
+    _le_plot('mae', 'MAE', 'label_efficiency_mae.png', higher_better=False)
+
+    # Classification: plot the first available metric across params
+    _clf_metrics = [('f1_binary', 'F1 (binary)'), ('f1_macro', 'F1 (macro)'),
+                    ('accuracy', 'Accuracy')]
+    for metric_key, ylabel in _clf_metrics:
+        has_data = any(
+            summary.get(fs, {}).get('classification', {}).get(p, {}).get(f'{metric_key}_mean')
+            is not None
+            for fs in frac_order
+            for p in summary.get(fs, {}).get('classification', {})
+        )
+        if has_data:
+            _le_plot(metric_key, ylabel,
+                     f'label_efficiency_{metric_key}.png')
+
+    print(f"  [label efficiency/{latent_key}] Summary → {summary_dir}")
+    return summary
 
 
 def run_post_training_probes(args, model, device, trainset, testset, task_params, run,
@@ -2426,9 +2483,10 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                 eval_latents, eval_metadata,
                 latent_key=lkey,
                 out_root=os.path.join(finetune_root, lkey),
-                methods={'ols'},
+                methods={'ols', 'ridge'},
                 skip_params=probe_skip,
                 balance_sinus=(dataset_name == 'medalcare-xl' and seg_type != 'whole'),
+                use_target_scaling=(dataset_name != 'medalcare-xl'),
             )
         log_probe_metrics(probe_results, lkey, seg_type, run)
 
@@ -2444,8 +2502,8 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                 latent_key=lkey,
                 out_root=finetune_root,
                 fractions=[0.01, 0.10, 0.50, 1.00],
-                methods={'ols'},
                 skip_params=probe_skip,
+                use_target_scaling=(dataset_name != 'medalcare-xl'),
             )
 
             print(f"\n=== Pearson correlations ({lkey}) ===")
@@ -2593,6 +2651,7 @@ if __name__ == '__main__':
             methods=methods,
             skip_params=probe_skip,
             balance_sinus=(dataset_name == 'medalcare-xl'),
+            use_target_scaling=(dataset_name != 'medalcare-xl'),
         )
 
         _cm = args.clustering_method
@@ -2649,9 +2708,9 @@ if __name__ == '__main__':
                 latent_key=lkey,
                 out_root=finetune_root,
                 fractions=[0.01, 0.10, 0.50, 1.00],
-                methods=methods,
                 skip_params=probe_skip,
                 balance_sinus=(dataset_name == 'medalcare-xl'),
+                use_target_scaling=(dataset_name != 'medalcare-xl'),
             )
 
     # ── Pearson correlation heatmaps ──────────────────────────────────────────

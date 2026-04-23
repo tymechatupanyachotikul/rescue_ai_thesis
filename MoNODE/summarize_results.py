@@ -140,7 +140,7 @@ def _flatten_probe_summary(probe_results: dict) -> dict:
                     else:
                         metrics = res
                     summary[lkey]['regression'][param][method] = {
-                        k: metrics[k] for k in ('r2', 'mse') if k in metrics
+                        k: metrics[k] for k in ('r2', 'mse', 'mae') if k in metrics
                     }
 
     return summary
@@ -152,7 +152,7 @@ def _walk_label_efficiency(finetune_root: str, seg_type: str) -> dict:
     """Load label_efficiency_summary.json for each latent key.
 
     Returns:
-      {lkey: {fraction_str: {task: {param: {method: metrics}}}}}
+      {lkey: {fraction_str: {task: {param: {metric_mean: float, metric_std: float, ...}}}}}
     """
     base = Path(finetune_root) / seg_type
     results: dict = {}
