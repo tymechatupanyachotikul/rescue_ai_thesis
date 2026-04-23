@@ -2483,7 +2483,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                 eval_latents, eval_metadata,
                 latent_key=lkey,
                 out_root=os.path.join(finetune_root, lkey),
-                methods={'ols', 'ridge'},
+                methods={'ols'},
                 skip_params=probe_skip,
                 balance_sinus=(dataset_name == 'medalcare-xl' and seg_type != 'whole'),
                 use_target_scaling=(dataset_name != 'medalcare-xl'),
