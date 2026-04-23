@@ -146,6 +146,73 @@ def _flatten_probe_summary(probe_results: dict) -> dict:
     return summary
 
 
+# ─── label efficiency ─────────────────────────────────────────────────────────
+
+def _walk_label_efficiency(finetune_root: str, seg_type: str) -> dict:
+    """Load label_efficiency_summary.json for each latent key.
+
+    Returns:
+      {lkey: {fraction_str: {task: {param: {method: metrics}}}}}
+    """
+    base = Path(finetune_root) / seg_type
+    results: dict = {}
+
+    le_root = base / 'label_efficiency'
+    if not le_root.exists():
+        return {}
+
+    for lkey_dir in sorted(le_root.iterdir()):
+        if not lkey_dir.is_dir():
+            continue
+        summary_path = lkey_dir / 'label_efficiency_summary.json'
+        data = _load_json(summary_path)
+        if data is None:
+            continue
+        results[lkey_dir.name] = data   # fraction_str -> {regression: ..., classification: ...}
+
+    return results
+
+
+# ─── pearson correlations ──────────────────────────────────────────────────────
+
+def _walk_pearson(finetune_root: str, seg_type: str) -> dict:
+    """Load pearson_correlations.json for each latent key and summarise.
+
+    For each param, reports the latent dimension with the largest |r| and its value.
+
+    Returns:
+      {lkey: {param: {max_abs_r: float, dim: int, r: float}}}
+    """
+    base = Path(finetune_root) / seg_type
+    results: dict = {}
+
+    for lkey_dir in sorted(base.iterdir()):
+        if not lkey_dir.is_dir():
+            continue
+        pearson_path = lkey_dir / 'pearson' / 'pearson_correlations.json'
+        data = _load_json(pearson_path)
+        if data is None:
+            continue
+
+        lkey = lkey_dir.name
+        results[lkey] = {}
+        corrs = data.get('correlations', {})
+        for param, r_list in corrs.items():
+            arr = [r for r in r_list if r is not None and not (r != r)]  # drop NaN
+            if not arr:
+                continue
+            max_abs_r = max(abs(r) for r in arr)
+            best_dim  = next(i for i, r in enumerate(r_list)
+                             if r is not None and abs(r) == max_abs_r)
+            results[lkey][param] = {
+                'max_abs_r': round(max_abs_r, 6),
+                'dim':       best_dim,
+                'r':         round(r_list[best_dim], 6),
+            }
+
+    return results
+
+
 # ─── main entry point ─────────────────────────────────────────────────────────
 
 def save_run_summary(
@@ -210,6 +277,18 @@ def save_run_summary(
         if not summary['probes']:
             print(f"  [summary] Warning: no probe results found under {finetune_root}")
 
+    # ── Label efficiency ──────────────────────────────────────────────────────
+    le = _walk_label_efficiency(finetune_root, probe_seg)
+    if not le:
+        le = _walk_label_efficiency(finetune_root, 'all_classes')
+    summary['label_efficiency'] = le
+
+    # ── Pearson correlations ──────────────────────────────────────────────────
+    pearson = _walk_pearson(finetune_root, probe_seg)
+    if not pearson:
+        pearson = _walk_pearson(finetune_root, 'all_classes')
+    summary['pearson'] = pearson
+
     with open(out_path, 'w') as f:
         json.dump(summary, f, indent=2)
 
@@ -229,6 +308,8 @@ def main():
                         help="Original directory (args.save from main.py)")
     parser.add_argument('--output_dir',   required=True,
                         help="Where to write the summary JSON")
+    parser.add_argument('--filename',   required=False, default=None,
+                        help="Filename to be saved")
     parser.add_argument('--model',        required=True,
                         help="Model name (node / vae / monode / hbnode)")
     parser.add_argument('--dataset',      required=True,
@@ -245,6 +326,7 @@ def main():
         dataset=args.dataset,
         segment_type=args.segment_type,
         original_dir=args.original_dir,
+        filename=args.filename,
     )
     print(f"Done: {path}")
 
