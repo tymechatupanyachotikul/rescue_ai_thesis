@@ -33,7 +33,7 @@ from sklearn.metrics import (
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 from sklearn.neural_network import MLPRegressor, MLPClassifier
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.preprocessing import StandardScaler, RobustScaler, LabelEncoder
 
 try:
     from umap import UMAP as _UMAP
@@ -664,7 +664,7 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
         all_dataset_stats[param] = dstats
         _print_dataset_stats(param, dstats)
 
-        scaler = StandardScaler()
+        scaler = RobustScaler()
         X_tr = scaler.fit_transform(X_tr_full[tr_idx])
         X_te = scaler.transform(X_te_full[te_idx])
         print(f"Max scaled test value: {np.max(np.abs(X_te)):.2f}")
