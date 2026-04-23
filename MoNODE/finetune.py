@@ -15,6 +15,7 @@ from scipy.stats import (
     kruskal as sp_kruskal, chi2_contingency as sp_chi2,
 )
 from tqdm import tqdm
+from sklearn.base import clone as _clone_estimator
 from sklearn.decomposition import PCA
 from sklearn.linear_model import (
     LinearRegression, RidgeCV, LassoCV,
@@ -2295,6 +2296,88 @@ def run_label_efficiency_probes(tr_latents: dict, tr_metadata: list,
     return summary
 
 
+# ── Params subjected to permutation testing ──────────────────────────────────
+_PERMTEST_PARAMS = {'lv_mass', 'lvedv', 'rvedv'}
+
+
+def run_permutation_test(
+    tr_latents: dict,
+    tr_metadata: list,
+    eval_latents: dict,
+    eval_metadata: list,
+    latent_key: str = 'z0',
+    out_root: str | None = None,
+    params: set | None = None,
+    n_permutations: int = 100,
+    use_target_scaling: bool = False,
+    seed: int = 0,
+) -> dict:
+    """OLS permutation test: shuffle training labels, evaluate on real test labels.
+
+    Runs *n_permutations* independent shuffles (each with a different seed) for
+    each param in *params*.  Reports mean ± std of R² and MAE under the null
+    hypothesis so that observed probe R² can be assessed for significance.
+
+    Returns
+    -------
+    {param: {r2_mean, r2_std, mae_mean, mae_std, n_permutations}}
+    """
+    if params is None:
+        params = _PERMTEST_PARAMS
+
+    _, tr_indices, tr_labels_all = prepare_latents_and_labels(tr_latents, tr_metadata)
+    _, te_indices, te_labels_all = prepare_latents_and_labels(eval_latents, eval_metadata)
+
+    X_tr_full = tr_latents[latent_key]
+    X_te_full = eval_latents[latent_key]
+
+    # Get a fresh OLS model (possibly wrapped in TransformedTargetRegressor)
+    ols_model = dict(_regression_models(use_target_scaling=use_target_scaling))['ols']
+
+    results: dict = {}
+    for param in sorted(set(tr_indices) & set(te_indices) & params):
+        tr_idx = tr_indices[param]
+        te_idx = te_indices[param]
+        if len(tr_idx) < 10 or len(te_idx) < 2:
+            continue
+
+        y_tr = np.array(tr_labels_all[param], dtype=float)
+        y_te = np.array(te_labels_all[param], dtype=float)
+
+        scaler = StandardScaler()
+        X_tr = scaler.fit_transform(X_tr_full[tr_idx])
+        X_te = scaler.transform(X_te_full[te_idx])
+
+        r2_list, mae_list = [], []
+        for i in range(n_permutations):
+            rng = np.random.default_rng(seed + i)
+            y_perm = rng.permutation(y_tr)
+            with np.errstate(all='ignore'):
+                res = _eval_regression(_clone_estimator(ols_model), X_tr, y_perm, X_te, y_te)
+            r2_list.append(res['metrics']['r2'])
+            mae_list.append(res['metrics']['mae'])
+
+        entry = {
+            'r2_mean':       float(np.mean(r2_list)),
+            'r2_std':        float(np.std(r2_list)),
+            'mae_mean':      float(np.mean(mae_list)),
+            'mae_std':       float(np.std(mae_list)),
+            'n_permutations': n_permutations,
+        }
+        results[param] = entry
+        print(f"  [permutation/{latent_key}/{param}]  "
+              f"R²(null) = {entry['r2_mean']:.4f} ± {entry['r2_std']:.4f}")
+
+    if out_root and results:
+        out_dir = os.path.join(out_root, 'permutation_test', latent_key)
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, 'permutation_results.json'), 'w') as f:
+            json.dump(results, f, indent=2)
+        print(f"  [permutation/{latent_key}] Saved → {out_dir}")
+
+    return results
+
+
 def run_post_training_probes(args, model, device, trainset, testset, task_params, run,
                               validset=None, ckpt_path=None):
     """Load best checkpoint, collect latents, run OLS linear probes, log to wandb.
@@ -2360,7 +2443,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     va_latents: dict = {}
     va_metadata: list = []
 
-    latents_dir = os.path.join(args.save, 'latents')
+    latents_dir = os.path.join(args.latent_dir if args.latent_dir is not None else args.save, 'latents')
 
     def _latents_cached(split: str) -> bool:
         return (os.path.exists(os.path.join(latents_dir, f'{split}_latents.npz')) and
@@ -2511,6 +2594,15 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                 tr_latents, tr_metadata,
                 latent_key=lkey,
                 out_root=os.path.join(finetune_root, lkey),
+            )
+
+            print(f"\n=== Permutation test ({lkey}) ===")
+            run_permutation_test(
+                tr_latents,   tr_metadata,
+                eval_latents, eval_metadata,
+                latent_key=lkey,
+                out_root=finetune_root,
+                use_target_scaling=(dataset_name != 'medalcare-xl'),
             )
 
     print("========== Post-training probes complete ==========\n")

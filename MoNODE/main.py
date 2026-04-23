@@ -148,6 +148,8 @@ parser.add_argument('--summary_filename', type=str, default=None,
                          "Ignored if --summary_output_dir is not set.")
 parser.add_argument('--continue_dir', type=str, default='results/',
                     help="Directory name for continue training")
+parser.add_argument('--latent_dir', type=str, default=None,
+                    help="Directory name for latents")
 
 
 if __name__ == '__main__':
