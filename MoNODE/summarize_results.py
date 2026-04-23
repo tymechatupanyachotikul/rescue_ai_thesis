@@ -213,6 +213,32 @@ def _walk_pearson(finetune_root: str, seg_type: str) -> dict:
     return results
 
 
+# ─── permutation test ────────────────────────────────────────────────────────
+
+def _walk_permutation_test(finetune_root: str, seg_type: str) -> dict:
+    """Load permutation_results.json for each latent key.
+
+    Returns:
+      {lkey: {param: {r2_mean, r2_std, mae_mean, mae_std, n_permutations}}}
+    """
+    base = Path(finetune_root) / seg_type
+    results: dict = {}
+
+    perm_root = base / 'permutation_test'
+    if not perm_root.exists():
+        return {}
+
+    for lkey_dir in sorted(perm_root.iterdir()):
+        if not lkey_dir.is_dir():
+            continue
+        data = _load_json(lkey_dir / 'permutation_results.json')
+        if data is None:
+            continue
+        results[lkey_dir.name] = data
+
+    return results
+
+
 # ─── main entry point ─────────────────────────────────────────────────────────
 
 def save_run_summary(
@@ -288,6 +314,12 @@ def save_run_summary(
     if not pearson:
         pearson = _walk_pearson(finetune_root, 'all_classes')
     summary['pearson'] = pearson
+
+    # ── Permutation test ──────────────────────────────────────────────────────
+    perm = _walk_permutation_test(finetune_root, probe_seg)
+    if not perm:
+        perm = _walk_permutation_test(finetune_root, 'all_classes')
+    summary['permutation_test'] = perm
 
     with open(out_path, 'w') as f:
         json.dump(summary, f, indent=2)
