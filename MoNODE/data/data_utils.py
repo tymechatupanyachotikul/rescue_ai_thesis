@@ -141,11 +141,16 @@ def __load_data(args, dtype, dataset=None):
 	io_utils.makedirs(folder_path)
 	train_params, valid_params, test_params = get_data_params(args.dataset_root, params[dataset]['dataset'], params[dataset]['sample_type'], params[dataset]['beat_type'], dataset, params[dataset]['exclude_leads_in'])
 
-	return __build_dataset(args.num_workers, args.batch_size, train_params, valid_params, test_params, dtype, params[dataset]['dataset'], use_cache=params[dataset]['use_cache'], shuffle=args.Nepoch>0), params
+	resample_freq = getattr(args, 'resample_freq', None)
+	src_freq      = params[dataset].get('f', 500)
+	return __build_dataset(args.num_workers, args.batch_size, train_params, valid_params, test_params, dtype, params[dataset]['dataset'],
+	                       use_cache=params[dataset]['use_cache'], shuffle=args.Nepoch>0,
+	                       resample_freq=resample_freq, src_freq=src_freq), params
 
 
 class ECGDataset(data.Dataset):
-	def __init__(self, file_paths, labels, run_id, dtype, dataset, exclude_leads=[], shared_cache=None, return_file_path=False):
+	def __init__(self, file_paths, labels, run_id, dtype, dataset, exclude_leads=[], shared_cache=None, return_file_path=False,
+	             resample_freq=None, src_freq=500):
 		self.file_paths = file_paths
 		self.labels = labels if labels else None
 		self.run_id = run_id
@@ -154,6 +159,8 @@ class ECGDataset(data.Dataset):
 		self.dtype = dtype
 		self.return_file_path = return_file_path
 		self.dataset = dataset
+		self.resample_freq = resample_freq
+		self.src_freq = src_freq
 
 		self.lead_idx = {
 			'I': 0, 
@@ -197,7 +204,12 @@ class ECGDataset(data.Dataset):
 			if self.include_idx is not None:
 				X = X[:, self.include_idx]
 			# if self.dataset.lower() != 'medalcare-xl':
-			# 	X = filter_bandpass(X, 500) 
+			# 	X = filter_bandpass(X, 500)
+			if self.resample_freq is not None and self.resample_freq != self.src_freq:
+				T_new = int(round(X.shape[0] * self.resample_freq / self.src_freq))
+				X = torch.from_numpy(
+					resample(X.numpy(), T_new, axis=0)
+				).to(dtype=self.dtype)
 			if self.cache is not None and idx not in self.cache:
 				try:
 					self.cache[idx] = X
@@ -252,7 +264,7 @@ def pad_collate(batch):
 
 	return padded_sequences, labels, mask
 
-def __build_dataset(num_workers, batch_size, train_params, valid_params, test_params, dtype, dataset, use_cache=True, shuffle=True):
+def __build_dataset(num_workers, batch_size, train_params, valid_params, test_params, dtype, dataset, use_cache=True, shuffle=True, resample_freq=None, src_freq=500):
 	# Data generators
 	# Note: Manager().dict() IPC proxies cannot be used from DataLoader worker
 	# subprocesses (workers can't reconnect to the manager server after spawn).
@@ -279,13 +291,15 @@ def __build_dataset(num_workers, batch_size, train_params, valid_params, test_pa
 	}
 	
 	trainset  = ECGDataset(
-		train_params['file_paths'], 
-		train_params.get('class', None), 
-		train_params.get('run_id', None), 
-		dtype, 
+		train_params['file_paths'],
+		train_params.get('class', None),
+		train_params.get('run_id', None),
+		dtype,
 		dataset,
 		train_params['exclude_leads_in'],
-		shared_cache=train_cache
+		shared_cache=train_cache,
+		resample_freq=resample_freq,
+		src_freq=src_freq,
 	)
 	trainset  = data.DataLoader(trainset, **tr_params)
 
@@ -300,13 +314,15 @@ def __build_dataset(num_workers, batch_size, train_params, valid_params, test_pa
 		'prefetch_factor': 2 if num_workers>0 else None
 	}
 	validset  = ECGDataset(
-		valid_params['file_paths'], 
-		valid_params['class'], 
-		valid_params['run_id'], 
-		dtype, 
+		valid_params['file_paths'],
+		valid_params['class'],
+		valid_params['run_id'],
+		dtype,
 		dataset,
-		valid_params['exclude_leads_in'], 
-		shared_cache=valid_cache
+		valid_params['exclude_leads_in'],
+		shared_cache=valid_cache,
+		resample_freq=resample_freq,
+		src_freq=src_freq,
 	)
 	validset  = data.DataLoader(validset, **vl_params)
 
@@ -322,13 +338,15 @@ def __build_dataset(num_workers, batch_size, train_params, valid_params, test_pa
 	}
 
 	testset   = ECGDataset(
-		test_params['file_paths'], 
+		test_params['file_paths'],
 		test_params['class'],
-		test_params['run_id'], 
-		dtype, 
+		test_params['run_id'],
+		dtype,
 		dataset,
-		test_params['exclude_leads_in'], 
-		shared_cache=test_cache
+		test_params['exclude_leads_in'],
+		shared_cache=test_cache,
+		resample_freq=resample_freq,
+		src_freq=src_freq,
 	)
 	testset   = data.DataLoader(testset, **te_params)
 	return trainset, validset, testset, manager

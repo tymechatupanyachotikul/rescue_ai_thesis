@@ -40,6 +40,8 @@ parser.add_argument('--dataset', type=str, default='MedalCare-XL',
                     help='Dataset to use')
 parser.add_argument('--exclude_leads_out', action='store_true', default=False,
                     help="If set, exclude leads ['II', 'III', 'aVR', 'aVL'] from output (overrides config.yml)")
+parser.add_argument('--resample_freq', type=int, default=None,
+                    help="Resample ECG to this frequency (Hz). None keeps the original rate.")
 
 #de model
 parser.add_argument('--model', type=str, default='node', choices=MODELS,

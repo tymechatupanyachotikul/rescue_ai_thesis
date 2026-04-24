@@ -15,6 +15,7 @@ from scipy.stats import (
     kruskal as sp_kruskal, chi2_contingency as sp_chi2,
 )
 from tqdm import tqdm
+from scipy.stats import kurtosis as scipy_kurtosis
 from sklearn.base import clone as _clone_estimator
 from sklearn.decomposition import PCA
 from sklearn.linear_model import (
@@ -2348,6 +2349,53 @@ def run_label_efficiency_probes(tr_latents: dict, tr_metadata: list,
     return summary
 
 
+def diagnose_latents(latents: np.ndarray, name: str) -> None:
+    """Print diagnostic statistics for a latent array [N, d].
+
+    Covers: basic stats after standardization, kurtosis, outlier rate,
+    correlation-matrix condition number, and effective dimensionality.
+    """
+    scaler = StandardScaler()
+    X = scaler.fit_transform(latents)
+
+    print(f"\n{'='*50}")
+    print(f"Diagnostics for {name}")
+    print(f"{'='*50}")
+    print(f"Shape: {X.shape}")
+    print(f"Mean range: [{X.mean(axis=0).min():.3f}, {X.mean(axis=0).max():.3f}]")
+    print(f"Std  range: [{X.std(axis=0).min():.3f}, {X.std(axis=0).max():.3f}]")
+
+    kurt = scipy_kurtosis(X, axis=0)
+    print(f"\nKurtosis: mean={kurt.mean():.2f}, max={kurt.max():.2f}")
+    print(f"  Dims with kurtosis >  3: {(kurt >  3).sum()}")
+    print(f"  Dims with kurtosis > 10: {(kurt > 10).sum()}")
+
+    max_abs = np.abs(X).max(axis=0)
+    print(f"\nMax |value| per dim: mean={max_abs.mean():.2f}, max={max_abs.max():.2f}")
+    pct_beyond_3std = (np.abs(X) > 3).mean() * 100
+    print(f"  % of values beyond 3σ: {pct_beyond_3std:.2f}%")
+
+    corr_matrix = np.corrcoef(X.T)
+    cond = np.linalg.cond(corr_matrix)
+    print(f"\nCorrelation matrix condition number: {cond:.1f}")
+    mask = ~np.eye(corr_matrix.shape[0], dtype=bool)
+    off_diag = np.abs(corr_matrix[mask])
+    print(f"  Mean |off-diagonal correlation|: {off_diag.mean():.3f}")
+    print(f"  Max  |off-diagonal correlation|: {off_diag.max():.3f}")
+    print(f"  Pairs with |r| > 0.8: {(off_diag > 0.8).sum() // 2}")
+
+    X_c = X - X.mean(axis=0)
+    _, s, _ = np.linalg.svd(X_c, full_matrices=False)
+    eigs = s ** 2 / max(len(X) - 1, 1)
+    pr = eigs.sum() ** 2 / (eigs ** 2).sum()
+    cumvar = np.cumsum(eigs) / eigs.sum()
+    dims_90 = int(np.searchsorted(cumvar, 0.90)) + 1
+    dims_95 = int(np.searchsorted(cumvar, 0.95)) + 1
+    print(f"\nEffective dimensionality (participation ratio): {pr:.1f} / {X.shape[1]}")
+    print(f"  Dims for 90% variance: {dims_90}")
+    print(f"  Dims for 95% variance: {dims_95}")
+
+
 # ── Params subjected to permutation testing ──────────────────────────────────
 _PERMTEST_PARAMS = {'lv_mass', 'lvedv', 'rvedv'}
 
@@ -2610,6 +2658,12 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     gmm_n_clusters = None if dataset_name == 'medalcare-xl' else 8
 
     latent_keys = ['z0'] + (['m', 'z0_m'] if has_m else [])
+
+    # ── Latent diagnostics ────────────────────────────────────────────────────
+    for lkey in latent_keys:
+        with np.errstate(all='ignore'):
+            diagnose_latents(tr_latents[lkey], f"train/{lkey}")
+
     for lkey in latent_keys:
         print(f"\n=== Linear probes ({lkey}) ===")
         with np.errstate(all='ignore'):
