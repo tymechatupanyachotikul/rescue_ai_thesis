@@ -2504,7 +2504,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
         return latents, metadata
 
     splits_needed = ['train', 'test'] + (['valid'] if validset is not None else [])
-    all_cached = all(_latents_cached(s) for s in splits_needed)
+    all_cached = False
 
     if all_cached:
         print(f"  Latents already saved in {latents_dir} — loading from disk.")
