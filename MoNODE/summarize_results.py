@@ -140,7 +140,7 @@ def _flatten_probe_summary(probe_results: dict) -> dict:
                     else:
                         metrics = res
                     summary[lkey]['regression'][param][method] = {
-                        k: metrics[k] for k in ('r2', 'mse', 'mae') if k in metrics
+                        k: metrics[k] for k in ('r2', 'mse', 'mae', 'r2_ci', 'mae_ci') if k in metrics
                     }
 
     return summary

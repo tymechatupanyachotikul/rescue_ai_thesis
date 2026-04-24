@@ -232,19 +232,51 @@ def _classification_models(binary: bool = False, imbalanced: bool = False):
     ]
 
 
-def _eval_regression(model, X_tr, y_tr, X_te, y_te):
+def _bootstrap_ci(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    n_bootstrap: int = 1000,
+    alpha: float = 0.05,
+    seed: int = 0,
+) -> dict:
+    """Bootstrap CI for R² and MAE by resampling (y_true, y_pred) pairs.
+
+    Returns lower/upper bounds at the (alpha/2, 1-alpha/2) quantiles.
+    """
+    rng = np.random.default_rng(seed)
+    n   = len(y_true)
+    r2_boot  = np.empty(n_bootstrap)
+    mae_boot = np.empty(n_bootstrap)
+    for i in range(n_bootstrap):
+        idx = rng.integers(0, n, size=n)
+        r2_boot[i]  = r2_score(y_true[idx], y_pred[idx])
+        mae_boot[i] = mean_absolute_error(y_true[idx], y_pred[idx])
+    lo, hi = alpha / 2, 1.0 - alpha / 2
+    return {
+        'r2_ci':        [float(np.quantile(r2_boot,  lo)), float(np.quantile(r2_boot,  hi))],
+        'mae_ci':       [float(np.quantile(mae_boot, lo)), float(np.quantile(mae_boot, hi))],
+        'ci_alpha':     alpha,
+        'n_bootstrap':  n_bootstrap,
+    }
+
+
+def _eval_regression(model, X_tr, y_tr, X_te, y_te, n_bootstrap: int = 1000):
     y_tr_arr = np.array(y_tr, dtype=float)
     y_te_arr = np.array(y_te, dtype=float)
     model.fit(X_tr, y_tr_arr)
     y_pred = model.predict(X_te)
+    metrics: dict = {
+        'r2':  float(r2_score(y_te_arr, y_pred)),
+        'mae': float(mean_absolute_error(y_te_arr, y_pred)),
+    }
+    if n_bootstrap > 0:
+        with np.errstate(all='ignore'):
+            metrics.update(_bootstrap_ci(y_te_arr, y_pred, n_bootstrap=n_bootstrap))
     return {
         'model':   model,
         'y_pred':  y_pred,
         'y_true':  y_te_arr,
-        'metrics': {
-            'r2':  float(r2_score(y_te_arr, y_pred)),
-            'mae': float(mean_absolute_error(y_te_arr, y_pred)),
-        },
+        'metrics': metrics,
     }
 
 
