@@ -205,12 +205,16 @@ class ECGDataset(data.Dataset):
 				X = X[:, self.include_idx]
 			# if self.dataset.lower() != 'medalcare-xl':
 			# 	X = filter_bandpass(X, 500)
-			if self.resample_freq is not None and self.resample_freq != self.src_freq \
-					and X.shape[0] > 0:
-				T_new = max(1, int(round(X.shape[0] * self.resample_freq / self.src_freq)))
-				X = torch.from_numpy(
-					resample(X.numpy(), T_new, axis=0)
-				).to(dtype=self.dtype)
+			if self.resample_freq is not None and self.resample_freq != self.src_freq:
+				if X.shape[0] > 0:
+					T_new = max(1, int(round(X.shape[0] * self.resample_freq / self.src_freq)))
+					if T_new == 1:
+						print(f'{X.shape[0]} * {self.resample_freq} / {self.src_freq}')
+					X = torch.from_numpy(
+						resample(X.numpy(), T_new, axis=0)
+					).to(dtype=self.dtype)
+				else:
+					print(f'Failed resample ${X.shape}')
 			if self.cache is not None and idx not in self.cache:
 				try:
 					self.cache[idx] = X
