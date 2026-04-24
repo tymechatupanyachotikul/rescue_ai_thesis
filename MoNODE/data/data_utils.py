@@ -205,8 +205,9 @@ class ECGDataset(data.Dataset):
 				X = X[:, self.include_idx]
 			# if self.dataset.lower() != 'medalcare-xl':
 			# 	X = filter_bandpass(X, 500)
-			if self.resample_freq is not None and self.resample_freq != self.src_freq:
-				T_new = int(round(X.shape[0] * self.resample_freq / self.src_freq))
+			if self.resample_freq is not None and self.resample_freq != self.src_freq \
+					and X.shape[0] > 0:
+				T_new = max(1, int(round(X.shape[0] * self.resample_freq / self.src_freq)))
 				X = torch.from_numpy(
 					resample(X.numpy(), T_new, axis=0)
 				).to(dtype=self.dtype)
