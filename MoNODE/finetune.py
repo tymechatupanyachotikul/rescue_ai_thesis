@@ -532,57 +532,6 @@ def _resample_sinus_balanced(X_te: np.ndarray, y_te: list,
     y_new = [y_te[i] for i in all_idx]
     return X_new, y_new
 
-def diagnose_latents(latents):
-    print(f"\n{'='*50}")
-    print(f"{'='*50}")
-    
-    # 1. Basic stats (after standardization)
-    scaler = StandardScaler()
-    X = scaler.fit_transform(latents)
-    
-    print(f"Shape: {X.shape}")
-    print(f"Mean range: [{X.mean(axis=0).min():.3f}, {X.mean(axis=0).max():.3f}]")
-    print(f"Std range:  [{X.std(axis=0).min():.3f}, {X.std(axis=0).max():.3f}]")
-    
-    # 2. Kurtosis (heavy tails?)
-    kurt = sp_kurtosis(X, axis=0)
-    print(f"\nKurtosis: mean={kurt.mean():.2f}, max={kurt.max():.2f}")
-    print(f"  Dims with kurtosis > 3: {(kurt > 3).sum()}")
-    print(f"  Dims with kurtosis > 10: {(kurt > 10).sum()}")
-    
-    # 3. Outliers
-    max_abs = np.abs(X).max(axis=0)
-    print(f"\nMax |value| per dim: mean={max_abs.mean():.2f}, max={max_abs.max():.2f}")
-    pct_beyond_3std = (np.abs(X) > 3).mean() * 100
-    print(f"  % of values beyond 3σ: {pct_beyond_3std:.2f}%")
-    
-    # 4. Condition number (collinearity)
-    corr_matrix = np.corrcoef(X.T)
-    cond = np.linalg.cond(corr_matrix)
-    print(f"\nCorrelation matrix condition number: {cond:.1f}")
-    
-    # Off-diagonal correlations
-    mask = ~np.eye(corr_matrix.shape[0], dtype=bool)
-    off_diag = np.abs(corr_matrix[mask])
-    print(f"  Mean |off-diagonal correlation|: {off_diag.mean():.3f}")
-    print(f"  Max |off-diagonal correlation|:  {off_diag.max():.3f}")
-    print(f"  Pairs with |r| > 0.8: {(off_diag > 0.8).sum() // 2}")
-    
-    # 5. Effective dimensionality
-    X_centered = X - X.mean(axis=0)
-    _, s, _ = np.linalg.svd(X_centered, full_matrices=False)
-    eigs = s**2 / (len(X) - 1)
-    pr = eigs.sum()**2 / (eigs**2).sum()
-    
-    # Variance explained by top-k components
-    cumvar = np.cumsum(eigs) / eigs.sum()
-    dims_90 = np.searchsorted(cumvar, 0.90) + 1
-    dims_95 = np.searchsorted(cumvar, 0.95) + 1
-    
-    print(f"\nEffective dimensionality: {pr:.1f} / {X.shape[1]}")
-    print(f"  Dims for 90% variance: {dims_90}")
-    print(f"  Dims for 95% variance: {dims_95}")
-
 # ---------------------------------------------------------------------------
 # Main probing entry-point
 # ---------------------------------------------------------------------------
@@ -624,7 +573,6 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
     X_tr_full = train_latents[latent_key]
     X_te_full = test_latents[latent_key]
 
-    diagnose_latents(X_tr_full)
 
     all_params = set(tr_indices.keys()) & set(te_indices.keys())
 
