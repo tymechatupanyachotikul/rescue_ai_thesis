@@ -2459,7 +2459,7 @@ def run_permutation_test(
 
 
 def run_post_training_probes(args, model, device, trainset, testset, task_params, run,
-                              validset=None, ckpt_path=None):
+                              validset=None, ckpt_path=None, finetune_dir=None):
     """Load best checkpoint, collect latents, run OLS linear probes, log to wandb.
 
     Evaluation is done on the **combined valid + test** set (when validset is
@@ -2627,7 +2627,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
         eval_latents['z0_m'] = np.concatenate([eval_latents['z0'], eval_latents['m']], axis=1)
 
     run_label     = seg_type if seg_type else 'all_classes'
-    finetune_root = os.path.join(args.save if not args.continue_training else args.continue_dir, 'final_finetune_results', run_label)
+    finetune_root = os.path.join(args.save if not args.continue_training else args.continue_dir, 'final_finetune_results' if finetune_dir is None else finetune_dir, run_label)
 
     print(finetune_root)
 

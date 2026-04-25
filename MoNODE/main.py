@@ -148,6 +148,8 @@ parser.add_argument('--summary_filename', type=str, default=None,
                     help="Override the auto-generated summary JSON filename "
                          "(e.g. my_run.json). Must include the .json extension. "
                          "Ignored if --summary_output_dir is not set.")
+parser.add_argument('--finetune_dir', type=str, default=None,
+                    help="Directory name for finetune results directory")
 parser.add_argument('--continue_dir', type=str, default='results/',
                     help="Directory name for continue training")
 parser.add_argument('--latent_dir', type=str, default=None,
@@ -239,7 +241,7 @@ if __name__ == '__main__':
 
     if args.task == 'ecg':
         run_post_training_probes(args, model, device, trainset, testset, params[args.task], run,
-                                  validset=validset, ckpt_path=fname)
+                                  validset=validset, ckpt_path=fname, finetune_dir=args.finetune_dir)
 
     if args.summary_output_dir:
         save_run_summary(

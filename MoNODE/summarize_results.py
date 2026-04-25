@@ -249,6 +249,7 @@ def save_run_summary(
     segment_type: str | None,
     original_dir: str | None,
     filename: str | None = None,
+    finetune_dir: str | None = None,
 ) -> str:
     """Compile and save a summary JSON for one run.
 
@@ -259,6 +260,7 @@ def save_run_summary(
     model        : model name (node / vae / monode / hbnode)
     dataset      : dataset name (medalcare-xl / uk-biobank)
     segment_type : atrial | ventricular | whole | None
+    finetune_dir: finetune result directory
 
     Returns the path to the saved JSON.
     """
@@ -290,7 +292,7 @@ def save_run_summary(
             summary['training'] = {}
 
     # ── Probe results ─────────────────────────────────────────────────────────
-    finetune_root = os.path.join(run_dir, 'final_finetune_results')
+    finetune_root = os.path.join(run_dir, 'final_finetune_results' if finetune_dir is None else finetune_dir)
     probe_seg     = seg_label  # matches the sub-folder written by run_post_training_probes
 
     raw_probe = _walk_probe_results(finetune_root, probe_seg)
