@@ -348,6 +348,8 @@ def main():
                         help="Original directory (args.save from main.py)")
     parser.add_argument('--output_dir',   required=True,
                         help="Where to write the summary JSON")
+    parser.add_argument('--finetune_dir',   default=None,
+                        help="Finetune directory")
     parser.add_argument('--filename',   required=False, default=None,
                         help="Filename to be saved")
     parser.add_argument('--model',        required=True,
@@ -367,6 +369,7 @@ def main():
         segment_type=args.segment_type,
         original_dir=args.original_dir,
         filename=args.filename,
+        finetune_dir=args.finetune_dir
     )
     print(f"Done: {path}")
 
