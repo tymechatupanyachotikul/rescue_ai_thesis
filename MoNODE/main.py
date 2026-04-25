@@ -252,6 +252,7 @@ if __name__ == '__main__':
             segment_type=getattr(args, 'segment_type', None),
             original_dir=None,
             filename=args.summary_filename,
+            finetune_dir=args.finetune_dir
         )
 
     run.finish()
