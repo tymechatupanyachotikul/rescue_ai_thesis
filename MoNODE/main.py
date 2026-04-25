@@ -233,11 +233,10 @@ if __name__ == '__main__':
             ckpt["state_dict"]["vae.decoder.out_logsig_dt"] = ckpt["state_dict"]["vae.decoder.out_logsig"]
         model.load_state_dict(ckpt["state_dict"])
         logger.info('********** Resume training for model {} ********** '.format(fname))
-    else:
-        fname = os.path.join(args.save, 'model.pth')
 
     if args.Nepoch > 0:
         train_model(args, model, plotter, trainset, validset, testset, logger, params[args.task], run)
+        fname = os.path.join(args.save, 'model.pth')        
 
     if args.task == 'ecg':
         run_post_training_probes(args, model, device, trainset, testset, params[args.task], run,
