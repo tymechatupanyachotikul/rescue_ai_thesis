@@ -186,6 +186,9 @@ def _walk_pearson(finetune_root: str, seg_type: str) -> dict:
     base = Path(finetune_root) / seg_type
     results: dict = {}
 
+    if not base.exists():
+        return results
+    
     for lkey_dir in sorted(base.iterdir()):
         if not lkey_dir.is_dir():
             continue
@@ -223,7 +226,10 @@ def _walk_permutation_test(finetune_root: str, seg_type: str) -> dict:
     """
     base = Path(finetune_root) / seg_type
     results: dict = {}
-
+    
+    if not base.exists():
+        return results
+    
     perm_root = base / 'permutation_test'
     if not perm_root.exists():
         return {}
