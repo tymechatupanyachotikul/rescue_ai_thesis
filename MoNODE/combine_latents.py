@@ -231,7 +231,7 @@ def _group_by_patient(latents: dict, metadata: list, latent_key: str):
     key_arr = latents[latent_key]  # [N, D]
 
     for i, entry in enumerate(metadata):
-        pid = str(entry.get('patient_id') or entry.get('uid', f'__unk_{i}'))
+        pid = str(entry.get('uid'))
         pid_latents[pid].append(key_arr[i])
         # Last labels for this pid win (same patient → same demographics)
         pid_labels[pid] = dict(entry.get('labels', {}))
