@@ -108,6 +108,7 @@ def _build_loader(
     """
     split_dir = os.path.join(data_root, split, seg_type, beat_type)
     file_paths = sorted(_glob.glob(os.path.join(split_dir, '*.pth')))
+    print(file_paths[:10])
     if not file_paths:
         raise FileNotFoundError(f"No .pth files in {split_dir}")
 
