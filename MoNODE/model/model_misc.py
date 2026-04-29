@@ -4,6 +4,7 @@ from datetime import datetime
 from collections import defaultdict
 
 import torch
+import torch.nn.functional as F
 from torch.distributions import kl_divergence as kl
 from torch.nn.utils.rnn import pad_sequence
 
@@ -124,6 +125,20 @@ def compute_sobolov(X, Xrec, weight, mask=None):
         penalty = torch.abs(Xhat_dt - X_dt).sum(dim=(2, 3)).mean()
 
     return penalty * weight
+
+
+def nt_xent_loss(zi: torch.Tensor, zj: torch.Tensor, temperature: float = 0.5) -> torch.Tensor:
+    """NT-Xent contrastive loss (SimCLR). zi, zj: [N, proj_dim]."""
+    N = zi.shape[0]
+    z = F.normalize(torch.cat([zi, zj], dim=0), dim=1)   # [2N, proj_dim]
+    sim = torch.mm(z, z.T) / temperature                  # [2N, 2N]
+    diag_mask = torch.eye(2 * N, dtype=torch.bool, device=zi.device)
+    sim.masked_fill_(diag_mask, float('-inf'))
+    labels = torch.cat([
+        torch.arange(N, 2 * N, device=zi.device),
+        torch.arange(N,        device=zi.device),
+    ])
+    return F.cross_entropy(sim, labels)
 
 
 def freeze_pars(par_list):
@@ -757,3 +772,214 @@ def train_model(args, model, plotter, trainset, validset, testset, logger, param
     with open(os.path.join(args.save, 'training_metrics.json'), 'w') as _f:
         _json.dump(training_metrics, _f, indent=2)
     logger.info(f'Saved training metrics to {args.save}/training_metrics.json')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SimCLR pretraining
+# ─────────────────────────────────────────────────────────────────────────────
+
+def train_simclr(args, model, trainset, validset, logger, run):
+    """Pure SimCLR pretraining: NT-Xent only on a SimCLRModel (no decoder, no ODE).
+
+    Args:
+        args     : argparse namespace (lr, Nepoch, early_stopping_patience, save, ...)
+        model    : SimCLRModel instance
+        trainset : DataLoader for training set
+        validset : DataLoader for validation set
+        logger   : Python logger
+        run      : wandb run object
+    """
+    from data.ecg_augmentations import SimCLRAugment, augment_batch
+
+    augmenter = SimCLRAugment(
+        noise_sigma      = getattr(args, 'noise_sigma',        0.05),
+        crop_min_frac    = getattr(args, 'crop_min_frac',      0.7),
+        crop_max_frac    = getattr(args, 'crop_max_frac',      1.0),
+        timeout_max_frac = getattr(args, 'timeout_max_frac',   0.2),
+    )
+    temperature      = getattr(args, 'simclr_temp', 0.5)
+    optimizer        = torch.optim.Adam(model.parameters(), lr=args.lr)
+    loss_meter       = log_utils.CachedRunningAverageMeter(0.97)
+    best_val_loss    = 1e9
+    global_itr       = 0
+    patience         = getattr(args, 'early_stopping_patience', 0)
+    epochs_no_improv = 0
+
+    logger.info('********** Started SimCLR Pretraining **********')
+
+    for ep in range(args.Nepoch):
+        model.train()
+        for local_batch, _local_y, local_mask in trainset:
+            batch      = local_batch.to(model.device)
+            local_mask = local_mask.to(model.device)
+            xi = augment_batch(batch, augmenter)
+            xj = augment_batch(batch, augmenter)
+
+            zi = model(xi, mask=local_mask)
+            zj = model(xj, mask=local_mask)
+            loss = nt_xent_loss(zi, zj, temperature)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            loss_meter.update(loss.item(), global_itr)
+            run.log({'simclr/train_loss': loss.item()})
+            global_itr += 1
+
+        # Validation: NT-Xent on held-out set
+        model.eval()
+        val_losses = []
+        with torch.no_grad():
+            for local_batch, _local_y, local_mask in validset:
+                batch      = local_batch.to(model.device)
+                local_mask = local_mask.to(model.device)
+                xi = augment_batch(batch, augmenter)
+                xj = augment_batch(batch, augmenter)
+                val_losses.append(
+                    nt_xent_loss(
+                        model(xi, mask=local_mask),
+                        model(xj, mask=local_mask),
+                        temperature,
+                    ).item()
+                )
+
+        val_loss = float(np.mean(val_losses))
+        run.log({'simclr/val_loss': val_loss})
+        logger.info(
+            f'Epoch:{ep:4d}/{args.Nepoch} | '
+            f'train_loss:{loss_meter.val:.4f} | val_loss:{val_loss:.4f}'
+        )
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            epochs_no_improv = 0
+            torch.save(
+                {'args': args, 'state_dict': model.state_dict()},
+                os.path.join(args.save, 'model.pth'),
+            )
+            logger.info(f'  ↑ Best model saved (val_loss={val_loss:.4f})')
+        else:
+            epochs_no_improv += 1
+            if patience > 0 and epochs_no_improv >= patience:
+                logger.info(f'Early stopping at epoch {ep}: no improvement for {patience} epochs')
+                break
+
+    logger.info(f'SimCLR pretraining done. Best val loss: {best_val_loss:.4f}')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BYOL pretraining
+# ─────────────────────────────────────────────────────────────────────────────
+
+def byol_loss(p1: torch.Tensor, p2: torch.Tensor,
+              z1: torch.Tensor, z2: torch.Tensor) -> torch.Tensor:
+    """Symmetric negative cosine similarity loss for BYOL.
+
+    p1, p2: online predictions [N, proj_dim]  — already L2-normalised
+    z1, z2: target projections [N, proj_dim]  — already L2-normalised
+    """
+    return (2.0 - 2.0 * (p1 * z2).sum(dim=-1).mean()
+          + 2.0 - 2.0 * (p2 * z1).sum(dim=-1).mean())
+
+
+def train_byol(args, model, trainset, validset, logger, run):
+    """BYOL pretraining: symmetric negative cosine similarity on augmented pairs.
+
+    Args:
+        args     : argparse namespace (lr, Nepoch, early_stopping_patience, byol_tau, save, ...)
+        model    : BYOLModel instance
+        trainset : DataLoader for training set
+        validset : DataLoader for validation set
+        logger   : Python logger
+        run      : wandb run object
+    """
+    from data.ecg_augmentations import SimCLRAugment, augment_batch
+
+    augmenter = SimCLRAugment(
+        noise_sigma      = getattr(args, 'noise_sigma',        0.05),
+        crop_min_frac    = getattr(args, 'crop_min_frac',      0.7),
+        crop_max_frac    = getattr(args, 'crop_max_frac',      1.0),
+        timeout_max_frac = getattr(args, 'timeout_max_frac',   0.2),
+    )
+    tau              = getattr(args, 'byol_tau', 0.996)
+    online_params    = (
+        list(model.online_encoder.parameters()) +
+        list(model.online_projector.parameters()) +
+        list(model.predictor.parameters())
+    )
+    optimizer        = torch.optim.Adam(online_params, lr=args.lr)
+    loss_meter       = log_utils.CachedRunningAverageMeter(0.97)
+    best_val_loss    = 1e9
+    global_itr       = 0
+    patience         = getattr(args, 'early_stopping_patience', 0)
+    epochs_no_improv = 0
+
+    logger.info('********** Started BYOL Pretraining **********')
+
+    for ep in range(args.Nepoch):
+        model.train()
+        for local_batch, _local_y, local_mask in trainset:
+            batch      = local_batch.to(model.device)
+            local_mask = local_mask.to(model.device)
+            x1 = augment_batch(batch, augmenter)
+            x2 = augment_batch(batch, augmenter)
+
+            # Online: encoder → projector → predictor (normalised)
+            p1 = model._online_project_predict(x1, mask=local_mask)
+            p2 = model._online_project_predict(x2, mask=local_mask)
+
+            # Target: encoder → projector (normalised, no_grad internal)
+            z1 = model._target_project(x1, mask=local_mask)
+            z2 = model._target_project(x2, mask=local_mask)
+
+            loss = byol_loss(p1, p2, z1, z2)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            # EMA update of target network
+            model.update_target(tau)
+
+            loss_meter.update(loss.item(), global_itr)
+            run.log({'byol/train_loss': loss.item()})
+            global_itr += 1
+
+        # Validation
+        model.eval()
+        val_losses = []
+        with torch.no_grad():
+            for local_batch, _local_y, local_mask in validset:
+                batch      = local_batch.to(model.device)
+                local_mask = local_mask.to(model.device)
+                x1 = augment_batch(batch, augmenter)
+                x2 = augment_batch(batch, augmenter)
+                p1 = model._online_project_predict(x1, mask=local_mask)
+                p2 = model._online_project_predict(x2, mask=local_mask)
+                z1 = model._target_project(x1, mask=local_mask)
+                z2 = model._target_project(x2, mask=local_mask)
+                val_losses.append(byol_loss(p1, p2, z1, z2).item())
+
+        val_loss = float(np.mean(val_losses))
+        run.log({'byol/val_loss': val_loss})
+        logger.info(
+            f'Epoch:{ep:4d}/{args.Nepoch} | '
+            f'train_loss:{loss_meter.val:.4f} | val_loss:{val_loss:.4f}'
+        )
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            epochs_no_improv = 0
+            torch.save(
+                {'args': args, 'state_dict': model.state_dict()},
+                os.path.join(args.save, 'model.pth'),
+            )
+            logger.info(f'  ↑ Best model saved (val_loss={val_loss:.4f})')
+        else:
+            epochs_no_improv += 1
+            if patience > 0 and epochs_no_improv >= patience:
+                logger.info(f'Early stopping at epoch {ep}: no improvement for {patience} epochs')
+                break
+
+    logger.info(f'BYOL pretraining done. Best val loss: {best_val_loss:.4f}')

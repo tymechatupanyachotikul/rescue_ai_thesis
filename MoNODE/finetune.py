@@ -1650,13 +1650,18 @@ def collect_latents(dataloader, model, task_params, args, device,
         ecg_dataset = ecg_dataset.dataset
     ecg_dataset.return_file_path = True
 
+    from model.core.simclr import SimCLRModel
+    from model.core.byol import BYOLModel
+    is_encoder_only = isinstance(model, (SimCLRModel, BYOLModel))
+
     model.eval()
-    model.return_latent = True
+    if not is_encoder_only:
+        model.return_latent = True
 
     # z0_sample and zTL are not used in post-training probes; skip them to save
     # significant GPU→CPU transfer and RAM (zTL alone is [N, T, q] float64).
     z0_list, m_list, metadata = [], [], []
-    has_m     = True   # set False if model returns m=None
+    has_m     = not is_encoder_only   # SimCLR/BYOL have no modulator; MoNODE may have one
     not_found = 0
 
     with torch.no_grad():
@@ -1664,15 +1669,20 @@ def collect_latents(dataloader, model, task_params, args, device,
             batch = batch.to(device)
             mask  = mask.to(device)
 
-            # returns (z0_mean, z0_sample, m, ztL)
-            z0, _z0_samp, m, _ztL = model(batch, 1, mask=mask)
-            if m is None:
-                has_m = False
+            if is_encoder_only:
+                # encode() returns s0_mu [N, q]; no modulator
+                z0 = model.encode(batch, mask=mask)
+                m  = None
+            else:
+                # returns (z0_mean, z0_sample, m, ztL)
+                z0, _z0_samp, m, _ztL = model(batch, 1, mask=mask)
+                if m is None:
+                    has_m = False
+                del _z0_samp, _ztL  # free GPU memory right away
 
             # Move to CPU immediately; discard GPU tensors
             z0_cpu = z0.detach().cpu()
             m_cpu  = m.detach().cpu() if (has_m and m is not None) else None
-            del _z0_samp, _ztL  # free GPU memory right away
 
             patient_ids = [item[1] for item in batch_y]
 
@@ -1730,7 +1740,8 @@ def collect_latents(dataloader, model, task_params, args, device,
     if has_m and m_list:
         latents['m'] = np.stack(m_list, axis=0)
 
-    model.return_latent = False
+    if not is_encoder_only:
+        model.return_latent = False
     return latents, metadata
 
 

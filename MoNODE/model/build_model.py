@@ -4,6 +4,8 @@ from model.core.vae import VAE, SONODE_init_velocity, EncoderRNN
 from model.core.inv_enc import INV_ENC
 from model.core.model import MoNODE
 from model.core.hbnode import HBNODE_BASE
+from model.core.simclr import SimCLRModel
+from model.core.byol import BYOLModel
 
 
 def build_model(args, device, dtype, **kwargs):
@@ -88,3 +90,31 @@ def build_model(args, device, dtype, **kwargs):
                         Tin=args.T_in)
 
     return monode
+
+
+def build_simclr_model(args, device, dtype, inp_dim):
+    """Build an encoder-only SimCLRModel. inp_dim = number of ECG leads after exclusion."""
+    enc_out_dim = args.ode_latent_dim // args.order
+    return SimCLRModel(
+        input_dim   = inp_dim,
+        enc_out_dim = enc_out_dim,
+        rnn_hidden  = args.rnn_hidden,
+        enc_H       = args.enc_H,
+        proj_dim    = args.proj_dim,
+        device      = device,
+        dtype       = dtype,
+    )
+
+
+def build_byol_model(args, device, dtype, inp_dim):
+    """Build a BYOLModel (online + target encoder-projector). inp_dim = ECG leads after exclusion."""
+    enc_out_dim = args.ode_latent_dim // args.order
+    return BYOLModel(
+        input_dim   = inp_dim,
+        enc_out_dim = enc_out_dim,
+        rnn_hidden  = args.rnn_hidden,
+        enc_H       = args.enc_H,
+        proj_dim    = args.proj_dim,
+        device      = device,
+        dtype       = dtype,
+    )

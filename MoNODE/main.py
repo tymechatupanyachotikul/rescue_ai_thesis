@@ -103,6 +103,28 @@ parser.add_argument('--sonode_v', type=str, default='MLP', choices=['MLP','RNN']
 parser.add_argument('--beta', type=float, default=1.0,
                     help="Beta weight on KL divergence for VAE training")
 
+#simclr pretraining
+parser.add_argument('--simclr_pretrain', action='store_true', default=False,
+                    help='Run pure SimCLR pretraining (encoder-only, NT-Xent loss, no ELBO)')
+parser.add_argument('--simclr_temp', type=float, default=0.5,
+                    help='Temperature for NT-Xent loss')
+parser.add_argument('--proj_dim', type=int, default=64,
+                    help='Projection head output dimension')
+parser.add_argument('--noise_sigma', type=float, default=0.05,
+                    help='Gaussian noise std for SimCLR augmentation')
+parser.add_argument('--crop_min_frac', type=float, default=0.7,
+                    help='Minimum crop fraction for random resized crop (0.7 = 70%%)')
+parser.add_argument('--crop_max_frac', type=float, default=1.0,
+                    help='Maximum crop fraction for random resized crop (1.0 = 100%%)')
+parser.add_argument('--timeout_max_frac', type=float, default=0.2,
+                    help='Maximum time-out fraction (0.2 = zero up to 20%% of signal)')
+
+#byol pretraining
+parser.add_argument('--byol_pretrain', action='store_true', default=False,
+                    help='Run BYOL pretraining (online+target encoder, no ELBO)')
+parser.add_argument('--byol_tau', type=float, default=0.996,
+                    help='EMA momentum for BYOL target network update')
+
 #training 
 parser.add_argument('--Nepoch', type=int, default=600,
                     help="Number of gradient steps for model training")
@@ -214,33 +236,68 @@ if __name__ == '__main__':
             'l_w': args.l_w,
             'out_dim': 12 - len(params[args.task]['exclude_leads_out'])
         }
-    model = build_model(args, device, dtype, **config)
-    model.to(device)
-    model.to(dtype)
-    print(f'Number of model parameters : {sum(p.numel() for p in model.parameters())}')
 
-    logger.info('********** Built {} model with dynamics modulator dim {} and  content variable dim {}**********'.format(args.model, args.modulator_dim, args.content_dim))
-    logger.info('********** Number of parameters: {} **********'.format(count_params(model)))
-    logger.info('********** Augmented Dynamics: {} **********'.format(model.aug))
-    for arg, value in sorted(vars(args).items()):
-        logger.info("Argument %s: %r", arg, value)
-    logger.info(model)
+    inp_dim = config.get('inp_dim', None) if args.task == 'ecg' else None
 
-    if args.continue_training:
-        fname = os.path.join(os.path.abspath(os.path.dirname(__file__)), args.continue_dir, 'model.pth')
-        ckpt = torch.load(fname, map_location=torch.device(device), weights_only=False)
-        if 'vae.decoder.out_logsig_dt' not in ckpt["state_dict"]:
-            ckpt["state_dict"]["vae.decoder.out_logsig_dt"] = ckpt["state_dict"]["vae.decoder.out_logsig"]
-        model.load_state_dict(ckpt["state_dict"])
-        logger.info('********** Resume training for model {} ********** '.format(fname))
+    if args.simclr_pretrain:
+        from model.build_model import build_simclr_model
+        from model.model_misc import train_simclr
+        model = build_simclr_model(args, device, dtype, inp_dim)
+        logger.info('********** Built SimCLRModel (encoder-only) **********')
+        logger.info('********** Number of parameters: {} **********'.format(count_params(model)))
+        for arg, value in sorted(vars(args).items()):
+            logger.info("Argument %s: %r", arg, value)
+        logger.info(model)
+        if args.Nepoch > 0:
+            train_simclr(args, model, trainset, validset, logger, run)
+        fname = os.path.join(args.save, 'model.pth')
+        if args.task == 'ecg':
+            run_post_training_probes(args, model, device, trainset, testset, params[args.task], run,
+                                      validset=validset, ckpt_path=fname, finetune_dir=args.finetune_dir)
 
-    if args.Nepoch > 0:
-        train_model(args, model, plotter, trainset, validset, testset, logger, params[args.task], run)
-        fname = os.path.join(args.save, 'model.pth')        
+    elif args.byol_pretrain:
+        from model.build_model import build_byol_model
+        from model.model_misc import train_byol
+        model = build_byol_model(args, device, dtype, inp_dim)
+        logger.info('********** Built BYOLModel (online + target encoder) **********')
+        logger.info('********** Number of parameters: {} **********'.format(count_params(model)))
+        for arg, value in sorted(vars(args).items()):
+            logger.info("Argument %s: %r", arg, value)
+        logger.info(model)
+        if args.Nepoch > 0:
+            train_byol(args, model, trainset, validset, logger, run)
+        fname = os.path.join(args.save, 'model.pth')
+        if args.task == 'ecg':
+            run_post_training_probes(args, model, device, trainset, testset, params[args.task], run,
+                                      validset=validset, ckpt_path=fname, finetune_dir=args.finetune_dir)
 
-    if args.task == 'ecg':
-        run_post_training_probes(args, model, device, trainset, testset, params[args.task], run,
-                                  validset=validset, ckpt_path=fname, finetune_dir=args.finetune_dir)
+    else:
+        model = build_model(args, device, dtype, **config)
+        model.to(device)
+        model.to(dtype)
+        print(f'Number of model parameters : {sum(p.numel() for p in model.parameters())}')
+        logger.info('********** Built {} model with dynamics modulator dim {} and  content variable dim {}**********'.format(args.model, args.modulator_dim, args.content_dim))
+        logger.info('********** Number of parameters: {} **********'.format(count_params(model)))
+        logger.info('********** Augmented Dynamics: {} **********'.format(model.aug))
+        for arg, value in sorted(vars(args).items()):
+            logger.info("Argument %s: %r", arg, value)
+        logger.info(model)
+
+        if args.continue_training:
+            fname = os.path.join(os.path.abspath(os.path.dirname(__file__)), args.continue_dir, 'model.pth')
+            ckpt = torch.load(fname, map_location=torch.device(device), weights_only=False)
+            if 'vae.decoder.out_logsig_dt' not in ckpt["state_dict"]:
+                ckpt["state_dict"]["vae.decoder.out_logsig_dt"] = ckpt["state_dict"]["vae.decoder.out_logsig"]
+            model.load_state_dict(ckpt["state_dict"])
+            logger.info('********** Resume training for model {} ********** '.format(fname))
+
+        if args.Nepoch > 0:
+            train_model(args, model, plotter, trainset, validset, testset, logger, params[args.task], run)
+            fname = os.path.join(args.save, 'model.pth')
+
+        if args.task == 'ecg':
+            run_post_training_probes(args, model, device, trainset, testset, params[args.task], run,
+                                      validset=validset, ckpt_path=fname, finetune_dir=args.finetune_dir)
 
     if args.summary_output_dir:
         save_run_summary(
