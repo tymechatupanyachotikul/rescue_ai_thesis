@@ -812,8 +812,8 @@ def train_simclr(args, model, trainset, validset, logger, run):
         for local_batch, _local_y, local_mask in trainset:
             batch      = local_batch.to(model.device)
             local_mask = local_mask.to(model.device)
-            xi = augment_batch(batch, augmenter)
-            xj = augment_batch(batch, augmenter)
+            xi = augment_batch(batch, augmenter, mask=local_mask)
+            xj = augment_batch(batch, augmenter, mask=local_mask)
 
             zi = model(xi, mask=local_mask)
             zj = model(xj, mask=local_mask)
@@ -834,8 +834,8 @@ def train_simclr(args, model, trainset, validset, logger, run):
             for local_batch, _local_y, local_mask in validset:
                 batch      = local_batch.to(model.device)
                 local_mask = local_mask.to(model.device)
-                xi = augment_batch(batch, augmenter)
-                xj = augment_batch(batch, augmenter)
+                xi = augment_batch(batch, augmenter, mask=local_mask)
+                xj = augment_batch(batch, augmenter, mask=local_mask)
                 val_losses.append(
                     nt_xent_loss(
                         model(xi, mask=local_mask),
@@ -933,8 +933,8 @@ def train_byol(args, model, trainset, validset, logger, run):
         for local_batch, _local_y, local_mask in trainset:
             batch      = local_batch.to(model.device)
             local_mask = local_mask.to(model.device)
-            x1 = augment_batch(batch, augmenter)
-            x2 = augment_batch(batch, augmenter)
+            x1 = augment_batch(batch, augmenter, mask=local_mask)
+            x2 = augment_batch(batch, augmenter, mask=local_mask)
 
             # Online: encoder → projector → predictor (normalised)
             p1 = model._online_project_predict(x1, mask=local_mask)
@@ -964,8 +964,8 @@ def train_byol(args, model, trainset, validset, logger, run):
             for local_batch, _local_y, local_mask in validset:
                 batch      = local_batch.to(model.device)
                 local_mask = local_mask.to(model.device)
-                x1 = augment_batch(batch, augmenter)
-                x2 = augment_batch(batch, augmenter)
+                x1 = augment_batch(batch, augmenter, mask=local_mask)
+                x2 = augment_batch(batch, augmenter, mask=local_mask)
                 p1 = model._online_project_predict(x1, mask=local_mask)
                 p2 = model._online_project_predict(x2, mask=local_mask)
                 z1 = model._target_project(x1, mask=local_mask)

@@ -58,6 +58,23 @@ class SimCLRAugment:
         return self.timeout(self.crop(self.noise(x)))
 
 
-def augment_batch(X: torch.Tensor, augmenter: SimCLRAugment) -> torch.Tensor:
-    """Apply augmenter independently to each sample. X: (N, T, D) → (N, T, D)."""
-    return torch.stack([augmenter(X[i].cpu()).to(X.device) for i in range(X.shape[0])])
+def augment_batch(X: torch.Tensor, augmenter: SimCLRAugment, mask=None) -> torch.Tensor:
+    """Apply augmenter independently to each sample. X: (N, T, D) → (N, T, D).
+
+    When mask [N, T] is provided each sample is cropped to its real length before
+    augmentation and zero-padded back to T afterward, so RandomResizedCrop never
+    resamples padding zeros into the real-signal region.
+    """
+    N, T, D = X.shape
+    out = []
+    for i in range(N):
+        xi = X[i].cpu()
+        if mask is not None:
+            L = int(mask[i].sum().item())
+            aug = augmenter(xi[:L])           # augment real signal only
+            padded = torch.zeros(T, D, dtype=xi.dtype)
+            padded[:L] = aug
+            out.append(padded.to(X.device))
+        else:
+            out.append(augmenter(xi).to(X.device))
+    return torch.stack(out)
