@@ -867,6 +867,17 @@ def train_simclr(args, model, trainset, validset, logger, run):
 
     logger.info(f'SimCLR pretraining done. Best val loss: {best_val_loss:.4f}')
 
+    import json as _json
+    training_metrics = {
+        'best_val_loss': float(best_val_loss),
+        'epochs_trained': ep + 1,
+        'temperature': float(temperature),
+        'proj_dim': int(getattr(args, 'proj_dim', 64)),
+    }
+    with open(os.path.join(args.save, 'training_metrics.json'), 'w') as _f:
+        _json.dump(training_metrics, _f, indent=2)
+    logger.info(f'Saved training metrics to {args.save}/training_metrics.json')
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BYOL pretraining
@@ -983,3 +994,14 @@ def train_byol(args, model, trainset, validset, logger, run):
                 break
 
     logger.info(f'BYOL pretraining done. Best val loss: {best_val_loss:.4f}')
+
+    import json as _json
+    training_metrics = {
+        'best_val_loss': float(best_val_loss),
+        'epochs_trained': ep + 1,
+        'tau': float(tau),
+        'proj_dim': int(getattr(args, 'proj_dim', 64)),
+    }
+    with open(os.path.join(args.save, 'training_metrics.json'), 'w') as _f:
+        _json.dump(training_metrics, _f, indent=2)
+    logger.info(f'Saved training metrics to {args.save}/training_metrics.json')
