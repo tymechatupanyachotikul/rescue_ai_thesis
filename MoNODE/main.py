@@ -300,10 +300,18 @@ if __name__ == '__main__':
                                       validset=validset, ckpt_path=fname, finetune_dir=args.finetune_dir)
 
     if args.summary_output_dir:
+        if args.modulator_dim > 0 or args.content_dim > 0:
+            model_type = 'monode'
+        elif args.simclr_pretrain:
+            model_type = 'simclr'
+        elif args.byol_pretrain:
+            model_type = 'byol'
+        else:
+            model_type = args.model
         save_run_summary(
             run_dir=args.save if not args.continue_training else args.continue_dir,
             output_dir=args.summary_output_dir,
-            model='monode' if args.modulator_dim > 0 else args.model,
+            model=model_type,
             dataset=params[args.task]['dataset'],
             segment_type=getattr(args, 'segment_type', None),
             original_dir=None,
