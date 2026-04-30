@@ -2534,7 +2534,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     va_latents: dict = {}
     va_metadata: list = []
 
-    latents_dir = os.path.join(args.latent_dir if args.latent_dir is not None else args.save, 'latents')
+    latents_dir = os.path.join(args.latent_dir if args.latent_dir is not None else args.save, f'latents_{args.resample_freq}')
 
     def _latents_cached(split: str) -> bool:
         return (os.path.exists(os.path.join(latents_dir, f'{split}_latents.npz')) and
