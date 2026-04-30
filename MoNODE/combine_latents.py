@@ -318,7 +318,7 @@ def main() -> None:
     parser.add_argument('--prefer_labels', type=int, default=1, choices=[1, 2],
                         help='Which model\'s labels take precedence when both have a key')
     # Probe config
-    parser.add_argument('--balance_sinus', type=eval, default=True,
+    parser.add_argument('--balance_sinus', type=eval, default=False,
                         help='Resample sinus class in eval set (MedalCare-XL)')
     parser.add_argument('--skip_params', nargs='*', default=None,
                         help='Label parameters to skip during probing')

@@ -23,10 +23,10 @@ class SimCLRModel(nn.Module):
             H=enc_H,
         ).to(device).to(dtype)
         self.proj_head = nn.Sequential(
-            nn.Linear(enc_out_dim, enc_out_dim * 2),
-            nn.BatchNorm1d(enc_out_dim * 2),
+            nn.Linear(enc_out_dim, enc_out_dim ),
+            nn.BatchNorm1d(enc_out_dim ),
             nn.ReLU(),
-            nn.Linear(enc_out_dim * 2, proj_dim),
+            nn.Linear(enc_out_dim, proj_dim),
         ).to(device).to(dtype)
 
     @property

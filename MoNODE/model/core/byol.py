@@ -7,19 +7,19 @@ from model.core.vae import EncoderRNN
 
 def _make_projector(enc_out_dim: int, proj_dim: int) -> nn.Sequential:
     return nn.Sequential(
-        nn.Linear(enc_out_dim, enc_out_dim * 2),
-        nn.BatchNorm1d(enc_out_dim * 2),
+        nn.Linear(enc_out_dim, proj_dim * 4),
+        nn.BatchNorm1d(proj_dim * 4),
         nn.ReLU(),
-        nn.Linear(enc_out_dim * 2, proj_dim),
+        nn.Linear(proj_dim * 4, proj_dim),
     )
 
 
 def _make_predictor(proj_dim: int) -> nn.Sequential:
     return nn.Sequential(
-        nn.Linear(proj_dim, proj_dim // 2),
-        nn.BatchNorm1d(proj_dim // 2),
+        nn.Linear(proj_dim, proj_dim * 4),
+        nn.BatchNorm1d(proj_dim * 4),
         nn.ReLU(),
-        nn.Linear(proj_dim // 2, proj_dim),
+        nn.Linear(proj_dim * 4, proj_dim),
     )
 
 
