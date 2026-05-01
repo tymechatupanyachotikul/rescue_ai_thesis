@@ -228,7 +228,6 @@ def _group_by_patient(latents: dict, metadata: list, latent_key: str):
     pid_latents: dict = defaultdict(list)
     pid_labels:  dict = {}
 
-    
     if latent_key in latents:
         key_arr = latents[latent_key]
     elif latent_key == 'z0_m' and 'z0' in latents and 'm' in latents:
@@ -403,8 +402,15 @@ def main() -> None:
         prefer_labels=args.prefer_labels,
     )
 
-    d1 = tr_lat1[args.latent_key].shape[1]
-    d2 = tr_lat2[args.latent_key].shape[1]
+    def _key_dim(lat: dict, key: str) -> int:
+        if key in lat:
+            return lat[key].shape[1]
+        if key == 'z0_m' and 'z0' in lat and 'm' in lat:
+            return lat['z0'].shape[1] + lat['m'].shape[1]
+        raise KeyError(f"Latent key '{key}' not found. Available: {list(lat.keys())}")
+
+    d1 = _key_dim(tr_lat1, args.latent_key)
+    d2 = _key_dim(tr_lat2, args.latent_key)
     print(f"\n  Combined latent dim : {d1} + {d2} = {d1 + d2}")
     print(f"  Train samples       : {tr_combined[args.latent_key].shape[0]}")
     print(f"  Eval  samples       : {te_combined[args.latent_key].shape[0]}"
