@@ -19,10 +19,12 @@ class RandomResizedCrop:
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         # x: (T, D)
-        T        = x.shape[0]
+        T = x.shape[0]
+        if T == 0:
+            return x
         lo       = max(1, int(T * self.min_frac))
         hi       = max(lo, int(T * self.max_frac))
-        crop_len = random.randint(lo, hi)
+        crop_len = min(random.randint(lo, hi), T)  # clamp: T*max_frac may round to T+1
         start    = random.randint(0, T - crop_len)
         cropped  = x[start:start + crop_len]
         resampled = torch.from_numpy(resample(cropped.numpy(), T, axis=0))
@@ -71,6 +73,9 @@ def augment_batch(X: torch.Tensor, augmenter: SimCLRAugment, mask=None) -> torch
         xi = X[i].cpu()
         if mask is not None:
             L = int(mask[i].sum().item())
+            if L == 0:
+                out.append(torch.zeros(T, D, dtype=xi.dtype).to(X.device))
+                continue
             aug = augmenter(xi[:L])           # augment real signal only
             padded = torch.zeros(T, D, dtype=xi.dtype)
             padded[:L] = aug
