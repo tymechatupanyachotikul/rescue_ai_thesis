@@ -228,7 +228,16 @@ def _group_by_patient(latents: dict, metadata: list, latent_key: str):
     pid_latents: dict = defaultdict(list)
     pid_labels:  dict = {}
 
-    key_arr = latents[latent_key]  # [N, D]
+    
+    if latent_key in latents:
+        key_arr = latents[latent_key]
+    elif latent_key == 'z0_m' and 'z0' in latents and 'm' in latents:
+        key_arr = np.concatenate([latents['z0'], latents['m']], axis=1)
+    else:
+        available = list(latents.keys())
+        raise KeyError(
+            f"Latent key '{latent_key}' not found. Available keys: {available}"
+        )
 
     for i, entry in enumerate(metadata):
         pid = str(entry.get('uid'))
