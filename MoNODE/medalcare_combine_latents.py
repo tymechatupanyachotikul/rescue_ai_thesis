@@ -47,7 +47,7 @@ from finetune import run_linear_probes, collect_latents
 from combine_latents import _match_and_combine, compute_mutual_information, print_mi_summary
 from summarize_results import save_run_summary
 from data.data_utils import ECGDataset, pad_collate
-from model.build_model import build_model
+from model.build_model import build_model, build_simclr_model, build_byol_model
 
 
 # ─── ALADIN metadata helpers ──────────────────────────────────────────────────
@@ -157,22 +157,37 @@ def _build_and_load_model(
         saved = json.load(f)
 
     ns = argparse.Namespace(**saved)
-    # Ensure fields that may be absent in older runs have safe defaults
-    for attr, default in [
-        ('Nobj', 1), ('sobolev_weight', 0), ('l_w', 0),
-        ('rnn_hidden_dec', None), ('content_dim', 0),
-    ]:
-        if not hasattr(ns, attr):
-            setattr(ns, attr, default)
 
-    config = {
-        'inp_dim': inp_dim,
-        'out_dim': out_dim,
-        'w_dt':    ns.sobolev_weight,
-        'l_w':     ns.l_w,
-    }
+    is_simclr = getattr(ns, 'simclr_pretrain', False)
+    is_byol   = getattr(ns, 'byol_pretrain',   False)
 
-    model = build_model(ns, device, dtype, **config)
+    if is_simclr or is_byol:
+        # SSL encoder-only models — safe defaults for fields that may be absent
+        for attr, default in [
+            ('proj_dim', 64), ('enc_H', 50), ('order', 1),
+        ]:
+            if not hasattr(ns, attr):
+                setattr(ns, attr, default)
+        if is_simclr:
+            model = build_simclr_model(ns, device, dtype, inp_dim)
+        else:
+            model = build_byol_model(ns, device, dtype, inp_dim)
+    else:
+        # NODE / HBNODE / VAE / MoNODE
+        for attr, default in [
+            ('Nobj', 1), ('sobolev_weight', 0), ('l_w', 0),
+            ('rnn_hidden_dec', None), ('content_dim', 0),
+        ]:
+            if not hasattr(ns, attr):
+                setattr(ns, attr, default)
+        config = {
+            'inp_dim': inp_dim,
+            'out_dim': out_dim,
+            'w_dt':    ns.sobolev_weight,
+            'l_w':     ns.l_w,
+        }
+        model = build_model(ns, device, dtype, **config)
+
     model.to(device).to(dtype)
 
     ckpt_path = os.path.join(model_dir, 'model.pth')
@@ -387,10 +402,18 @@ def main() -> None:
     )
     print(f"\n  Eval set: atrial={len(ev_meta_a)}  ventricular={len(ev_meta_v)}")
 
-    # Build z0_m combined key if m is present
+    # Build z0_m combined key if m is present (NODE/MoNODE only; SimCLR/BYOL have no m)
     for lat in (tr_lat_a, ev_lat_a, tr_lat_v, ev_lat_v):
         if 'm' in lat and 'z0_m' not in lat:
             lat['z0_m'] = np.concatenate([lat['z0'], lat['m']], axis=1)
+
+    # Validate latent key — fall back to z0 if the requested key is unavailable
+    available_keys = set(tr_lat_a) & set(tr_lat_v)
+    if args.latent_key not in available_keys:
+        fallback = 'z0'
+        print(f"  [warn] latent_key='{args.latent_key}' not in {available_keys}; "
+              f"falling back to '{fallback}'")
+        args.latent_key = fallback
 
     # ── Match patients and concatenate across models ──────────────────────────
     print(f"\n── Matching train splits (atrial × ventricular) ──")
