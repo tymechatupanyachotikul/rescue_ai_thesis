@@ -71,6 +71,9 @@ for df_ in [train_df, val_df, test_df]:
 
     )
 
+
+    df_.rename(columns={"filename_hr": "data_path"}, inplace=True)
+
 test_df.to_csv("/home/tchatupanyacho/project/ptb_xl/data_split/ptb-xl_test.csv", index=False)
 val_df.to_csv("/home/tchatupanyacho/project/ptb_xl/data_split/ptb-xl_val.csv", index=False)
 train_df.to_csv("/home/tchatupanyacho/project/ptb_xl/data_split/ptb-xl_train.csv", index=False)
