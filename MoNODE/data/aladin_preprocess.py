@@ -643,6 +643,13 @@ if __name__ == "__main__":
 
     # ── Load CSV ──────────────────────────────────────────────────────────────
     df     = pd.read_csv(args.input_path, nrows=3) if args.demo else pd.read_csv(args.input_path)
+    def parse_label(s):
+        return np.array(list(map(int, s.split(','))))
+    
+    if dataset == 'ptb-xl':
+        for col in ['superclass', 'subclass', 'form', 'rhythm']:
+            df[col] = df[col].apply(parse_label)
+            
     chunks = [df.iloc[i:i + args.batch_size] for i in range(0, len(df), args.batch_size)]
 
     # ── Retry pre-flight: copy cached files, build skip set ──────────────────
