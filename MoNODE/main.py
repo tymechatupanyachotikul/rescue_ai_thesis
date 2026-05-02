@@ -248,9 +248,16 @@ if __name__ == '__main__':
         for arg, value in sorted(vars(args).items()):
             logger.info("Argument %s: %r", arg, value)
         logger.info(model)
+        if args.continue_training:
+            fname = os.path.join(os.path.abspath(os.path.dirname(__file__)), args.continue_dir, 'model.pth')
+            ckpt = torch.load(fname, map_location=torch.device(device), weights_only=False)
+            model.load_state_dict(ckpt["state_dict"])
+            logger.info('********** Resume training for SimCLR model {} ********** '.format(fname))
+
         if args.Nepoch > 0:
             train_simclr(args, model, trainset, validset, logger, run)
-        fname = os.path.join(args.save, 'model.pth')
+            fname = os.path.join(args.save, 'model.pth')
+            
         if args.task == 'ecg':
             run_post_training_probes(args, model, device, trainset, testset, params[args.task], run,
                                       validset=validset, ckpt_path=fname, finetune_dir=args.finetune_dir)
@@ -264,9 +271,16 @@ if __name__ == '__main__':
         for arg, value in sorted(vars(args).items()):
             logger.info("Argument %s: %r", arg, value)
         logger.info(model)
+        if args.continue_training:
+            fname = os.path.join(os.path.abspath(os.path.dirname(__file__)), args.continue_dir, 'model.pth')
+            ckpt = torch.load(fname, map_location=torch.device(device), weights_only=False)
+            model.load_state_dict(ckpt["state_dict"])
+            logger.info('********** Resume training for BYOL model {} ********** '.format(fname))
+        
         if args.Nepoch > 0:
             train_byol(args, model, trainset, validset, logger, run)
-        fname = os.path.join(args.save, 'model.pth')
+            fname = os.path.join(args.save, 'model.pth')
+
         if args.task == 'ecg':
             run_post_training_probes(args, model, device, trainset, testset, params[args.task], run,
                                       validset=validset, ckpt_path=fname, finetune_dir=args.finetune_dir)
