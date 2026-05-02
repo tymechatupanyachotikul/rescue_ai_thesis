@@ -50,6 +50,10 @@ def process_split(df_, base_path):
         lambda x: os.path.join(base_path, str(x))
     )
     df_ = df_.drop(columns=['filename_hr', 'strat_fold'])
+    
+    for col in ['superclass', 'subclass', 'form', 'rhythm']:
+        df_[col] = df_[col].apply(lambda x: ','.join(map(str, x.astype(int))))
+    
     return df_
 
 train_df = process_split(df[df.strat_fold <= 8][cols], base_path)
