@@ -26,6 +26,7 @@ LEADS_DICT = {
     'medalcare-xl': MEDALCARE_XL_LEADS,
     'ukbb':         UK_BB_LEADS,
     'mimic-iv':     MIMIC_IV_LEADS,
+    'ptb-xl':       UK_BB_LEADS,
 }
 
 # Segment types required for each top-level mode, and whether the mode is atomic.
@@ -99,11 +100,19 @@ def get_labels(record, dataset: str, phenotype_data: dict | None = None) -> dict
         return {
             'class':      record.groundtruth if hasattr(record, 'groundtruth') else None,
             'patient_id': run_id,
-        }
-
+        }        
+    
     pid = os.path.splitext(os.path.basename(str(record.original_file_path)))[0]
     labels: dict[str, object] = {'patient_id': pid}
-
+    if dataset == 'ptb-xl':
+        labels.update({
+            'superclass': record.superclass if hasattr(record, 'superclass') else None,
+            'subclass':   record.subclass   if hasattr(record, 'subclass')   else None,
+            'form':       record.form       if hasattr(record, 'form')       else None,
+            'rhythm':     record.rhythm     if hasattr(record, 'rhythm')     else None,
+        })
+        return labels
+    
     if phenotype_data is not None:
         eid_to_idx = phenotype_data['eid_to_idx']
         idx = eid_to_idx.get(str(pid))
@@ -169,14 +178,34 @@ def load_and_convert_case(row, dataset: str):
                 sig_name=rec.sig_name, p_signal=rec.p_signal, fmt=rec.fmt,
             )
     except Exception:
+        print(f"  [conversion warning] WFDB read failed for {filepath}; attempting conversion and reload.")
         convert_ecg_to_wfdb(fname, ecg_path, directory_path, dataset)
         rec = wfdb.rdrecord(filepath)
 
     if rec.p_signal.shape[0] < MIN_LENGTH:
         raise ValueError(f"ECG too short: {rec.p_signal.shape[0]} samples ({filepath})")
 
+    # Reorder columns to match UK_BB_LEADS so all datasets share a consistent lead layout.
+    # Comparison is case-insensitive; sig_name is normalised to the UK_BB_LEADS casing.
+    current   = list(rec.sig_name)
+    current_l = [l.lower() for l in current]
+    target_l  = [l.lower() for l in UK_BB_LEADS]
+    if current_l != target_l:
+        in_order  = [l for l in UK_BB_LEADS if l.lower() in set(current_l)]
+        remainder = [current[i] for i, l in enumerate(current_l) if l not in set(target_l)]
+        target    = in_order + remainder
+        idx       = [current_l.index(l.lower()) for l in target]
+        rec.p_signal = rec.p_signal[:, idx]
+        rec.sig_name = target
+
     ecg_dict = {name: rec.p_signal[:, i] for i, name in enumerate(rec.sig_name)}
     record = Record(ecg_dict, rec.fs, "DEMO", case)
+    if dataset == 'ptb-xl':
+        record.superclass = row.superclass if hasattr(row, 'superclass') else None
+        record.subclass = row.subclass if hasattr(row, 'subclass') else None
+        record.form = row.form if hasattr(row, 'form') else None
+        record.rhythm = row.rhythm if hasattr(row, 'rhythm') else None
+
     if hasattr(row, 'label'):
         record.groundtruth = row.label
     if hasattr(row, 'hash'):
@@ -556,6 +585,7 @@ if __name__ == "__main__":
     dataset = (
         'medalcare-xl' if 'medalcare-xl' in args.input_path  or 'medalcare_xl' in args.input_path else
         'ukbb'         if 'ukbb'         in args.input_path else
+        'ptb-xl'       if 'ptb-xl'       in args.input_path else
         os.path.basename(args.input_path).split('_')[0]
     )
 
