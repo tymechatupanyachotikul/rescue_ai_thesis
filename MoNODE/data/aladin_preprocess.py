@@ -198,6 +198,10 @@ def load_and_convert_case(row, dataset: str):
         rec.p_signal = rec.p_signal[:, idx]
         rec.sig_name = target
 
+    print(f'DDDEBBUGGGG')
+    print(rec.p_signal.shape, rec.sig_name)
+    print(f'DDDEBBUGGGG')
+
     ecg_dict = {name: rec.p_signal[:, i] for i, name in enumerate(rec.sig_name)}
     record = Record(ecg_dict, rec.fs, "DEMO", case)
     if dataset == 'ptb-xl':
@@ -317,6 +321,9 @@ def save_ecg_segment(
             sigma  = np.std(segment,  axis=0, keepdims=True)
             segment = (segment - mu) / (sigma + 1e-8)
 
+        print(f'DDDEBBUGGGG')
+        print(segment.shape)
+        
         uid       = f'{base_uid}_{i}' if beat_type == 'sampled' else base_uid
         save_path = os.path.join(save_dir, f'{uid}.pth')
         torch.save(torch.from_numpy(segment.astype(np.float32)), save_path)
@@ -651,7 +658,7 @@ if __name__ == "__main__":
     if dataset == 'ptb-xl':
         for col in ['superclass', 'subclass', 'form', 'rhythm']:
             df[col] = df[col].apply(parse_label)
-            
+
     chunks = [df.iloc[i:i + args.batch_size] for i in range(0, len(df), args.batch_size)]
 
     # ── Retry pre-flight: copy cached files, build skip set ──────────────────
