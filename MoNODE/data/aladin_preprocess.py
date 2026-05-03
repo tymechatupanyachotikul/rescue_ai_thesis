@@ -473,8 +473,10 @@ def plot_ecg(ecg: np.ndarray, out_path: str, f: int = 500):
 def _to_serialisable(obj):
     if isinstance(obj, (defaultdict, dict)):
         return {k: _to_serialisable(v) for k, v in obj.items()}
-    if isinstance(obj, list):
+    if isinstance(obj, (list, tuple)):
         return [_to_serialisable(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
     if isinstance(obj, np.integer):
         return int(obj)
     if isinstance(obj, np.floating):
