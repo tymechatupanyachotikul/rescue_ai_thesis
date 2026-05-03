@@ -129,9 +129,6 @@ def remove_incorrect_leads(directory):
                 num_removed += 1
     print(f"Total files removed: {num_removed}")
 
-filepaths = ['/home/tchatupanyacho/project/ptb_xl/segments/errors/train_anomaly_report.json', 
-             '/home/tchatupanyacho/project/ptb_xl/segments/errors/valid_anomaly_report.json', 
-             '/home/tchatupanyacho/project/ptb_xl/segments/errors/test_anomaly_report.json']
-
-for filepath in filepaths:
-    adjust_outliers(filepath)   
+directories = ['/home/tchatupanyacho/project/ptb_xl/segments/valid/atrial/median',
+               '/home/tchatupanyacho/project/ptb_xl/segments/valid/ventricular/median',
+               '/home/tchatupanyacho/project/ptb_xl/segments/valid/whole/median']
