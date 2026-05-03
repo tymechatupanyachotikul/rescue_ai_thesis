@@ -159,19 +159,34 @@ def prepare_latents_and_labels(latents, metadata):
         clean_latents:  dict with 'z0' always present; 'm' included only when not None.
         valid_indices:  dict mapping param_name -> list[int] of row indices with valid values.
         valid_labels:   dict mapping param_name -> list of the corresponding label values.
+
+    List-type label values (e.g. PTB-XL multi-label vectors) are expanded into
+    individual ``{param}_{i}`` binary columns.  Use ``_expand_ptbxl_metadata``
+    before calling this function to get named columns instead of numeric indices.
     """
     clean_latents = {k: v for k, v in latents.items() if v is not None}
 
-    all_params = set()
+    all_params: set[str] = set()
     for meta in metadata:
-        all_params.update(meta['labels'].keys())
+        for param, value in meta['labels'].items():
+            if isinstance(value, list):
+                all_params.update(f'{param}_{i}' for i in range(len(value)))
+            else:
+                all_params.add(param)
 
     valid_indices = {param: [] for param in all_params}
     valid_labels  = {param: [] for param in all_params}
 
     for i, meta in enumerate(metadata):
         for param, value in meta['labels'].items():
-            if isinstance(value, float) and not math.isnan(value):
+            if isinstance(value, list):
+                for j, v in enumerate(value):
+                    key = f'{param}_{j}'
+                    if key in valid_indices:
+                        if isinstance(v, (int, float)) and not (isinstance(v, float) and math.isnan(v)):
+                            valid_indices[key].append(i)
+                            valid_labels[key].append(float(v))
+            elif isinstance(value, float) and not math.isnan(value):
                 valid_indices[param].append(i)
                 valid_labels[param].append(value)
             elif isinstance(value, (int, bool)):
@@ -1609,6 +1624,45 @@ def _remap_metadata(metadata: list, seg_type: str) -> list:
 
 
 # ---------------------------------------------------------------------------
+# PTB-XL label expansion
+# ---------------------------------------------------------------------------
+
+# Fixed order of the 5 PTB-XL diagnostic superclasses (matches get_data_split_ptb-xl.py)
+PTBXL_SUPERCLASS_NAMES = ['NORM', 'MI', 'STTC', 'CD', 'HYP']
+
+
+def _expand_ptbxl_metadata(metadata_list: list) -> list:
+    """Expand PTB-XL multi-label vectors into named scalar binary columns.
+
+    ``superclass: [1,0,0,0,0]``  →  ``superclass_NORM: 1.0, superclass_MI: 0.0, ...``
+    ``subclass / form / rhythm: [...]``  →  ``{key}_0: float, {key}_1: float, ...``
+
+    The original list entries are removed and replaced with the scalar columns
+    so the downstream ``prepare_latents_and_labels`` treats them as ordinary
+    binary (0/1) classification targets.
+    """
+    expanded = []
+    for entry in metadata_list:
+        entry  = dict(entry)
+        labels = dict(entry.get('labels', {}))
+
+        sc = labels.pop('superclass', None)
+        if isinstance(sc, list):
+            for i, name in enumerate(PTBXL_SUPERCLASS_NAMES[:len(sc)]):
+                labels[f'superclass_{name}'] = float(sc[i])
+
+        for key in ('subclass', 'form', 'rhythm'):
+            val = labels.pop(key, None)
+            if isinstance(val, list):
+                for j, v in enumerate(val):
+                    labels[f'{key}_{j}'] = float(v)
+
+        entry['labels'] = labels
+        expanded.append(entry)
+    return expanded
+
+
+# ---------------------------------------------------------------------------
 # Post-training pipeline: latent collection + linear probes + wandb logging
 # ---------------------------------------------------------------------------
 
@@ -2322,9 +2376,14 @@ def run_label_efficiency_probes(tr_latents: dict, tr_metadata: list,
     _le_plot('r2',  'R²',  'label_efficiency_r2.png')
     _le_plot('mae', 'MAE', 'label_efficiency_mae.png', higher_better=False)
 
-    # Classification: plot the first available metric across params
-    _clf_metrics = [('f1_binary', 'F1 (binary)'), ('f1_macro', 'F1 (macro)'),
-                    ('accuracy', 'Accuracy')]
+    # Classification: one plot per metric (only generated when data is present)
+    _clf_metrics = [
+        ('f1_binary',        'F1 (binary)'),
+        ('balanced_accuracy', 'Balanced Accuracy'),
+        ('auroc',            'AUROC'),
+        ('f1_macro',         'F1 (macro)'),
+        ('accuracy',         'Accuracy'),
+    ]
     for metric_key, ylabel in _clf_metrics:
         has_data = any(
             summary.get(fs, {}).get('classification', {}).get(p, {}).get(f'{metric_key}_mean')
@@ -2609,6 +2668,13 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
             if validset is not None:
                 va_metadata = _remap_metadata(va_metadata, seg_type)
 
+    # Expand PTB-XL multi-label vectors into named binary columns
+    elif dataset_name == 'ptb-xl':
+        tr_metadata = _expand_ptbxl_metadata(tr_metadata)
+        te_metadata = _expand_ptbxl_metadata(te_metadata)
+        if validset is not None:
+            va_metadata = _expand_ptbxl_metadata(va_metadata)
+
     # Combine valid + test into a single evaluation split
     if validset is not None:
         eval_latents = {}
@@ -2672,8 +2738,13 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
 
         # ── Clustering ────────────────────────────────────────────────────────
 
-    # ── Label efficiency & Pearson correlations (UK Biobank) ──────────────────
-    if dataset_name != 'medalcare-xl':
+    # ── Label efficiency ─────────────────────────────────────────────────────
+    # UK Biobank: regression probes (continuous phenotypes).
+    # PTB-XL:    classification probes (binary multi-label, no target scaling).
+    # MedalCare-XL: skipped (categorical labels, too few samples per class).
+    _is_ukbb  = dataset_name in ('uk-biobank', 'uk_biobank')
+    _is_ptbxl = dataset_name == 'ptb-xl'
+    if _is_ukbb or _is_ptbxl:
         for lkey in latent_keys:
             print(f"\n=== Label efficiency probes ({lkey}) ===")
             run_label_efficiency_probes(
@@ -2683,24 +2754,26 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                 out_root=finetune_root,
                 fractions=[0.01, 0.10, 0.50, 1.00],
                 skip_params=probe_skip,
-                use_target_scaling=(dataset_name != 'medalcare-xl'),
+                use_target_scaling=_is_ukbb,
             )
 
-            print(f"\n=== Pearson correlations ({lkey}) ===")
-            compute_pearson_correlations(
-                tr_latents, tr_metadata,
-                latent_key=lkey,
-                out_root=os.path.join(finetune_root, lkey),
-            )
+            # Pearson correlations and permutation tests require continuous targets
+            if _is_ukbb:
+                print(f"\n=== Pearson correlations ({lkey}) ===")
+                compute_pearson_correlations(
+                    tr_latents, tr_metadata,
+                    latent_key=lkey,
+                    out_root=os.path.join(finetune_root, lkey),
+                )
 
-            print(f"\n=== Permutation test ({lkey}) ===")
-            run_permutation_test(
-                tr_latents,   tr_metadata,
-                eval_latents, eval_metadata,
-                latent_key=lkey,
-                out_root=finetune_root,
-                use_target_scaling=(dataset_name != 'medalcare-xl'),
-            )
+                print(f"\n=== Permutation test ({lkey}) ===")
+                run_permutation_test(
+                    tr_latents,   tr_metadata,
+                    eval_latents, eval_metadata,
+                    latent_key=lkey,
+                    out_root=finetune_root,
+                    use_target_scaling=True,
+                )
 
     print("========== Post-training probes complete ==========\n")
 
