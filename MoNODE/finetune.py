@@ -2670,7 +2670,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                 va_metadata = _remap_metadata(va_metadata, seg_type)
 
     # Expand PTB-XL multi-label vectors into named binary columns
-    elif dataset_name == 'ptb-xl':
+    elif dataset_name == 'ptb_xl':
         tr_metadata = _expand_ptbxl_metadata(tr_metadata)
         te_metadata = _expand_ptbxl_metadata(te_metadata)
         if validset is not None:
@@ -2726,7 +2726,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
         print(f"\n=== Linear probes ({lkey}) ===")
         with np.errstate(all='ignore'):
             _is_ukbb_probe  = dataset_name in ('uk-biobank', 'uk_biobank')
-            _is_ptbxl_probe = dataset_name == 'ptb-xl'
+            _is_ptbxl_probe = dataset_name == 'ptb_xl'
             probe_methods   = {'ridge'} if _is_ptbxl_probe else {'ols'}
             probe_results = run_linear_probes(
                 tr_latents,   tr_metadata,
@@ -2747,7 +2747,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     # PTB-XL:    classification probes (binary multi-label, no target scaling).
     # MedalCare-XL: skipped (categorical labels, too few samples per class).
     _is_ukbb  = dataset_name in ('uk-biobank', 'uk_biobank')
-    _is_ptbxl = dataset_name == 'ptb-xl'
+    _is_ptbxl = dataset_name == 'ptb_xl'
     if _is_ukbb or _is_ptbxl:
         eff_methods = {'ridge'} if _is_ptbxl else {'ols'}
         for lkey in latent_keys:
@@ -2903,14 +2903,14 @@ if __name__ == '__main__':
     print(f"Methods: {sorted(methods)}\n")
 
     dataset_name   = args.dataset.lower()
-    probe_skip     = {'patient_id'} if dataset_name == 'medalcare-xl' else None
+    probe_skip     = {'patient_id'}
     gmm_n_clusters = None if dataset_name == 'medalcare-xl' else 8
 
     latent_keys = ['z0'] + (['m', 'z0_m'] if has_m else [])
     if has_sample:
         latent_keys += ['z0_sample'] + (['z0_sample_m'] if has_m else [])
     _cli_is_ukbb  = dataset_name in ('uk-biobank', 'uk_biobank')
-    _cli_is_ptbxl = dataset_name == 'ptb-xl'
+    _cli_is_ptbxl = dataset_name == 'ptb_xl'
     for lkey in latent_keys:
         print(f"\n=== Linear probes ({lkey}) ===")
         run_linear_probes(

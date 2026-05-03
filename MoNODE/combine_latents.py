@@ -458,7 +458,7 @@ def main() -> None:
     # ── Dataset flags ─────────────────────────────────────────────────────────
     dataset_lower = args.dataset.lower()
     is_medalcare  = 'medalcare' in dataset_lower
-    is_ptbxl      = 'ptb-xl' in dataset_lower or 'ptb_xl' in dataset_lower
+    is_ptbxl      = 'ptb' in dataset_lower or 'ptb' in dataset_lower
     is_ukbb       = 'uk' in dataset_lower and 'biobank' in dataset_lower
 
     # Expand PTB-XL multi-label vectors (superclass/subclass/form/rhythm)
