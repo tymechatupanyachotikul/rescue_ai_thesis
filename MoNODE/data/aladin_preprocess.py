@@ -198,15 +198,16 @@ def load_and_convert_case(row, dataset: str):
         idx       = [current_l.index(l.lower()) for l in target]
         rec.p_signal = rec.p_signal[:, idx]
         target_out = []
-        for target in target_out:
-            if target.lower() == 'avr':
+        for _target in target:
+            if _target.lower() == 'avr':
                 target_out.append('aVR')
-            elif target.lower() == 'avl':
+            elif _target.lower() == 'avl':
                 target_out.append('aVL')
-            elif target.lower() == 'avf':
+            elif _target.lower() == 'avf':
                 target_out.append('aVF')
             else:
-                target_out.append(target)
+                target_out.append(_target)
+
         rec.sig_name = target_out
 
     print(f'AFTER DDDEBBUGGGG')
