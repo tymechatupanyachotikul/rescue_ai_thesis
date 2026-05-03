@@ -191,16 +191,22 @@ def load_and_convert_case(row, dataset: str):
     current_l = [l.lower() for l in current]
     target_l  = [l.lower() for l in UK_BB_LEADS]
 
-    print(f'BEFORE DDDEBBUGGGG')
-    print(rec.p_signal.shape, rec.sig_name)
-    print(f'BEFORE DDDEBBUGGGG')
-
     if current_l != target_l:
         in_order  = [l for l in UK_BB_LEADS if l.lower() in set(current_l)]
         remainder = [current[i] for i, l in enumerate(current_l) if l not in set(target_l)]
         target    = in_order + remainder
         idx       = [current_l.index(l.lower()) for l in target]
         rec.p_signal = rec.p_signal[:, idx]
+        target_out = []
+        for target in target_out:
+            if target.lower() == 'avr':
+                target_out.append('aVR')
+            elif target.lower() == 'avl':
+                target_out.append('aVL')
+            elif target.lower() == 'avf':
+                target_out.append('aVF')
+            else:
+                target_out.append(target)
         rec.sig_name = target
 
     print(f'AFTER DDDEBBUGGGG')
@@ -384,7 +390,9 @@ def process_and_save_segments(
     raw_ecg = (original_record.p_signal
                if beat_type == 'sampled'
                else record.median_beat.ecg.T)  # [T, n_leads]
-
+    
+    print(f'RAW ECG DDDEBBUGGGG')
+    print(raw_ecg.shape)
     # ── Collect segments ──────────────────────────────────────────────────────
     collected: dict[str, tuple[list, bool]] = {}
 
