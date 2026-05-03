@@ -4,6 +4,7 @@ import numpy as np
 import ast
 import json 
 import shutil
+import torch
 
 # load data
 # df = pd.read_csv('/home/tchatupanyacho/project/ptb_xl/physionet.org/files/ptb-xl/1.0.3/ptbxl_database.csv', index_col='ecg_id')
@@ -122,7 +123,7 @@ def remove_incorrect_leads(directory):
     for filename in os.listdir(directory):
         if filename.endswith('.pth'):
             filepath = os.path.join(directory, filename)
-            data = np.load(filepath)
+            data = torch.load(filepath)
             if data.shape[1] != 12:
                 print(f"Removing {filepath} due to incorrect number of leads: {data.shape[1]}")
                 os.remove(filepath)
