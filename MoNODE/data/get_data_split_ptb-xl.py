@@ -132,3 +132,6 @@ def remove_incorrect_leads(directory):
 directories = ['/home/tchatupanyacho/project/ptb_xl/segments/valid/atrial/median',
                '/home/tchatupanyacho/project/ptb_xl/segments/valid/ventricular/median',
                '/home/tchatupanyacho/project/ptb_xl/segments/valid/whole/median']
+
+for dir in directories:
+    remove_incorrect_leads(dir)
