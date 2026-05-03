@@ -190,6 +190,11 @@ def load_and_convert_case(row, dataset: str):
     current   = list(rec.sig_name)
     current_l = [l.lower() for l in current]
     target_l  = [l.lower() for l in UK_BB_LEADS]
+
+    print(f'BEFORE DDDEBBUGGGG')
+    print(rec.p_signal.shape, rec.sig_name)
+    print(f'BEFORE DDDEBBUGGGG')
+
     if current_l != target_l:
         in_order  = [l for l in UK_BB_LEADS if l.lower() in set(current_l)]
         remainder = [current[i] for i, l in enumerate(current_l) if l not in set(target_l)]
@@ -198,9 +203,9 @@ def load_and_convert_case(row, dataset: str):
         rec.p_signal = rec.p_signal[:, idx]
         rec.sig_name = target
 
-    print(f'DDDEBBUGGGG')
+    print(f'AFTER DDDEBBUGGGG')
     print(rec.p_signal.shape, rec.sig_name)
-    print(f'DDDEBBUGGGG')
+    print(f'AFTER DDDEBBUGGGG')
 
     ecg_dict = {name: rec.p_signal[:, i] for i, name in enumerate(rec.sig_name)}
     record = Record(ecg_dict, rec.fs, "DEMO", case)
@@ -323,7 +328,7 @@ def save_ecg_segment(
 
         print(f'DDDEBBUGGGG')
         print(segment.shape)
-        
+
         uid       = f'{base_uid}_{i}' if beat_type == 'sampled' else base_uid
         save_path = os.path.join(save_dir, f'{uid}.pth')
         torch.save(torch.from_numpy(segment.astype(np.float32)), save_path)
