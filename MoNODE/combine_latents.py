@@ -49,7 +49,7 @@ from sklearn.decomposition import PCA
 
 # Reuse probing infrastructure from finetune.py
 sys.path.insert(0, os.path.dirname(__file__))
-from finetune import _load_split, run_linear_probes
+from finetune import _load_split, run_linear_probes, _expand_ptbxl_metadata
 from summarize_results import save_run_summary
 
 
@@ -455,6 +455,18 @@ def main() -> None:
             json.dump(mi_results, f, indent=2)
         print(f"  Saved: {mi_summary_path}")
 
+    # ── Dataset flags ─────────────────────────────────────────────────────────
+    dataset_lower = args.dataset.lower()
+    is_medalcare  = 'medalcare' in dataset_lower
+    is_ptbxl      = 'ptb-xl' in dataset_lower or 'ptb_xl' in dataset_lower
+    is_ukbb       = 'uk' in dataset_lower and 'biobank' in dataset_lower
+
+    # Expand PTB-XL multi-label vectors (superclass/subclass/form/rhythm)
+    # into named binary columns before probing.
+    if is_ptbxl:
+        tr_meta = _expand_ptbxl_metadata(tr_meta)
+        te_meta = _expand_ptbxl_metadata(te_meta)
+
     # ── Run probes ───────────────────────────────────────────────────────────
     # Output root matches what summarize_results._walk_probe_results expects:
     #   {output_dir}/final_finetune_results/combined/{latent_key}/
@@ -466,7 +478,6 @@ def main() -> None:
     )
     os.makedirs(probe_out_root, exist_ok=True)
 
-    is_medalcare = 'medalcare' in args.dataset.lower()
     _skip = set(args.skip_params or []) | {'patient_id'}
     print(f"\n── Running linear probes ──")
     run_linear_probes(
@@ -479,6 +490,7 @@ def main() -> None:
         skip_params=_skip,
         methods={'ols'},
         balance_sinus=(is_medalcare and args.balance_sinus),
+        use_target_scaling=is_ukbb,
     )
 
     # ── Write placeholder training_metrics.json ───────────────────────────────

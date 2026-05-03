@@ -149,6 +149,7 @@ def recover_metadata(
     csv_path: str,
     seg_types: list[str],
     beat_types: list[str],
+    split: str,
 ) -> tuple[dict, dict]:
     """Rebuild metadata from .pth files and CSV labels.
 
@@ -178,7 +179,7 @@ def recover_metadata(
 
     for seg_type in seg_types:
         for beat_type in beat_types:
-            scan_dir  = os.path.join(out_dir, seg_type, beat_type)
+            scan_dir  = os.path.join(out_dir, split, seg_type, beat_type)
             uid_files = _scan_dir(scan_dir, beat_type)
             file_index[(seg_type, beat_type)] = dict(uid_files)
 
@@ -381,6 +382,7 @@ def main():
         csv_path   = args.csv_path,
         seg_types  = args.seg_types,
         beat_types = args.beat_types,
+        split = args.split
     )
     print(f"  Recovered {len(metadata)} UIDs")
 
