@@ -15,7 +15,8 @@ MIMIC_IV_LEADS = ['I', 'II', 'III', 'aVF', 'aVR', 'aVL', 'V1', 'V2', 'V3', 'V4',
 LEADS_DICT = {
     'medalcare-xl': DEFAULT_LEADS,
     'uk_biobank': DEFAULT_LEADS,
-    'mimic-iv': MIMIC_IV_LEADS
+    'mimic-iv': MIMIC_IV_LEADS, 
+	'ptb_xl': DEFAULT_LEADS
 }
 
 def filter_bandpass(signal, fs):
