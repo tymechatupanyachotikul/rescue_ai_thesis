@@ -2219,7 +2219,8 @@ def run_label_efficiency_probes(tr_latents: dict, tr_metadata: list,
                                  skip_params: set | None = None,
                                  balance_sinus: bool = False,
                                  use_target_scaling: bool = False,
-                                 seeds: list | None = None) -> dict:
+                                 seeds: list | None = None,
+                                 methods: set | None = None) -> dict:
     """Run OLS linear probes at multiple training-set fractions, repeated over
     several seeds, and report mean ± std across seeds.
 
@@ -2273,7 +2274,7 @@ def run_label_efficiency_probes(tr_latents: dict, tr_metadata: list,
                     eval_latents, eval_metadata,
                     latent_key=latent_key,
                     out_root=None,          # no per-run plots
-                    methods={'ols'},
+                    methods=methods or {'ols'},
                     skip_params=skip_params,
                     balance_sinus=balance_sinus,
                     use_target_scaling=use_target_scaling,
@@ -2282,7 +2283,7 @@ def run_label_efficiency_probes(tr_latents: dict, tr_metadata: list,
             raw_runs.setdefault(frac_str, {})
 
             for param, method_res in res.get('regression', {}).items():
-                ols = method_res.get('ols', {})
+                ols = next(iter(method_res.values()), {})
                 m   = ols.get('metrics', ols)
                 for metric in ('r2', 'mae'):
                     v = m.get(metric)
@@ -2291,7 +2292,7 @@ def run_label_efficiency_probes(tr_latents: dict, tr_metadata: list,
                             f'reg_{metric}', []).append(float(v))
 
             for param, method_res in res.get('classification', {}).items():
-                ols = method_res.get('ols', {})
+                ols = next(iter(method_res.values()), {})
                 m   = ols.get('metrics', ols)
                 for metric in ('accuracy', 'f1_binary', 'f1_macro', 'balanced_accuracy',
                                'auroc', 'auroc_macro'):
@@ -2724,15 +2725,18 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     for lkey in latent_keys:
         print(f"\n=== Linear probes ({lkey}) ===")
         with np.errstate(all='ignore'):
+            _is_ukbb_probe  = dataset_name in ('uk-biobank', 'uk_biobank')
+            _is_ptbxl_probe = dataset_name == 'ptb-xl'
+            probe_methods   = {'ridge'} if _is_ptbxl_probe else {'ols'}
             probe_results = run_linear_probes(
                 tr_latents,   tr_metadata,
                 eval_latents, eval_metadata,
                 latent_key=lkey,
                 out_root=os.path.join(finetune_root, lkey),
-                methods={'ols'},
+                methods=probe_methods,
                 skip_params=probe_skip,
                 balance_sinus=(dataset_name == 'medalcare-xl' and seg_type != 'whole'),
-                use_target_scaling=(dataset_name != 'medalcare-xl'),
+                use_target_scaling=_is_ukbb_probe,
             )
         log_probe_metrics(probe_results, lkey, seg_type, run)
 
@@ -2745,6 +2749,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     _is_ukbb  = dataset_name in ('uk-biobank', 'uk_biobank')
     _is_ptbxl = dataset_name == 'ptb-xl'
     if _is_ukbb or _is_ptbxl:
+        eff_methods = {'ridge'} if _is_ptbxl else {'ols'}
         for lkey in latent_keys:
             print(f"\n=== Label efficiency probes ({lkey}) ===")
             run_label_efficiency_probes(
@@ -2755,6 +2760,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                 fractions=[0.01, 0.10, 0.50, 1.00],
                 skip_params=probe_skip,
                 use_target_scaling=_is_ukbb,
+                methods=eff_methods,
             )
 
             # Pearson correlations and permutation tests require continuous targets
@@ -2903,6 +2909,8 @@ if __name__ == '__main__':
     latent_keys = ['z0'] + (['m', 'z0_m'] if has_m else [])
     if has_sample:
         latent_keys += ['z0_sample'] + (['z0_sample_m'] if has_m else [])
+    _cli_is_ukbb  = dataset_name in ('uk-biobank', 'uk_biobank')
+    _cli_is_ptbxl = dataset_name == 'ptb-xl'
     for lkey in latent_keys:
         print(f"\n=== Linear probes ({lkey}) ===")
         run_linear_probes(
@@ -2913,7 +2921,7 @@ if __name__ == '__main__':
             methods=methods,
             skip_params=probe_skip,
             balance_sinus=(dataset_name == 'medalcare-xl'),
-            use_target_scaling=(dataset_name != 'medalcare-xl'),
+            use_target_scaling=_cli_is_ukbb,
         )
 
         _cm = args.clustering_method
@@ -2962,6 +2970,7 @@ if __name__ == '__main__':
 
     # ── Label efficiency probes ───────────────────────────────────────────────
     if args.label_efficiency:
+        _cli_eff_methods = {'ridge'} if _cli_is_ptbxl else (methods or {'ols'})
         for lkey in latent_keys:
             print(f"\n=== Label efficiency probes ({lkey}) ===")
             run_label_efficiency_probes(
@@ -2972,7 +2981,8 @@ if __name__ == '__main__':
                 fractions=[0.01, 0.10, 0.50, 1.00],
                 skip_params=probe_skip,
                 balance_sinus=(dataset_name == 'medalcare-xl'),
-                use_target_scaling=(dataset_name != 'medalcare-xl'),
+                use_target_scaling=_cli_is_ukbb,
+                methods=_cli_eff_methods,
             )
 
     # ── Pearson correlation heatmaps ──────────────────────────────────────────
