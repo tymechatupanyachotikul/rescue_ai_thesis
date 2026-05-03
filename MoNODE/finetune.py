@@ -26,11 +26,12 @@ from sklearn.compose import TransformedTargetRegressor
 from sklearn.metrics import (
     r2_score, mean_squared_error, mean_absolute_error,
     roc_auc_score, accuracy_score, f1_score, recall_score,
-    balanced_accuracy_score,
+    balanced_accuracy_score, hamming_loss,
     adjusted_rand_score,
     silhouette_score, silhouette_samples,
     ConfusionMatrixDisplay,
 )
+from sklearn.multiclass import OneVsRestClassifier
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 from sklearn.neural_network import MLPRegressor, MLPClassifier
@@ -1662,6 +1663,138 @@ def _expand_ptbxl_metadata(metadata_list: list) -> list:
     return expanded
 
 
+PTBXL_GROUP_CLASS_NAMES: dict[str, list[str] | None] = {
+    'superclass': PTBXL_SUPERCLASS_NAMES,
+    'subclass':   None,   # index-based
+    'form':       None,
+    'rhythm':     None,
+}
+
+
+def run_ptbxl_multilabel_probes(
+    tr_latents:    dict,
+    tr_metadata:   list,
+    eval_latents:  dict,
+    eval_metadata: list,
+    latent_key:    str = 'z0',
+    out_root:      str | None = None,
+) -> dict:
+    """Multi-label OVR classification probes for PTB-XL.
+
+    For each label group (superclass, subclass, form, rhythm) trains a
+    ``OneVsRestClassifier(LogisticRegressionCV(l2))`` on the full multi-label
+    target matrix and reports per-class and averaged AUROC, F1 (micro/macro),
+    and Hamming loss.
+
+    Parameters
+    ----------
+    tr_metadata / eval_metadata
+        Raw (unexpanded) PTB-XL metadata where labels still contain list-valued
+        entries, e.g. ``{'superclass': [0,1,1,0,0], 'subclass': [...], ...}``.
+    """
+    X_tr  = tr_latents[latent_key]
+    X_te  = eval_latents[latent_key]
+    all_results: dict = {}
+
+    for group, class_names in PTBXL_GROUP_CLASS_NAMES.items():
+        # ── Collect multi-label arrays ────────────────────────────────────────
+        tr_idx, Y_tr_rows = [], []
+        for i, meta in enumerate(tr_metadata):
+            val = meta.get('labels', {}).get(group)
+            if isinstance(val, list) and len(val) > 0:
+                tr_idx.append(i)
+                Y_tr_rows.append(val)
+
+        te_idx, Y_te_rows = [], []
+        for i, meta in enumerate(eval_metadata):
+            val = meta.get('labels', {}).get(group)
+            if isinstance(val, list) and len(val) > 0:
+                te_idx.append(i)
+                Y_te_rows.append(val)
+
+        if len(tr_idx) < 20 or len(te_idx) < 5:
+            print(f"  [{group}] skipped (tr={len(tr_idx)}, te={len(te_idx)})")
+            continue
+
+        Y_tr = np.array(Y_tr_rows, dtype=int)
+        Y_te = np.array(Y_te_rows, dtype=int)
+        Xtr  = X_tr[tr_idx]
+        Xte  = X_te[te_idx]
+
+        # ── Drop columns constant in training ─────────────────────────────────
+        col_sums = Y_tr.sum(axis=0)
+        keep     = np.where((col_sums > 0) & (col_sums < len(Y_tr)))[0]
+        if len(keep) == 0:
+            print(f"  [{group}] skipped (all classes constant)")
+            continue
+        Y_tr = Y_tr[:, keep]
+        Y_te = Y_te[:, keep]
+        names = ([class_names[k] for k in keep] if class_names is not None
+                 else [str(k) for k in keep])
+
+        # ── Fit OneVsRestClassifier ───────────────────────────────────────────
+        base_clf = LogisticRegressionCV(penalty='l2', cv=5, max_iter=1000, n_jobs=-1,
+                                        class_weight='balanced')
+        clf = OneVsRestClassifier(base_clf, n_jobs=-1)
+        with np.errstate(all='ignore'):
+            clf.fit(Xtr, Y_tr)
+
+        Y_pred = clf.predict(Xte)
+        Y_prob = clf.predict_proba(Xte) if hasattr(clf, 'predict_proba') else None
+
+        # ── Metrics ───────────────────────────────────────────────────────────
+        metrics: dict = {
+            'n_train':    int(len(tr_idx)),
+            'n_eval':     int(len(te_idx)),
+            'n_classes':  int(len(keep)),
+            'class_names': names,
+            'hamming_loss': float(hamming_loss(Y_te, Y_pred)),
+            'f1_micro':     float(f1_score(Y_te, Y_pred, average='micro',  zero_division=0)),
+            'f1_macro':     float(f1_score(Y_te, Y_pred, average='macro',  zero_division=0)),
+        }
+
+        if Y_prob is not None:
+            # Only score classes that have positive examples in eval
+            te_pos = np.where(Y_te.sum(axis=0) > 0)[0]
+            if len(te_pos) >= 2:
+                try:
+                    metrics['auroc_micro'] = float(
+                        roc_auc_score(Y_te[:, te_pos], Y_prob[:, te_pos], average='micro'))
+                    metrics['auroc_macro'] = float(
+                        roc_auc_score(Y_te[:, te_pos], Y_prob[:, te_pos], average='macro'))
+                except ValueError:
+                    pass
+
+            per_class: dict = {}
+            for j, name in enumerate(names):
+                if len(np.unique(Y_te[:, j])) < 2:
+                    continue
+                try:
+                    per_class[name] = float(roc_auc_score(Y_te[:, j], Y_prob[:, j]))
+                except ValueError:
+                    pass
+            if per_class:
+                metrics['per_class_auroc'] = per_class
+
+        auroc_str = f"{metrics.get('auroc_macro', float('nan')):.3f}"
+        print(f"  [{group}]  n_classes={len(keep)}  "
+              f"AUROC_macro={auroc_str}  "
+              f"F1_macro={metrics['f1_macro']:.3f}  "
+              f"Hamming={metrics['hamming_loss']:.4f}")
+
+        all_results[group] = metrics
+
+    if out_root is not None:
+        out_dir = os.path.join(out_root, latent_key)
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, 'ptbxl_multilabel_metrics.json')
+        with open(out_path, 'w') as f:
+            json.dump(all_results, f, indent=2)
+        print(f"  PTB-XL multi-label metrics → {out_path}")
+
+    return all_results
+
+
 # ---------------------------------------------------------------------------
 # Post-training pipeline: latent collection + linear probes + wandb logging
 # ---------------------------------------------------------------------------
@@ -2669,8 +2802,12 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
             if validset is not None:
                 va_metadata = _remap_metadata(va_metadata, seg_type)
 
-    # Expand PTB-XL multi-label vectors into named binary columns
+    # Expand PTB-XL multi-label vectors into named binary columns.
+    # Save raw (unexpanded) copies first for the OneVsRest multi-label probes.
     elif dataset_name == 'ptb_xl':
+        tr_meta_raw = list(tr_metadata)
+        te_meta_raw = list(te_metadata)
+        va_meta_raw = list(va_metadata) if validset is not None else []
         tr_metadata = _expand_ptbxl_metadata(tr_metadata)
         te_metadata = _expand_ptbxl_metadata(te_metadata)
         if validset is not None:
@@ -2697,6 +2834,11 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     else:
         eval_latents = te_latents
         eval_metadata = te_metadata
+
+    # PTB-XL: build raw eval metadata for OVR multi-label probes
+    if dataset_name == 'ptb_xl':
+        eval_meta_raw = (va_meta_raw + te_meta_raw
+                         if validset is not None else te_meta_raw)
 
     # Build combined latent key when modulator is present
     has_m = 'm' in tr_latents and 'm' in eval_latents
@@ -2742,12 +2884,24 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
 
         # ── Clustering ────────────────────────────────────────────────────────
 
+    # ── PTB-XL multi-label OVR probes ────────────────────────────────────────
+    _is_ptbxl = dataset_name == 'ptb_xl'
+    if _is_ptbxl:
+        for lkey in latent_keys:
+            print(f"\n=== PTB-XL multi-label OVR probes ({lkey}) ===")
+            with np.errstate(all='ignore'):
+                run_ptbxl_multilabel_probes(
+                    tr_latents,   tr_meta_raw,
+                    eval_latents, eval_meta_raw,
+                    latent_key=lkey,
+                    out_root=finetune_root,
+                )
+
     # ── Label efficiency ─────────────────────────────────────────────────────
     # UK Biobank: regression probes (continuous phenotypes).
     # PTB-XL:    classification probes (binary multi-label, no target scaling).
     # MedalCare-XL: skipped (categorical labels, too few samples per class).
     _is_ukbb  = dataset_name in ('uk-biobank', 'uk_biobank')
-    _is_ptbxl = dataset_name == 'ptb_xl'
     if _is_ukbb or _is_ptbxl:
         eff_methods = {'ridge'} if _is_ptbxl else {'ols'}
         for lkey in latent_keys:
