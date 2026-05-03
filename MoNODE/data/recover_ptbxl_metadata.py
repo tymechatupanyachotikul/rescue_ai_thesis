@@ -76,6 +76,7 @@ def _parse_label_str(s) -> list[int]:
 
 def find_anomalies(
     time_list: list[tuple[str, int]],
+    seg_type: str,
 ) -> tuple[list[str], float | None, float | None]:
     """Two-tailed z-test: flag UIDs whose segment length is a statistical
     outlier (p < 0.05).  Cutoff times are mean ± z_crit * std.
@@ -83,6 +84,7 @@ def find_anomalies(
     Parameters
     ----------
     time_list : list of (uid, length_in_samples)
+    seg_type  : segment type (e.g., 'atrial', 'ventricular')
 
     Returns
     -------
@@ -95,21 +97,20 @@ def find_anomalies(
     if len(time_list) < 2:
         return [], None, None
 
-    uids  = [u for u, _ in time_list]
-    times = np.array([t for _, t in time_list], dtype=float)
+    anomaly_uids = []
+    if seg_type == 'atrial':
+        lower = 20 
+        upper = 91 
+    elif seg_type == 'ventricular':
+        lower = 150 
+        upper = 250
+    else:
+        return [], None, None
 
-    mean  = times.mean()
-    std   = times.std()
-
-    # z_critical for two-tailed α = 0.05: norm.ppf(0.975) ≈ 1.96
-    z_crit = sp_stats.norm.ppf(0.975)
-    lower  = float(mean - z_crit * std)
-    upper  = float(mean + z_crit * std)
-
-    z_scores = (times - mean) / (std + 1e-8)
-    p_values = 2 * sp_stats.norm.sf(np.abs(z_scores))
-
-    anomaly_uids = [uid for uid, p in zip(uids, p_values) if p < 0.05]
+    for uid, time in time_list:
+        if time < lower or time > upper:
+            anomaly_uids.append(uid)
+    
     return anomaly_uids, lower, upper
 
 
@@ -146,35 +147,18 @@ def _scan_dir(scan_dir: str, beat_type: str
 
 def recover_metadata(
     out_dir: str,
-    csv_path: str,
     seg_types: list[str],
     beat_types: list[str],
     split: str,
-) -> tuple[dict, dict]:
+) -> dict:
     """Rebuild metadata from .pth files and CSV labels.
 
     Returns
     -------
-    metadata   : {uid: {labels, p_wave_estimated, segment_lengths}}
     file_index : {(seg_type, beat_type): {uid: [(idx_or_None, fpath)]}}
     """
-    # 1. Load CSV labels
-    df = pd.read_csv(csv_path)
-    uid_to_labels: dict[str, dict] = {}
-    for _, row in df.iterrows():
-        uid    = _uid_from_path(row.data_path)
-        labels: dict = {'patient_id': uid}
-        for col in ('superclass', 'subclass', 'form', 'rhythm'):
-            if col in df.columns and pd.notna(row[col]):
-                labels[col] = _parse_label_str(row[col])
-            else:
-                labels[col] = None
-        uid_to_labels[uid] = labels
-
-    print(f"CSV loaded: {len(uid_to_labels)} unique UIDs")
 
     # 2. Scan saved .pth files
-    metadata:   dict = {}
     file_index: dict = {}
 
     for seg_type in seg_types:
@@ -186,39 +170,7 @@ def recover_metadata(
             n_files = sum(len(v) for v in uid_files.values())
             print(f"  {scan_dir}: {len(uid_files)} UIDs, {n_files} files")
 
-            for base_uid, entries in uid_files.items():
-                if base_uid not in metadata:
-                    metadata[base_uid] = {
-                        'labels':          uid_to_labels.get(
-                            base_uid, {'patient_id': base_uid}),
-                        'p_wave_estimated': None,
-                        'segment_lengths':  {},
-                    }
-
-                if beat_type == 'sampled':
-                    entries_sorted = sorted(
-                        entries, key=lambda x: x[0] if x[0] is not None else 0)
-                    lengths = []
-                    for _, fpath in entries_sorted:
-                        try:
-                            t = torch.load(fpath, map_location='cpu',
-                                           weights_only=True)
-                            lengths.append(int(t.shape[0]))
-                        except Exception as e:
-                            print(f"    [warn] {fpath}: {e}")
-                    metadata[base_uid]['segment_lengths'][seg_type] = lengths
-                else:
-                    _, fpath = entries[0]
-                    try:
-                        t = torch.load(fpath, map_location='cpu',
-                                       weights_only=True)
-                        metadata[base_uid]['segment_lengths'][seg_type] = int(
-                            t.shape[0])
-                    except Exception as e:
-                        print(f"    [warn] {fpath}: {e}")
-                        metadata[base_uid]['segment_lengths'][seg_type] = None
-
-    return metadata, file_index
+    return file_index
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +231,7 @@ def detect_and_quarantine(
 
         # ── Two-tailed z-test ─────────────────────────────────────────────────
         time_list     = [(uid, int(length)) for uid, length, _ in records]
-        anomaly_uids, lower, upper = find_anomalies(time_list)
+        anomaly_uids, lower, upper = find_anomalies(time_list, seg_type)
         anomaly_set   = set(anomaly_uids)
 
         uid_to_record = {uid: (length, fpath) for uid, length, fpath in records}
@@ -360,7 +312,7 @@ def main():
         description="Recover PTB-XL metadata and quarantine anomalous segments")
     parser.add_argument('--out_dir',        required=True,
                         help="Root output dir from aladin_preprocess (e.g. .../train)")
-    parser.add_argument('--csv_path',       required=True,
+    parser.add_argument('--metadata_path',       required=True,
                         help="Split CSV (e.g. ptb-xl_train.csv)")
     parser.add_argument('--split',          default='train',
                         help="Split name for output filenames (default: train)")
@@ -377,13 +329,15 @@ def main():
     args = parser.parse_args()
 
     print(f"Recovering metadata from: {args.out_dir}")
-    metadata, file_index = recover_metadata(
+    file_index = recover_metadata(
         out_dir    = args.out_dir,
-        csv_path   = args.csv_path,
         seg_types  = args.seg_types,
         beat_types = args.beat_types,
         split = args.split
     )
+    with open(args.metadata_path, 'r') as f:
+        metadata = json.load(f)
+
     print(f"  Recovered {len(metadata)} UIDs")
 
     if not args.skip_anomaly_detection:
@@ -401,14 +355,6 @@ def main():
         with open(report_path, 'w') as f:
             json.dump(_to_serialisable(report), f, indent=2)
         print(f"Anomaly report → {report_path}")
-    else:
-        clean_metadata = metadata
-
-    meta_path = os.path.join(args.out_dir, f'{args.split}_metadata.json')
-    with open(meta_path, 'w') as f:
-        json.dump(_to_serialisable(clean_metadata), f, indent=2)
-    print(f"Metadata ({len(clean_metadata)} UIDs) → {meta_path}")
-
 
 if __name__ == '__main__':
     main()
