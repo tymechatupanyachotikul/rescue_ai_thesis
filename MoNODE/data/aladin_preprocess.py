@@ -210,7 +210,7 @@ def load_and_convert_case(row, dataset: str):
         else:
             target_out.append(sig)
 
-    rec.signame = target_out
+    rec.sig_name = target_out
 
     print(f'AFTER DDDEBBUGGGG')
     print(rec.p_signal.shape, rec.sig_name)
