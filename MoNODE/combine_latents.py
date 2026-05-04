@@ -49,7 +49,10 @@ from sklearn.decomposition import PCA
 
 # Reuse probing infrastructure from finetune.py
 sys.path.insert(0, os.path.dirname(__file__))
-from finetune import _load_split, run_linear_probes, _expand_ptbxl_metadata
+from finetune import (
+    _load_split, run_linear_probes,
+    run_ptbxl_multilabel_probes, run_ptbxl_label_efficiency_probes,
+)
 from summarize_results import save_run_summary
 
 
@@ -461,37 +464,51 @@ def main() -> None:
     is_ptbxl      = 'ptb' in dataset_lower or 'ptb' in dataset_lower
     is_ukbb       = 'uk' in dataset_lower and 'biobank' in dataset_lower
 
-    # Expand PTB-XL multi-label vectors (superclass/subclass/form/rhythm)
-    # into named binary columns before probing.
-    if is_ptbxl:
-        tr_meta = _expand_ptbxl_metadata(tr_meta)
-        te_meta = _expand_ptbxl_metadata(te_meta)
-
     # ── Run probes ───────────────────────────────────────────────────────────
-    # Output root matches what summarize_results._walk_probe_results expects:
-    #   {output_dir}/final_finetune_results/combined/{latent_key}/
-    probe_out_root = os.path.join(
-        args.output_dir,
-        'final_finetune_results',
-        'combined',
-        args.latent_key,
-    )
+    # probe_out_parent: {output_dir}/final_finetune_results/combined/
+    # OVR functions append /{latent_key}/ themselves; run_linear_probes gets
+    # the full path including latent_key.
+    probe_out_parent = os.path.join(
+        args.output_dir, 'final_finetune_results', 'combined')
+    probe_out_root = os.path.join(probe_out_parent, args.latent_key)
     os.makedirs(probe_out_root, exist_ok=True)
 
     _skip = set(args.skip_params or []) | {'patient_id'}
-    print(f"\n── Running linear probes ──")
-    run_linear_probes(
-        train_latents=tr_combined,
-        train_metadata=tr_meta,
-        test_latents=te_combined,
-        test_metadata=te_meta,
-        latent_key=args.latent_key,
-        out_root=probe_out_root,
-        skip_params=_skip,
-        methods={'ols'},
-        balance_sinus=(is_medalcare and args.balance_sinus),
-        use_target_scaling=is_ukbb,
-    )
+
+    if is_ptbxl:
+        print(f"\n── Running PTB-XL multi-label OVR probes ──")
+        run_ptbxl_multilabel_probes(
+            tr_latents=tr_combined,
+            tr_metadata=tr_meta,
+            eval_latents=te_combined,
+            eval_metadata=te_meta,
+            latent_key=args.latent_key,
+            out_root=probe_out_parent,
+        )
+        print(f"\n── Running PTB-XL label efficiency OVR probes ──")
+        run_ptbxl_label_efficiency_probes(
+            tr_latents=tr_combined,
+            tr_metadata=tr_meta,
+            eval_latents=te_combined,
+            eval_metadata=te_meta,
+            latent_key=args.latent_key,
+            out_root=probe_out_parent,
+            fractions=[0.01, 0.10, 0.50, 1.00],
+        )
+    else:
+        print(f"\n── Running linear probes ──")
+        run_linear_probes(
+            train_latents=tr_combined,
+            train_metadata=tr_meta,
+            test_latents=te_combined,
+            test_metadata=te_meta,
+            latent_key=args.latent_key,
+            out_root=probe_out_root,
+            skip_params=_skip,
+            methods={'ols'},
+            balance_sinus=(is_medalcare and args.balance_sinus),
+            use_target_scaling=is_ukbb,
+        )
 
     # ── Write placeholder training_metrics.json ───────────────────────────────
     training_stub = {
