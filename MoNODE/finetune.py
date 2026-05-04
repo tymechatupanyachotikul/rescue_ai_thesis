@@ -1671,6 +1671,62 @@ PTBXL_GROUP_CLASS_NAMES: dict[str, list[str] | None] = {
 }
 
 
+def _ptbxl_collect_group(
+    group: str,
+    class_names: list[str] | None,
+    tr_metadata: list,
+    eval_metadata: list,
+    X_tr: np.ndarray,
+    X_te: np.ndarray,
+) -> dict | None:
+    """Collect multi-label arrays for one PTB-XL label group.
+
+    Returns a dict with keys Xtr, Y_tr, Xte, Y_te, names, valid_te, or None
+    if the group has fewer than 20 train / 5 eval samples or all-constant columns.
+    """
+    tr_idx, Y_tr_rows = [], []
+    for i, meta in enumerate(tr_metadata):
+        val = meta.get('labels', {}).get(group)
+        if isinstance(val, list) and len(val) > 0:
+            tr_idx.append(i)
+            Y_tr_rows.append(val)
+
+    te_idx, Y_te_rows = [], []
+    for i, meta in enumerate(eval_metadata):
+        val = meta.get('labels', {}).get(group)
+        if isinstance(val, list) and len(val) > 0:
+            te_idx.append(i)
+            Y_te_rows.append(val)
+
+    if len(tr_idx) < 20 or len(te_idx) < 5:
+        print(f"  [{group}] skipped (tr={len(tr_idx)}, te={len(te_idx)})")
+        return None
+
+    Y_tr = np.array(Y_tr_rows, dtype=int)
+    Y_te = np.array(Y_te_rows, dtype=int)
+
+    # Drop columns constant across the full training set
+    col_sums = Y_tr.sum(axis=0)
+    keep     = np.where((col_sums > 0) & (col_sums < len(Y_tr)))[0]
+    if len(keep) == 0:
+        print(f"  [{group}] skipped (all classes constant in training)")
+        return None
+    Y_tr = Y_tr[:, keep]
+    Y_te = Y_te[:, keep]
+
+    names = ([class_names[k] for k in keep] if class_names is not None
+             else [str(k) for k in keep])
+
+    return {
+        'Xtr':      X_tr[tr_idx],
+        'Y_tr':     Y_tr,
+        'Xte':      X_te[te_idx],
+        'Y_te':     Y_te,
+        'names':    names,
+        'valid_te': Y_te.sum(axis=0) > 0,  # classes with positives in eval set
+    }
+
+
 def run_ptbxl_multilabel_probes(
     tr_latents:    dict,
     tr_metadata:   list,
@@ -1682,9 +1738,12 @@ def run_ptbxl_multilabel_probes(
     """Multi-label OVR classification probes for PTB-XL.
 
     For each label group (superclass, subclass, form, rhythm) trains a
-    ``OneVsRestClassifier(LogisticRegressionCV(l2))`` on the full multi-label
-    target matrix and reports per-class and averaged AUROC, F1 (micro/macro),
-    and Hamming loss.
+    ``OneVsRestClassifier(LogisticRegression(l2))`` on the full multi-label
+    target matrix.
+
+    Primary metric: macro AUROC over test-set-valid classes (standard PTB-XL
+    evaluation). Also reports micro AUROC, F1 micro/macro, Hamming loss, and
+    per-class AUROC.
 
     Parameters
     ----------
@@ -1697,90 +1756,60 @@ def run_ptbxl_multilabel_probes(
     all_results: dict = {}
 
     for group, class_names in PTBXL_GROUP_CLASS_NAMES.items():
-        # ── Collect multi-label arrays ────────────────────────────────────────
-        tr_idx, Y_tr_rows = [], []
-        for i, meta in enumerate(tr_metadata):
-            val = meta.get('labels', {}).get(group)
-            if isinstance(val, list) and len(val) > 0:
-                tr_idx.append(i)
-                Y_tr_rows.append(val)
-
-        te_idx, Y_te_rows = [], []
-        for i, meta in enumerate(eval_metadata):
-            val = meta.get('labels', {}).get(group)
-            if isinstance(val, list) and len(val) > 0:
-                te_idx.append(i)
-                Y_te_rows.append(val)
-
-        if len(tr_idx) < 20 or len(te_idx) < 5:
-            print(f"  [{group}] skipped (tr={len(tr_idx)}, te={len(te_idx)})")
+        gd = _ptbxl_collect_group(group, class_names, tr_metadata, eval_metadata,
+                                   X_tr, X_te)
+        if gd is None:
             continue
 
-        Y_tr = np.array(Y_tr_rows, dtype=int)
-        Y_te = np.array(Y_te_rows, dtype=int)
-        Xtr  = X_tr[tr_idx]
-        Xte  = X_te[te_idx]
-
-        # ── Drop columns constant in training ─────────────────────────────────
-        col_sums = Y_tr.sum(axis=0)
-        keep     = np.where((col_sums > 0) & (col_sums < len(Y_tr)))[0]
-        if len(keep) == 0:
-            print(f"  [{group}] skipped (all classes constant)")
-            continue
-        Y_tr = Y_tr[:, keep]
-        Y_te = Y_te[:, keep]
-        names = ([class_names[k] for k in keep] if class_names is not None
-                 else [str(k) for k in keep])
+        Xtr, Y_tr, Xte, Y_te = gd['Xtr'], gd['Y_tr'], gd['Xte'], gd['Y_te']
+        names        = gd['names']
+        valid_classes = gd['valid_te']  # bool mask [n_classes]
 
         # ── Fit OneVsRestClassifier ───────────────────────────────────────────
-        base_clf = LogisticRegressionCV(penalty='l2', cv=5, max_iter=1000, n_jobs=-1,
-                                        class_weight='balanced')
-        clf = OneVsRestClassifier(base_clf, n_jobs=-1)
+        clf = OneVsRestClassifier(
+            LogisticRegression(penalty='l2', C=1.0, max_iter=1000, n_jobs=-1,
+                               class_weight='balanced'),
+            n_jobs=-1,
+        )
         with np.errstate(all='ignore'):
             clf.fit(Xtr, Y_tr)
 
         Y_pred = clf.predict(Xte)
-        Y_prob = clf.predict_proba(Xte) if hasattr(clf, 'predict_proba') else None
+        Y_prob = clf.predict_proba(Xte)
 
         # ── Metrics ───────────────────────────────────────────────────────────
         metrics: dict = {
-            'n_train':    int(len(tr_idx)),
-            'n_eval':     int(len(te_idx)),
-            'n_classes':  int(len(keep)),
+            'n_train':     int(len(Xtr)),
+            'n_eval':      int(len(Xte)),
+            'n_classes':   int(Y_tr.shape[1]),
             'class_names': names,
             'hamming_loss': float(hamming_loss(Y_te, Y_pred)),
             'f1_micro':     float(f1_score(Y_te, Y_pred, average='micro',  zero_division=0)),
             'f1_macro':     float(f1_score(Y_te, Y_pred, average='macro',  zero_division=0)),
         }
 
-        if Y_prob is not None:
-            # Only score classes that have positive examples in eval
-            te_pos = np.where(Y_te.sum(axis=0) > 0)[0]
-            if len(te_pos) >= 2:
-                try:
-                    metrics['auroc_micro'] = float(
-                        roc_auc_score(Y_te[:, te_pos], Y_prob[:, te_pos], average='micro'))
-                    metrics['auroc_macro'] = float(
-                        roc_auc_score(Y_te[:, te_pos], Y_prob[:, te_pos], average='macro'))
-                except ValueError:
-                    pass
+        # Macro / micro AUROC — evaluated only on classes with positives in test
+        if valid_classes.sum() >= 2:
+            try:
+                metrics['auroc_macro'] = float(roc_auc_score(
+                    Y_te[:, valid_classes], Y_prob[:, valid_classes], average='macro'))
+                metrics['auroc_micro'] = float(roc_auc_score(
+                    Y_te[:, valid_classes], Y_prob[:, valid_classes], average='micro'))
+                per_class_arr = roc_auc_score(
+                    Y_te[:, valid_classes], Y_prob[:, valid_classes], average=None)
+                valid_names = [n for n, v in zip(names, valid_classes) if v]
+                metrics['per_class_auroc'] = {
+                    name: float(auc)
+                    for name, auc in zip(valid_names, per_class_arr)
+                }
+            except ValueError:
+                pass
 
-            per_class: dict = {}
-            for j, name in enumerate(names):
-                if len(np.unique(Y_te[:, j])) < 2:
-                    continue
-                try:
-                    per_class[name] = float(roc_auc_score(Y_te[:, j], Y_prob[:, j]))
-                except ValueError:
-                    pass
-            if per_class:
-                metrics['per_class_auroc'] = per_class
-
-        auroc_str = f"{metrics.get('auroc_macro', float('nan')):.3f}"
-        print(f"  [{group}]  n_classes={len(keep)}  "
-              f"AUROC_macro={auroc_str}  "
-              f"F1_macro={metrics['f1_macro']:.3f}  "
-              f"Hamming={metrics['hamming_loss']:.4f}")
+        auroc_str = f"{metrics.get('auroc_macro', float('nan')):.4f}"
+        print(f"  [{group}]  n_classes={Y_tr.shape[1]}  AUROC_macro={auroc_str}  "
+              f"F1_macro={metrics['f1_macro']:.4f}  Hamming={metrics['hamming_loss']:.4f}")
+        for cls_name, auc in metrics.get('per_class_auroc', {}).items():
+            print(f"    {cls_name:>20s}: AUROC={auc:.4f}")
 
         all_results[group] = metrics
 
@@ -1793,6 +1822,149 @@ def run_ptbxl_multilabel_probes(
         print(f"  PTB-XL multi-label metrics → {out_path}")
 
     return all_results
+
+
+def run_ptbxl_label_efficiency_probes(
+    tr_latents:    dict,
+    tr_metadata:   list,
+    eval_latents:  dict,
+    eval_metadata: list,
+    latent_key:    str = 'z0',
+    out_root:      str | None = None,
+    fractions:     list | None = None,
+    seeds:         list | None = None,
+) -> dict:
+    """Label-efficiency OVR probes for all PTB-XL label groups.
+
+    For each group (superclass, subclass, form, rhythm) and training fraction,
+    subsamples the training set over multiple seeds and measures macro AUROC.
+    Produces learning curves (mean ± std) per group.
+
+    Returns
+    -------
+    summary : {group: {frac_str: {auroc_macro_mean, auroc_macro_std, n_seeds}}}
+    """
+    if fractions is None:
+        fractions = [0.01, 0.10, 0.50, 1.00]
+    if seeds is None:
+        seeds = [42, 123, 456]
+
+    X_tr = tr_latents[latent_key]
+    X_te = eval_latents[latent_key]
+
+    # ── Pre-collect full data per group ──────────────────────────────────────
+    groups_data: dict = {}
+    for group, class_names in PTBXL_GROUP_CLASS_NAMES.items():
+        gd = _ptbxl_collect_group(group, class_names, tr_metadata, eval_metadata,
+                                   X_tr, X_te)
+        if gd is not None:
+            groups_data[group] = gd
+
+    if not groups_data:
+        return {}
+
+    # ── fraction × seed loop ─────────────────────────────────────────────────
+    # raw[frac_str][group] = list of macro_auroc values across seeds
+    raw: dict = {}
+
+    for seed_val in seeds:
+        rng = np.random.default_rng(seed_val)
+
+        for frac in fractions:
+            frac_str = f'{frac:.0%}'
+
+            for group, gd in groups_data.items():
+                N_g       = len(gd['Xtr'])
+                n_samples = max(1, int(round(frac * N_g)))
+                perm      = rng.permutation(N_g)
+                sub_idx   = perm[:n_samples]
+
+                Xtr_sub  = gd['Xtr'][sub_idx]
+                Y_tr_sub = gd['Y_tr'][sub_idx]
+
+                # Only train/score classes active in this subset AND in test
+                sub_active    = Y_tr_sub.sum(axis=0) > 0
+                active        = sub_active & gd['valid_te']
+                if active.sum() < 2:
+                    continue
+
+                clf = OneVsRestClassifier(
+                    LogisticRegression(penalty='l2', C=1.0, max_iter=1000, n_jobs=-1,
+                                       class_weight='balanced'),
+                    n_jobs=-1,
+                )
+                with np.errstate(all='ignore'):
+                    clf.fit(Xtr_sub, Y_tr_sub[:, active])
+
+                Y_prob = clf.predict_proba(gd['Xte'])
+                try:
+                    macro_auc = float(roc_auc_score(
+                        gd['Y_te'][:, active], Y_prob, average='macro'))
+                except ValueError:
+                    continue
+
+                raw.setdefault(frac_str, {}).setdefault(group, []).append(macro_auc)
+
+    # ── Aggregate mean ± std ──────────────────────────────────────────────────
+    frac_order = [f'{frac:.0%}' for frac in sorted(fractions)]
+    summary: dict = {}
+    for group in groups_data:
+        summary[group] = {}
+        for frac_str in frac_order:
+            vals = raw.get(frac_str, {}).get(group, [])
+            if not vals:
+                continue
+            arr = np.array(vals)
+            summary[group][frac_str] = {
+                'auroc_macro_mean': float(arr.mean()),
+                'auroc_macro_std':  float(arr.std()),
+                'n_seeds':          len(vals),
+            }
+
+    if not out_root:
+        return summary
+
+    # ── Save JSON ─────────────────────────────────────────────────────────────
+    out_dir = os.path.join(out_root, 'label_efficiency_ptbxl', latent_key)
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, 'ptbxl_label_efficiency.json'), 'w') as f:
+        json.dump(summary, f, indent=2)
+
+    # ── Plot: one curve per group, macro AUROC vs fraction ───────────────────
+    frac_vals = [float(f.rstrip('%')) / 100 for f in frac_order]
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    for i, (group, group_summary) in enumerate(sorted(summary.items())):
+        means, stds, xs = [], [], []
+        for frac_str, fval in zip(frac_order, frac_vals):
+            entry = group_summary.get(frac_str)
+            if entry is not None:
+                means.append(entry['auroc_macro_mean'])
+                stds.append(entry['auroc_macro_std'])
+                xs.append(fval)
+        if not means:
+            continue
+        ys = np.array(means)
+        es = np.array(stds)
+        ax.plot(xs, ys, marker='o', color=f'C{i}', label=group, linewidth=1.8)
+        ax.fill_between(xs, ys - es, ys + es, alpha=0.15, color=f'C{i}')
+
+    ax.set_xscale('log')
+    ax.set_xticks(frac_vals)
+    ax.set_xticklabels([f'{int(f * 100)}%' for f in frac_vals], fontsize=8)
+    ax.set_xlabel('Training fraction', fontsize=10)
+    ax.set_ylabel('Macro AUROC', fontsize=10)
+    ax.set_title(f'PTB-XL label efficiency — Macro AUROC ({latent_key})  '
+                 f'[{len(seeds)} seeds, mean±std]',
+                 fontsize=10, fontweight='bold')
+    ax.legend(fontsize=9, framealpha=0.8)
+    ax.spines[['top', 'right']].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, 'ptbxl_label_efficiency_auroc.png'), dpi=130)
+    plt.close(fig)
+
+    print(f"  [PTB-XL label efficiency/{latent_key}] Summary → {out_dir}")
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -2802,16 +2974,7 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
             if validset is not None:
                 va_metadata = _remap_metadata(va_metadata, seg_type)
 
-    # Expand PTB-XL multi-label vectors into named binary columns.
-    # Save raw (unexpanded) copies first for the OneVsRest multi-label probes.
-    elif dataset_name == 'ptb_xl':
-        tr_meta_raw = list(tr_metadata)
-        te_meta_raw = list(te_metadata)
-        va_meta_raw = list(va_metadata) if validset is not None else []
-        tr_metadata = _expand_ptbxl_metadata(tr_metadata)
-        te_metadata = _expand_ptbxl_metadata(te_metadata)
-        if validset is not None:
-            va_metadata = _expand_ptbxl_metadata(va_metadata)
+    # PTB-XL: no expansion — OVR probes work directly with raw list-valued labels.
 
     # Combine valid + test into a single evaluation split
     if validset is not None:
@@ -2834,11 +2997,6 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
     else:
         eval_latents = te_latents
         eval_metadata = te_metadata
-
-    # PTB-XL: build raw eval metadata for OVR multi-label probes
-    if dataset_name == 'ptb_xl':
-        eval_meta_raw = (va_meta_raw + te_meta_raw
-                         if validset is not None else te_meta_raw)
 
     # Build combined latent key when modulator is present
     has_m = 'm' in tr_latents and 'm' in eval_latents
@@ -2864,46 +3022,44 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
         with np.errstate(all='ignore'):
             diagnose_latents(tr_latents[lkey], f"train/{lkey}")
 
-    for lkey in latent_keys:
-        print(f"\n=== Linear probes ({lkey}) ===")
-        with np.errstate(all='ignore'):
-            _is_ukbb_probe  = dataset_name in ('uk-biobank', 'uk_biobank')
-            _is_ptbxl_probe = dataset_name == 'ptb_xl'
-            probe_methods   = {'ridge'} if _is_ptbxl_probe else {'ols'}
-            probe_results = run_linear_probes(
-                tr_latents,   tr_metadata,
-                eval_latents, eval_metadata,
-                latent_key=lkey,
-                out_root=os.path.join(finetune_root, lkey),
-                methods=probe_methods,
-                skip_params=probe_skip,
-                balance_sinus=(dataset_name == 'medalcare-xl' and seg_type != 'whole'),
-                use_target_scaling=_is_ukbb_probe,
-            )
-        log_probe_metrics(probe_results, lkey, seg_type, run)
+    _is_ukbb  = dataset_name in ('uk-biobank', 'uk_biobank')
+    _is_ptbxl = dataset_name == 'ptb_xl'
 
-        # ── Clustering ────────────────────────────────────────────────────────
+    if not _is_ptbxl:
+        for lkey in latent_keys:
+            print(f"\n=== Linear probes ({lkey}) ===")
+            with np.errstate(all='ignore'):
+                probe_results = run_linear_probes(
+                    tr_latents,   tr_metadata,
+                    eval_latents, eval_metadata,
+                    latent_key=lkey,
+                    out_root=os.path.join(finetune_root, lkey),
+                    methods={'ols'},
+                    skip_params=probe_skip,
+                    balance_sinus=(dataset_name == 'medalcare-xl' and seg_type != 'whole'),
+                    use_target_scaling=_is_ukbb,
+                )
+            log_probe_metrics(probe_results, lkey, seg_type, run)
+
+            # ── Clustering ────────────────────────────────────────────────────
 
     # ── PTB-XL multi-label OVR probes ────────────────────────────────────────
-    _is_ptbxl = dataset_name == 'ptb_xl'
     if _is_ptbxl:
         for lkey in latent_keys:
             print(f"\n=== PTB-XL multi-label OVR probes ({lkey}) ===")
             with np.errstate(all='ignore'):
                 run_ptbxl_multilabel_probes(
-                    tr_latents,   tr_meta_raw,
-                    eval_latents, eval_meta_raw,
+                    tr_latents,   tr_metadata,
+                    eval_latents, eval_metadata,
                     latent_key=lkey,
                     out_root=finetune_root,
                 )
 
     # ── Label efficiency ─────────────────────────────────────────────────────
-    # UK Biobank: regression probes (continuous phenotypes).
-    # PTB-XL:    classification probes (binary multi-label, no target scaling).
+    # UK Biobank: OLS regression probes on continuous phenotypes.
+    # PTB-XL:    OVR macro AUROC learning curves per label group.
     # MedalCare-XL: skipped (categorical labels, too few samples per class).
-    _is_ukbb  = dataset_name in ('uk-biobank', 'uk_biobank')
-    if _is_ukbb or _is_ptbxl:
-        eff_methods = {'ridge'} if _is_ptbxl else {'ols'}
+    if _is_ukbb:
         for lkey in latent_keys:
             print(f"\n=== Label efficiency probes ({lkey}) ===")
             run_label_efficiency_probes(
@@ -2913,26 +3069,36 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                 out_root=finetune_root,
                 fractions=[0.01, 0.10, 0.50, 1.00],
                 skip_params=probe_skip,
-                use_target_scaling=_is_ukbb,
-                methods=eff_methods,
+                use_target_scaling=True,
+                methods={'ols'},
             )
 
-            # Pearson correlations and permutation tests require continuous targets
-            if _is_ukbb:
-                print(f"\n=== Pearson correlations ({lkey}) ===")
-                compute_pearson_correlations(
-                    tr_latents, tr_metadata,
-                    latent_key=lkey,
-                    out_root=os.path.join(finetune_root, lkey),
-                )
+            print(f"\n=== Pearson correlations ({lkey}) ===")
+            compute_pearson_correlations(
+                tr_latents, tr_metadata,
+                latent_key=lkey,
+                out_root=os.path.join(finetune_root, lkey),
+            )
 
-                print(f"\n=== Permutation test ({lkey}) ===")
-                run_permutation_test(
+            print(f"\n=== Permutation test ({lkey}) ===")
+            run_permutation_test(
+                tr_latents,   tr_metadata,
+                eval_latents, eval_metadata,
+                latent_key=lkey,
+                out_root=finetune_root,
+                use_target_scaling=True,
+            )
+
+    if _is_ptbxl:
+        for lkey in latent_keys:
+            print(f"\n=== PTB-XL label efficiency OVR probes ({lkey}) ===")
+            with np.errstate(all='ignore'):
+                run_ptbxl_label_efficiency_probes(
                     tr_latents,   tr_metadata,
                     eval_latents, eval_metadata,
                     latent_key=lkey,
                     out_root=finetune_root,
-                    use_target_scaling=True,
+                    fractions=[0.01, 0.10, 0.50, 1.00],
                 )
 
     print("========== Post-training probes complete ==========\n")
@@ -3124,20 +3290,31 @@ if __name__ == '__main__':
 
     # ── Label efficiency probes ───────────────────────────────────────────────
     if args.label_efficiency:
-        _cli_eff_methods = {'ridge'} if _cli_is_ptbxl else (methods or {'ols'})
-        for lkey in latent_keys:
-            print(f"\n=== Label efficiency probes ({lkey}) ===")
-            run_label_efficiency_probes(
-                tr_latents,   tr_metadata,
-                eval_latents, eval_metadata,
-                latent_key=lkey,
-                out_root=finetune_root,
-                fractions=[0.01, 0.10, 0.50, 1.00],
-                skip_params=probe_skip,
-                balance_sinus=(dataset_name == 'medalcare-xl'),
-                use_target_scaling=_cli_is_ukbb,
-                methods=_cli_eff_methods,
-            )
+        if _cli_is_ptbxl:
+            for lkey in latent_keys:
+                print(f"\n=== PTB-XL label efficiency OVR probes ({lkey}) ===")
+                with np.errstate(all='ignore'):
+                    run_ptbxl_label_efficiency_probes(
+                        tr_latents,   tr_metadata,
+                        eval_latents, eval_metadata,
+                        latent_key=lkey,
+                        out_root=finetune_root,
+                        fractions=[0.01, 0.10, 0.50, 1.00],
+                    )
+        else:
+            for lkey in latent_keys:
+                print(f"\n=== Label efficiency probes ({lkey}) ===")
+                run_label_efficiency_probes(
+                    tr_latents,   tr_metadata,
+                    eval_latents, eval_metadata,
+                    latent_key=lkey,
+                    out_root=finetune_root,
+                    fractions=[0.01, 0.10, 0.50, 1.00],
+                    skip_params=probe_skip,
+                    balance_sinus=(dataset_name == 'medalcare-xl'),
+                    use_target_scaling=_cli_is_ukbb,
+                    methods=methods or {'ols'},
+                )
 
     # ── Pearson correlation heatmaps ──────────────────────────────────────────
     if args.pearson:

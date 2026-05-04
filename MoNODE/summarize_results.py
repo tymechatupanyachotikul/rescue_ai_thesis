@@ -146,6 +146,63 @@ def _flatten_probe_summary(probe_results: dict) -> dict:
     return summary
 
 
+# ─── PTB-XL OVR multi-label probes ──────────────────────────────────────────
+
+def _walk_ptbxl_multilabel(finetune_root: str, seg_type: str) -> dict:
+    """Load ptbxl_multilabel_metrics.json for each latent key.
+
+    Saved by run_ptbxl_multilabel_probes to:
+      {finetune_root}/{seg_type}/{lkey}/ptbxl_multilabel_metrics.json
+
+    Returns:
+      {lkey: {group: {auroc_macro, auroc_micro, f1_macro, f1_micro,
+                      hamming_loss, per_class_auroc, n_train, n_eval}}}
+    """
+    base = Path(finetune_root) / seg_type
+    results: dict = {}
+
+    if not base.exists():
+        return results
+
+    for lkey_dir in sorted(base.iterdir()):
+        if not lkey_dir.is_dir():
+            continue
+        data = _load_json(lkey_dir / 'ptbxl_multilabel_metrics.json')
+        if data is None:
+            continue
+        results[lkey_dir.name] = data
+
+    return results
+
+
+# ─── PTB-XL label efficiency ──────────────────────────────────────────────────
+
+def _walk_ptbxl_label_efficiency(finetune_root: str, seg_type: str) -> dict:
+    """Load ptbxl_label_efficiency.json for each latent key.
+
+    Saved by run_ptbxl_label_efficiency_probes to:
+      {finetune_root}/{seg_type}/label_efficiency_ptbxl/{lkey}/ptbxl_label_efficiency.json
+
+    Returns:
+      {lkey: {group: {frac_str: {auroc_macro_mean, auroc_macro_std, n_seeds}}}}
+    """
+    base = Path(finetune_root) / seg_type / 'label_efficiency_ptbxl'
+    results: dict = {}
+
+    if not base.exists():
+        return results
+
+    for lkey_dir in sorted(base.iterdir()):
+        if not lkey_dir.is_dir():
+            continue
+        data = _load_json(lkey_dir / 'ptbxl_label_efficiency.json')
+        if data is None:
+            continue
+        results[lkey_dir.name] = data
+
+    return results
+
+
 # ─── label efficiency ─────────────────────────────────────────────────────────
 
 def _walk_label_efficiency(finetune_root: str, seg_type: str) -> dict:
@@ -311,7 +368,21 @@ def save_run_summary(
         if not summary['probes']:
             print(f"  [summary] Warning: no probe results found under {finetune_root}")
 
-    # ── Label efficiency ──────────────────────────────────────────────────────
+    # ── PTB-XL OVR multi-label probes ────────────────────────────────────────
+    ptbxl_ml = _walk_ptbxl_multilabel(finetune_root, probe_seg)
+    if not ptbxl_ml:
+        ptbxl_ml = _walk_ptbxl_multilabel(finetune_root, 'all_classes')
+    if ptbxl_ml:
+        summary['ptbxl_multilabel_probes'] = ptbxl_ml
+
+    # ── PTB-XL label efficiency ───────────────────────────────────────────────
+    ptbxl_le = _walk_ptbxl_label_efficiency(finetune_root, probe_seg)
+    if not ptbxl_le:
+        ptbxl_le = _walk_ptbxl_label_efficiency(finetune_root, 'all_classes')
+    if ptbxl_le:
+        summary['ptbxl_label_efficiency'] = ptbxl_le
+
+    # ── Label efficiency (UK Biobank) ─────────────────────────────────────────
     le = _walk_label_efficiency(finetune_root, probe_seg)
     if not le:
         le = _walk_label_efficiency(finetune_root, 'all_classes')
