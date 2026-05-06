@@ -2950,29 +2950,14 @@ def run_post_training_probes(args, model, device, trainset, testset, task_params
                 json.dump(va_metadata, f, indent=2)
         print(f"  Saved latents to {latents_dir}")
 
-    # Remap MedalCare-XL class labels for the segment type
-    if dataset_name == 'medalcare-xl' and seg_type:
-        if seg_type == 'whole':
-            # Collapse unknown MI subclasses to 'mi'; keep all known classes intact
-            def _collapse_unknown(metadata: list) -> list:
-                out = []
-                for entry in metadata:
-                    entry = dict(entry)
-                    if 'labels' in entry and 'class' in entry['labels']:
-                        entry['labels'] = dict(entry['labels'])
-                        if entry['labels']['class'] not in _ALL_KNOWN_CLASSES:
-                            entry['labels']['class'] = 'mi'
-                    out.append(entry)
-                return out
-            tr_metadata = _collapse_unknown(tr_metadata)
-            te_metadata = _collapse_unknown(te_metadata)
-            if validset is not None:
-                va_metadata = _collapse_unknown(va_metadata)
-        else:
-            tr_metadata = _remap_metadata(tr_metadata, seg_type)
-            te_metadata = _remap_metadata(te_metadata, seg_type)
-            if validset is not None:
-                va_metadata = _remap_metadata(va_metadata, seg_type)
+    # Remap MedalCare-XL class labels for the segment type.
+    # 'whole' uses original class labels as-is (all MI subclasses preserved).
+    # 'atrial'/'ventricular' collapse cross-segment classes to 'sinus'.
+    if dataset_name == 'medalcare-xl' and seg_type and seg_type != 'whole':
+        tr_metadata = _remap_metadata(tr_metadata, seg_type)
+        te_metadata = _remap_metadata(te_metadata, seg_type)
+        if validset is not None:
+            va_metadata = _remap_metadata(va_metadata, seg_type)
 
     # PTB-XL: no expansion — OVR probes work directly with raw list-valued labels.
 
