@@ -15,7 +15,7 @@ Each projection is computed independently ("separately") for the three views.
 
 Label colouring
 ---------------
-  ptb_xl      — diagnostic superclass (multi-hot → active class names joined by '+')
+  ptb_xl      — primary diagnostic superclass (first active class in NORM/MI/STTC/CD/HYP)
   medalcare-xl — 'class' field, all MI subclasses collapsed to 'MI'
   uk_biobank   — labels used as-is; use --color_key to specify which label field
 
@@ -67,16 +67,10 @@ _ALL_KNOWN_CLASSES   = _ATRIAL_CLASSES | _VENTRICULAR_CLASSES | {'sinus'}
 
 # ── Data loading ───────────────────────────────────────────────────────────────
 
-def load_all_splits(latents_dir: str) -> tuple[dict, list]:
-    """Concatenate all available splits (train, valid, test) from *latents_dir*.
-
-    Returns:
-        latents  — dict[key → np.ndarray shape (N_total, D)]
-        metadata — list of N_total entry dicts (each has 'uid', 'labels')
-    """
+def _try_load_dir(latents_dir: str) -> tuple[dict, list]:
+    """Attempt to load all splits from *latents_dir*; returns empty structures if none found."""
     all_latents: dict[str, list[np.ndarray]] = defaultdict(list)
     all_metadata: list = []
-
     for split in ('train', 'valid', 'test'):
         try:
             lat, meta = _load_split(latents_dir, split)
@@ -86,11 +80,39 @@ def load_all_splits(latents_dir: str) -> tuple[dict, list]:
             print(f"    [{split}] {len(meta)} samples")
         except FileNotFoundError:
             pass
+    return all_latents, all_metadata
+
+
+def load_all_splits(latents_dir: str) -> tuple[dict, list]:
+    """Concatenate all available splits (train, valid, test) from *latents_dir*.
+
+    If *latents_dir* yields no splits, retries with the last path component
+    replaced by ``'latents'`` (e.g. ``run/latents_500`` → ``run/latents``).
+
+    Returns:
+        latents  — dict[key → np.ndarray shape (N_total, D)]
+        metadata — list of N_total entry dicts (each has 'uid', 'labels')
+    """
+    latents_dir = latents_dir.rstrip('/')
+    all_latents, all_metadata = _try_load_dir(latents_dir)
 
     if not all_metadata:
-        raise FileNotFoundError(f"No latent splits found in: {latents_dir}")
+        fallback = os.path.join(os.path.dirname(latents_dir), 'latents')
+        print(f"    Nothing found in {latents_dir}, retrying {fallback}")
+        all_latents, all_metadata = _try_load_dir(fallback)
+
+    if not all_metadata:
+        raise FileNotFoundError(
+            f"No latent splits found in {latents_dir!r} or fallback "
+            f"{os.path.join(os.path.dirname(latents_dir), 'latents')!r}"
+        )
 
     combined = {k: np.concatenate(vs, axis=0) for k, vs in all_latents.items()}
+
+    # Add virtual z0_m key when both z0 and m are present
+    if 'z0' in combined and 'm' in combined:
+        combined['z0_m'] = np.concatenate([combined['z0'], combined['m']], axis=1)
+
     print(f"    Total: {len(all_metadata)} samples | keys: {list(combined.keys())}")
     return combined, all_metadata
 
@@ -149,12 +171,19 @@ def build_combined(
     idx_a = {pid: i for i, pid in enumerate(pids_a)}
     idx_v = {pid: i for i, pid in enumerate(pids_v)}
 
-    shared_keys = sorted(set(lat_a) & set(lat_v))
+    # Use base keys only (z0_m is virtual; will be re-derived below)
+    shared_keys = sorted(k for k in set(lat_a) & set(lat_v) if k != 'z0_m')
     combined_latents = {}
     for k in shared_keys:
         rows_a = np.stack([lat_a[k][idx_a[pid]] for pid in common])
         rows_v = np.stack([lat_v[k][idx_v[pid]] for pid in common])
         combined_latents[k] = np.concatenate([rows_a, rows_v], axis=1)
+
+    # Re-derive z0_m for the combined set
+    if 'z0' in combined_latents and 'm' in combined_latents:
+        combined_latents['z0_m'] = np.concatenate(
+            [combined_latents['z0'], combined_latents['m']], axis=1
+        )
 
     combined_meta = [
         {
@@ -181,12 +210,11 @@ def extract_label(entry: dict, dataset: str, color_key: str | None) -> str:
     if 'ptb' in dl:
         sc = labels.get('superclass')
         if isinstance(sc, list):
-            active = [
-                PTBXL_SUPERCLASS_NAMES[i]
-                for i, v in enumerate(sc)
-                if i < len(PTBXL_SUPERCLASS_NAMES) and v
-            ]
-            return '+'.join(active) if active else 'NONE'
+            # Return the first active superclass only (gives exactly 5 possible labels)
+            for i, v in enumerate(sc):
+                if v and i < len(PTBXL_SUPERCLASS_NAMES):
+                    return PTBXL_SUPERCLASS_NAMES[i]
+            return 'NONE'
         return str(sc) if sc is not None else 'NONE'
 
     if 'medalcare' in dl or 'medal' in dl:
@@ -220,7 +248,7 @@ def _embed_2d(
         perp = min(perplexity, len(X) - 1)
         return TSNE(
             n_components=2, random_state=seed, perplexity=perp,
-            n_iter=1000, init='pca', learning_rate='auto',
+            max_iter=1000, init='pca', learning_rate='auto',
         ).fit_transform(X)
 
     if method == 'umap':
@@ -283,7 +311,10 @@ def _save_scatter(
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
-    print(f"    Saved: {os.path.basename(save_path)}")
+
+    npz_path = os.path.splitext(save_path)[0] + '.npz'
+    np.savez(npz_path, embedding=E2d, labels=np.array(labels))
+    print(f"    Saved: {os.path.basename(save_path)}  +  {os.path.basename(npz_path)}")
 
 
 # ── Main visualisation driver ──────────────────────────────────────────────────
@@ -299,6 +330,18 @@ def visualise_view(
     n_neighbors: int,
 ) -> None:
     """Scale → subsample → project → save for all enabled methods."""
+    # Drop unlabelled points ('NONE' comes from PTB-XL samples with no active superclass)
+    keep = np.array([l != 'NONE' for l in labels])
+    n_removed = int((~keep).sum())
+    if n_removed:
+        X      = X[keep]
+        labels = [l for l, k in zip(labels, keep) if k]
+        print(f"    Removed {n_removed} unlabelled ('NONE') samples")
+
+    if len(labels) == 0:
+        print(f"    No labelled samples — skipping")
+        return
+
     scaler  = StandardScaler()
     X_sc    = scaler.fit_transform(X)
     X_sub, labels_sub = _maybe_subsample(X_sc, labels, max_samples, seed)
