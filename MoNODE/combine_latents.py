@@ -216,6 +216,85 @@ def print_mi_summary(mi: dict) -> None:
         print(f"  CCA mean correlation   : {mi['cca_mean_correlation']:.4f}")
 
 
+# ─── PTB-XL data statistics ───────────────────────────────────────────────────
+
+_PTBXL_SUPERCLASS_NAMES = ['NORM', 'MI', 'STTC', 'CD', 'HYP']
+
+
+def _get_pids(metadata: list) -> set:
+    return {str(e.get('uid') or e.get('patient_id', '')) for e in metadata}
+
+
+def _ptbxl_class_counts(metadata: list) -> dict:
+    """Count patients per PTB-XL superclass (multi-hot) plus totals."""
+    counts = {cls: 0 for cls in _PTBXL_SUPERCLASS_NAMES}
+    counts['_total']    = len(metadata)
+    counts['_no_class'] = 0
+    for entry in metadata:
+        sc = entry.get('labels', {}).get('superclass')
+        if not isinstance(sc, list):
+            counts['_no_class'] += 1
+            continue
+        has_any = False
+        for i, v in enumerate(sc):
+            if v and i < len(_PTBXL_SUPERCLASS_NAMES):
+                counts[_PTBXL_SUPERCLASS_NAMES[i]] += 1
+                has_any = True
+        if not has_any:
+            counts['_no_class'] += 1
+    return counts
+
+
+def _compute_ptbxl_statistics(
+    tr_meta1: list, tr_meta2: list, tr_meta_combined: list,
+    ev_meta1: list, ev_meta2: list, te_meta_combined: list,
+) -> dict:
+    """Compute per-class counts and discard statistics for PTB-XL."""
+    pids_tr1      = _get_pids(tr_meta1)
+    pids_tr2      = _get_pids(tr_meta2)
+    pids_tr_match = _get_pids(tr_meta_combined)
+
+    pids_ev1      = _get_pids(ev_meta1)
+    pids_ev2      = _get_pids(ev_meta2)
+    pids_te_match = _get_pids(te_meta_combined)
+
+    return {
+        'train': {
+            'n_patients_model1':        len(pids_tr1),
+            'n_patients_model2':        len(pids_tr2),
+            'n_patients_matched':       len(pids_tr_match),
+            'n_discarded_model1_only':  len(pids_tr1 - pids_tr2),
+            'n_discarded_model2_only':  len(pids_tr2 - pids_tr1),
+            'per_class':                _ptbxl_class_counts(tr_meta_combined),
+        },
+        'eval': {
+            'n_patients_model1':        len(pids_ev1),
+            'n_patients_model2':        len(pids_ev2),
+            'n_patients_matched':       len(pids_te_match),
+            'n_discarded_model1_only':  len(pids_ev1 - pids_ev2),
+            'n_discarded_model2_only':  len(pids_ev2 - pids_ev1),
+            'per_class':                _ptbxl_class_counts(te_meta_combined),
+        },
+    }
+
+
+def _print_ptbxl_statistics(stats: dict) -> None:
+    for split in ('train', 'eval'):
+        s = stats[split]
+        print(f"\n  [{split}]")
+        print(f"    model1 patients : {s['n_patients_model1']}")
+        print(f"    model2 patients : {s['n_patients_model2']}")
+        print(f"    matched         : {s['n_patients_matched']}")
+        print(f"    discarded (m1 only) : {s['n_discarded_model1_only']}")
+        print(f"    discarded (m2 only) : {s['n_discarded_model2_only']}")
+        pc = s['per_class']
+        print(f"    per-class counts (matched):")
+        for cls in _PTBXL_SUPERCLASS_NAMES:
+            print(f"      {cls:6s}: {pc.get(cls, 0)}")
+        if pc.get('_no_class', 0):
+            print(f"      (no superclass label): {pc['_no_class']}")
+
+
 # ─── matching helpers ─────────────────────────────────────────────────────────
 
 def _group_by_patient(latents: dict, metadata: list, latent_key: str):
@@ -495,6 +574,17 @@ def main() -> None:
             out_root=probe_out_parent,
             fractions=[0.01, 0.10, 0.50, 1.00],
         )
+
+        print(f"\n── PTB-XL data statistics ──")
+        ptbxl_stats = _compute_ptbxl_statistics(
+            tr_meta1, tr_meta2, tr_meta,
+            ev_meta1, ev_meta2, te_meta,
+        )
+        _print_ptbxl_statistics(ptbxl_stats)
+        stats_path = os.path.join(args.output_dir, 'ptbxl_data_statistics.json')
+        with open(stats_path, 'w') as f:
+            json.dump(ptbxl_stats, f, indent=2)
+        print(f"  Saved: {stats_path}")
     else:
         print(f"\n── Running linear probes ──")
         run_linear_probes(
