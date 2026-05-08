@@ -25,7 +25,7 @@ from sklearn.linear_model import (
 from sklearn.compose import TransformedTargetRegressor
 from sklearn.metrics import (
     r2_score, mean_squared_error, mean_absolute_error,
-    roc_auc_score, accuracy_score, f1_score, recall_score,
+    roc_auc_score, accuracy_score, f1_score, recall_score, precision_score,
     balanced_accuracy_score, hamming_loss,
     adjusted_rand_score,
     silhouette_score, silhouette_samples,
@@ -36,6 +36,9 @@ from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 from sklearn.neural_network import MLPRegressor, MLPClassifier
 from sklearn.preprocessing import StandardScaler, RobustScaler, LabelEncoder
+
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
 
 try:
     from umap import UMAP as _UMAP
@@ -1824,6 +1827,113 @@ def run_ptbxl_multilabel_probes(
     return all_results
 
 
+def _train_linear_probe_torch(
+    X_tr: np.ndarray,
+    Y_tr: np.ndarray,
+    X_te: np.ndarray,
+    lr: float = 5e-3,
+    weight_decay: float = 0.05,
+    epochs: int = 100,
+    batch_size: int = 256,
+    warmup_epochs: int = 10,
+    min_lr: float = 1e-5,
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """HeartLang-protocol linear probe: nn.Linear + AdamW + cosine LR + BCEWithLogitsLoss.
+
+    Exactly replicates the ``--trainable linear`` setup from HeartLang
+    (run_class_finetuning.py): a single frozen-feature linear head trained with
+    AdamW, cosine LR schedule with linear warmup, and binary cross-entropy loss
+    without class balancing.
+
+    Returns
+    -------
+    probs : np.ndarray [n_te, n_cls]  sigmoid probabilities
+    preds : np.ndarray [n_te, n_cls]  hard predictions (threshold 0.5)
+    """
+    torch.manual_seed(seed)
+    n_tr, d = X_tr.shape
+    n_cls   = Y_tr.shape[1]
+
+    X_tr_t = torch.tensor(X_tr, dtype=torch.float32)
+    Y_tr_t = torch.tensor(Y_tr, dtype=torch.float32)
+    X_te_t = torch.tensor(X_te, dtype=torch.float32)
+
+    head = nn.Linear(d, n_cls)
+    nn.init.trunc_normal_(head.weight, std=0.01)
+    nn.init.zeros_(head.bias)
+
+    optimizer = torch.optim.AdamW(head.parameters(), lr=lr, weight_decay=weight_decay)
+    criterion = nn.BCEWithLogitsLoss()
+
+    steps_per_epoch = max(1, math.ceil(n_tr / batch_size))
+    total_steps     = epochs * steps_per_epoch
+    warmup_steps    = warmup_epochs * steps_per_epoch
+
+    def _lr_lambda(step: int) -> float:
+        if step < warmup_steps:
+            return step / max(1, warmup_steps)
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return min_lr / lr + 0.5 * (1.0 - min_lr / lr) * (1.0 + math.cos(math.pi * progress))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, _lr_lambda)
+
+    dataset = TensorDataset(X_tr_t, Y_tr_t)
+    loader  = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False)
+
+    head.train()
+    for _ in range(epochs):
+        for xb, yb in loader:
+            optimizer.zero_grad()
+            criterion(head(xb), yb).backward()
+            optimizer.step()
+            scheduler.step()
+
+    head.eval()
+    with torch.no_grad():
+        logits = head(X_te_t)
+        probs  = torch.sigmoid(logits).numpy()
+    preds = (probs >= 0.5).astype(np.int32)
+    return probs, preds
+
+
+def _score_probe(
+    Y_te: np.ndarray,
+    Y_prob: np.ndarray,
+    Y_pred: np.ndarray,
+) -> dict:
+    """Compute all five metrics for a single (group, seed, fraction) probe run."""
+    metrics: dict = {}
+
+    # AUROC
+    try:
+        metrics['auroc'] = float(roc_auc_score(Y_te, Y_prob, average='macro'))
+    except ValueError:
+        return {}  # not enough classes — skip entirely
+
+    # F1 macro
+    metrics['f1_macro'] = float(f1_score(Y_te, Y_pred, average='macro', zero_division=0))
+
+    # Subset accuracy
+    metrics['accuracy'] = float(accuracy_score(Y_te, Y_pred))
+
+    # Macro balanced accuracy (mean per-class balanced accuracy over active classes)
+    n_cls = Y_te.shape[1]
+    ba_vals = []
+    for c in range(n_cls):
+        col = Y_te[:, c]
+        if len(np.unique(col)) > 1:
+            ba_vals.append(float(balanced_accuracy_score(col, Y_pred[:, c])))
+    metrics['balanced_accuracy'] = float(np.mean(ba_vals)) if ba_vals else None
+
+    # Precision macro
+    metrics['precision_macro'] = float(
+        precision_score(Y_te, Y_pred, average='macro', zero_division=0)
+    )
+
+    return metrics
+
+
 def run_ptbxl_label_efficiency_probes(
     tr_latents:    dict,
     tr_metadata:   list,
@@ -1833,21 +1943,33 @@ def run_ptbxl_label_efficiency_probes(
     out_root:      str | None = None,
     fractions:     list | None = None,
     seeds:         list | None = None,
+    method:        str = 'both',
 ) -> dict:
     """Label-efficiency OVR probes for all PTB-XL label groups.
 
     For each group (superclass, subclass, form, rhythm) and training fraction,
-    subsamples the training set over multiple seeds and measures macro AUROC.
-    Produces learning curves (mean ± std) per group.
+    subsamples the training set over multiple seeds and reports mean ± std of
+    macro AUROC, macro F1, accuracy, balanced accuracy, and precision.
+
+    Parameters
+    ----------
+    method : 'logistic' | 'torch' | 'both'
+        'logistic' — sklearn OVR LogisticRegression (L-BFGS, full batch)
+        'torch'    — PyTorch nn.Linear + AdamW + cosine LR + BCEWithLogitsLoss,
+                     matching HeartLang's exact linear-probe protocol
+        'both'     — run both and store under separate sub-keys (default)
 
     Returns
     -------
-    summary : {group: {frac_str: {auroc_macro_mean, auroc_macro_std, n_seeds}}}
+    summary : {group: {frac_str: {method_key: {metric_mean, metric_std, ...}}}}
     """
     if fractions is None:
         fractions = [0.01, 0.10, 0.50, 1.00]
     if seeds is None:
         seeds = [42, 123, 456]
+
+    run_logistic = method in ('logistic', 'both')
+    run_torch    = method in ('torch', 'both')
 
     X_tr = tr_latents[latent_key]
     X_te = eval_latents[latent_key]
@@ -1864,7 +1986,8 @@ def run_ptbxl_label_efficiency_probes(
         return {}
 
     # ── fraction × seed loop ─────────────────────────────────────────────────
-    # raw[frac_str][group] = list of macro_auroc values across seeds
+    # raw[frac_str][group][method_key][metric] = list of values across seeds
+    _METRICS = ['auroc', 'f1_macro', 'accuracy', 'balanced_accuracy', 'precision_macro']
     raw: dict = {}
 
     for seed_val in seeds:
@@ -1883,43 +2006,67 @@ def run_ptbxl_label_efficiency_probes(
                 Y_tr_sub = gd['Y_tr'][sub_idx]
 
                 # Only train/score classes active in this subset AND in test
-                sub_active    = Y_tr_sub.sum(axis=0) > 0
-                active        = sub_active & gd['valid_te']
+                sub_active = Y_tr_sub.sum(axis=0) > 0
+                active     = sub_active & gd['valid_te']
                 if active.sum() < 2:
                     continue
 
-                clf = OneVsRestClassifier(
-                    LogisticRegression(penalty='l2', C=1.0, max_iter=1000, n_jobs=-1,
-                                       class_weight='balanced'),
-                    n_jobs=-1,
-                )
-                with np.errstate(all='ignore'):
-                    clf.fit(Xtr_sub, Y_tr_sub[:, active])
+                Y_te_active = gd['Y_te'][:, active]
 
-                Y_prob = clf.predict_proba(gd['Xte'])
-                try:
-                    macro_auc = float(roc_auc_score(
-                        gd['Y_te'][:, active], Y_prob, average='macro'))
-                except ValueError:
-                    continue
+                def _store(mkey: str, scores: dict) -> None:
+                    if not scores:
+                        return
+                    bucket = (raw
+                              .setdefault(frac_str, {})
+                              .setdefault(group, {})
+                              .setdefault(mkey, {m: [] for m in _METRICS}))
+                    for m, v in scores.items():
+                        if v is not None:
+                            bucket[m].append(v)
 
-                raw.setdefault(frac_str, {}).setdefault(group, []).append(macro_auc)
+                if run_logistic:
+                    clf = OneVsRestClassifier(
+                        LogisticRegression(penalty='l2', C=1.0, max_iter=1000, n_jobs=-1),
+                        n_jobs=-1,
+                    )
+                    with np.errstate(all='ignore'):
+                        clf.fit(Xtr_sub, Y_tr_sub[:, active])
+                    Y_prob_lg = clf.predict_proba(gd['Xte'])
+                    Y_pred_lg = (Y_prob_lg >= 0.5).astype(np.int32)
+                    _store('logistic', _score_probe(Y_te_active, Y_prob_lg, Y_pred_lg))
+
+                if run_torch:
+                    Y_prob_tc, Y_pred_tc = _train_linear_probe_torch(
+                        Xtr_sub, Y_tr_sub[:, active].astype(np.float32),
+                        gd['Xte'], seed=seed_val,
+                    )
+                    _store('torch', _score_probe(Y_te_active, Y_prob_tc, Y_pred_tc))
 
     # ── Aggregate mean ± std ──────────────────────────────────────────────────
-    frac_order = [f'{frac:.0%}' for frac in sorted(fractions)]
+    frac_order   = [f'{frac:.0%}' for frac in sorted(fractions)]
+    method_keys  = ([m for m in ('logistic', 'torch')
+                     if m in ('logistic', 'torch') and
+                     (m == 'logistic' and run_logistic or m == 'torch' and run_torch)])
     summary: dict = {}
+
     for group in groups_data:
         summary[group] = {}
         for frac_str in frac_order:
-            vals = raw.get(frac_str, {}).get(group, [])
-            if not vals:
-                continue
-            arr = np.array(vals)
-            summary[group][frac_str] = {
-                'auroc_macro_mean': float(arr.mean()),
-                'auroc_macro_std':  float(arr.std()),
-                'n_seeds':          len(vals),
-            }
+            frac_entry: dict = {}
+            for mkey in method_keys:
+                bucket = raw.get(frac_str, {}).get(group, {}).get(mkey, {})
+                if not bucket.get('auroc'):
+                    continue
+                agg: dict = {'n_seeds': len(bucket['auroc'])}
+                for m in _METRICS:
+                    vals = bucket.get(m, [])
+                    if vals:
+                        arr = np.array(vals)
+                        agg[f'{m}_mean'] = float(arr.mean())
+                        agg[f'{m}_std']  = float(arr.std())
+                frac_entry[mkey] = agg
+            if frac_entry:
+                summary[group][frac_str] = frac_entry
 
     if not out_root:
         return summary
@@ -1930,37 +2077,55 @@ def run_ptbxl_label_efficiency_probes(
     with open(os.path.join(out_dir, 'ptbxl_label_efficiency.json'), 'w') as f:
         json.dump(summary, f, indent=2)
 
-    # ── Plot: one curve per group, macro AUROC vs fraction ───────────────────
-    frac_vals = [float(f.rstrip('%')) / 100 for f in frac_order]
+    # ── Plot: 2×2 grid (AUROC / F1 / Balanced-Acc / Precision) ──────────────
+    frac_vals   = [float(f.rstrip('%')) / 100 for f in frac_order]
+    plot_metrics = [
+        ('auroc',             'Macro AUROC'),
+        ('f1_macro',          'Macro F1'),
+        ('balanced_accuracy', 'Balanced Accuracy'),
+        ('precision_macro',   'Macro Precision'),
+    ]
+    _MSTYLE = {'logistic': '--', 'torch': '-'}
+    _MLABEL = {'logistic': 'Logistic', 'torch': 'Torch (HeartLang)'}
 
-    fig, ax = plt.subplots(figsize=(7, 4))
-    for i, (group, group_summary) in enumerate(sorted(summary.items())):
-        means, stds, xs = [], [], []
-        for frac_str, fval in zip(frac_order, frac_vals):
-            entry = group_summary.get(frac_str)
-            if entry is not None:
-                means.append(entry['auroc_macro_mean'])
-                stds.append(entry['auroc_macro_std'])
-                xs.append(fval)
-        if not means:
-            continue
-        ys = np.array(means)
-        es = np.array(stds)
-        ax.plot(xs, ys, marker='o', color=f'C{i}', label=group, linewidth=1.8)
-        ax.fill_between(xs, ys - es, ys + es, alpha=0.15, color=f'C{i}')
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8), facecolor='white')
+    axes_flat = axes.flatten()
 
-    ax.set_xscale('log')
-    ax.set_xticks(frac_vals)
-    ax.set_xticklabels([f'{int(f * 100)}%' for f in frac_vals], fontsize=8)
-    ax.set_xlabel('Training fraction', fontsize=10)
-    ax.set_ylabel('Macro AUROC', fontsize=10)
-    ax.set_title(f'PTB-XL label efficiency — Macro AUROC ({latent_key})  '
-                 f'[{len(seeds)} seeds, mean±std]',
-                 fontsize=10, fontweight='bold')
-    ax.legend(fontsize=9, framealpha=0.8)
-    ax.spines[['top', 'right']].set_visible(False)
+    for ax_idx, (metric_key, metric_label) in enumerate(plot_metrics):
+        ax = axes_flat[ax_idx]
+        for i, (group, group_summary) in enumerate(sorted(summary.items())):
+            for mkey in method_keys:
+                means, stds, xs = [], [], []
+                for frac_str, fval in zip(frac_order, frac_vals):
+                    entry = group_summary.get(frac_str, {}).get(mkey, {})
+                    v = entry.get(f'{metric_key}_mean')
+                    s = entry.get(f'{metric_key}_std', 0.0)
+                    if v is not None:
+                        means.append(v); stds.append(s); xs.append(fval)
+                if not means:
+                    continue
+                ys = np.array(means); es = np.array(stds)
+                lbl = f'{group} ({_MLABEL[mkey]})' if len(method_keys) > 1 else group
+                ax.plot(xs, ys, marker='o', linestyle=_MSTYLE[mkey],
+                        color=f'C{i}', label=lbl, linewidth=1.6)
+                ax.fill_between(xs, ys - es, ys + es, alpha=0.12, color=f'C{i}')
+
+        ax.set_xscale('log')
+        ax.set_xticks(frac_vals)
+        ax.set_xticklabels([f'{int(f * 100)}%' for f in frac_vals], fontsize=8)
+        ax.set_xlabel('Training fraction', fontsize=9)
+        ax.set_ylabel(metric_label, fontsize=9)
+        ax.set_title(metric_label, fontsize=10, fontweight='bold')
+        ax.legend(fontsize=7, framealpha=0.8, ncol=1)
+        ax.spines[['top', 'right']].set_visible(False)
+
+    fig.suptitle(
+        f'PTB-XL label efficiency — {latent_key}  [{len(seeds)} seeds, mean±std]',
+        fontsize=12, fontweight='bold',
+    )
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, 'ptbxl_label_efficiency_auroc.png'), dpi=130)
+    fig.savefig(os.path.join(out_dir, 'ptbxl_label_efficiency.png'), dpi=150,
+                bbox_inches='tight', facecolor='white')
     plt.close(fig)
 
     print(f"  [PTB-XL label efficiency/{latent_key}] Summary → {out_dir}")
