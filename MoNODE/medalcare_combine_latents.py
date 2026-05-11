@@ -43,8 +43,14 @@ import numpy as np
 import torch
 
 sys.path.insert(0, os.path.dirname(__file__))
-from finetune import run_linear_probes, collect_latents
-from combine_latents import _match_and_combine, compute_mutual_information, print_mi_summary
+from finetune import (
+    run_linear_probes, collect_latents,
+    run_trajectory_analysis, _medalcare_uid_from_stem,
+)
+from combine_latents import (
+    _match_and_combine_all, _group_by_patient_all,
+    compute_mutual_information, print_mi_summary,
+)
 from summarize_results import save_run_summary
 from data.data_utils import ECGDataset, pad_collate
 from model.build_model import build_model, build_simclr_model, build_byol_model
@@ -254,6 +260,158 @@ def _collect_and_cache(
     return result
 
 
+# ─── zTL collection + caching ────────────────────────────────────────────────
+
+_SEG_T_CUTOFF = {'atrial': 45, 'ventricular': 180}
+
+
+def _collect_and_cache_zTL(
+    model_dir: str,
+    model: torch.nn.Module,
+    loaders: dict,
+    device: torch.device,
+) -> dict[str, tuple[np.ndarray, list]]:
+    """Run inference for each split and collect per-patient mean zTL trajectories.
+
+    Caches results to {model_dir}/latents/{split}_traj.npz + {split}_traj_uids.json.
+    Returns {split: (zTL [N_patients, T, q], uid_list [N_patients])}.
+    """
+    from collections import defaultdict
+    from tqdm import tqdm
+
+    latents_dir = os.path.join(model_dir, 'latents')
+    os.makedirs(latents_dir, exist_ok=True)
+
+    model.eval()
+    model.return_latent = True
+
+    results: dict = {}
+    for split, loader in loaders.items():
+        traj_npz  = os.path.join(latents_dir, f'{split}_traj.npz')
+        uids_json = os.path.join(latents_dir, f'{split}_traj_uids.json')
+
+        if os.path.exists(traj_npz) and os.path.exists(uids_json):
+            print(f"  [{split}] zTL cached — loading from disk.")
+            arr = np.load(traj_npz)
+            with open(uids_json) as f:
+                uids = json.load(f)
+            results[split] = (arr['zTL'], uids)
+            continue
+
+        print(f"  [{split}] Collecting zTL ({len(loader.dataset)} samples) …")
+        pid_zTL: dict = defaultdict(list)
+
+        with torch.no_grad():
+            for batch, batch_y, mask in tqdm(loader, desc=f"zTL [{split}]"):
+                batch = batch.to(device)
+                mask  = mask.to(device)
+
+                _z0, _z0s, _m, ztL = model(batch, 1, mask=mask)
+                del _z0, _z0s, _m
+                ztL_cpu = ztL.mean(0).detach().cpu().numpy()   # [N, T, q]
+                del ztL
+
+                for i in range(batch.shape[0]):
+                    file_path = batch_y[i][2]
+                    stem      = os.path.splitext(os.path.basename(file_path))[0]
+                    uid       = _medalcare_uid_from_stem(stem)
+                    pid_zTL[uid].append(ztL_cpu[i])
+
+        # Per-patient mean trajectory; pad variable T with zeros
+        sorted_uids = sorted(pid_zTL.keys())
+        per_pid: list = [np.mean(pid_zTL[uid], axis=0) for uid in sorted_uids]
+        max_T  = max(a.shape[0] for a in per_pid)
+        q      = per_pid[0].shape[-1]
+        padded = np.zeros((len(per_pid), max_T, q), dtype=per_pid[0].dtype)
+        for idx, arr in enumerate(per_pid):
+            padded[idx, :arr.shape[0], :] = arr
+
+        np.savez(traj_npz, zTL=padded)
+        with open(uids_json, 'w') as f:
+            json.dump(sorted_uids, f)
+        print(f"    Saved → {traj_npz}  (patients={len(sorted_uids)}, T={max_T}, q={q})")
+        results[split] = (padded, sorted_uids)
+
+    model.return_latent = False
+    return results
+
+
+# ─── combined trajectory analysis ────────────────────────────────────────────
+
+def run_trajectory_analysis_combined(
+    traj_a: dict,
+    traj_v: dict,
+    matched_uids: list,
+    eval_meta: list,
+    out_root: str,
+    dataset: str,
+) -> None:
+    """Concatenate atrial + ventricular zTL for matched patients and run analysis.
+
+    traj_a / traj_v : {split: (zTL [N_pat, T, q], uid_list)} as returned by
+                      _collect_and_cache_zTL.  Uses the 'eval' split (valid+test).
+    matched_uids    : ordered list of patient UIDs present in ev_combined.
+    eval_meta       : combined eval metadata list (same order as matched_uids).
+    """
+    # Retrieve eval trajectories and uid→index maps
+    zTL_a_full, uids_a = traj_a.get('eval', (None, None))
+    zTL_v_full, uids_v = traj_v.get('eval', (None, None))
+
+    if zTL_a_full is None or zTL_v_full is None:
+        print("  [trajectory] zTL not available for one/both models — skipping.")
+        return
+
+    idx_a = {uid: i for i, uid in enumerate(uids_a)}
+    idx_v = {uid: i for i, uid in enumerate(uids_v)}
+
+    # Keep only matched uids that exist in BOTH trajectory sets
+    valid = [uid for uid in matched_uids if uid in idx_a and uid in idx_v]
+    if not valid:
+        print("  [trajectory] No matched uids found in both zTL sets — skipping.")
+        return
+    print(f"\n── Trajectory analysis: {len(valid)} matched patients ──")
+
+    # Filter metadata to valid patients and collapse MI subclasses → 'mi'
+    uid_to_meta = {m['uid']: m for m in eval_meta}
+    filtered_meta = []
+    for uid in valid:
+        if uid not in uid_to_meta:
+            continue
+        entry  = dict(uid_to_meta[uid])
+        labels = dict(entry.get('labels', {}))
+        cls    = labels.get('class', '')
+        if isinstance(cls, str) and cls.startswith(('LAD_', 'LCX_', 'RCA_')):
+            labels['class'] = 'mi'
+        entry['labels'] = labels
+        filtered_meta.append(entry)
+
+    # Build per-patient arrays from matched set
+    rows_a = np.stack([zTL_a_full[idx_a[uid]] for uid in valid])   # [N, T_a, q_a]
+    rows_v = np.stack([zTL_v_full[idx_v[uid]] for uid in valid])   # [N, T_v, q_v]
+
+    # Trim both to the minimum usable T (atrial is the bottleneck at 45 steps)
+    T_min = min(
+        _SEG_T_CUTOFF['atrial'],
+        rows_a.shape[1],
+        rows_v.shape[1],
+    )
+    rows_a = rows_a[:, :T_min, :]
+    rows_v = rows_v[:, :T_min, :]
+
+    # Concatenate along latent dimension → [N, T_min, q_a + q_v]
+    zTL_combined = np.concatenate([rows_a, rows_v], axis=2)
+    print(f"  Combined zTL shape: {zTL_combined.shape}  "
+          f"(T={T_min}, q_a={rows_a.shape[2]}, q_v={rows_v.shape[2]})")
+
+    run_trajectory_analysis(
+        eval_latents={'zTL': zTL_combined},
+        eval_metadata=filtered_meta,
+        dataset_name=dataset,
+        out_root=out_root,
+        seg_type=None,          # pre-trimmed; no further cutoff needed
+    )
+
+
 # ─── split concat helper ──────────────────────────────────────────────────────
 
 def _concat_splits(
@@ -383,6 +541,37 @@ def main() -> None:
         args.ventricular_model_dir, model_v, loaders_v, margs_v, device, aladin_meta, 'ventricular',
     )
 
+    # ── Collect zTL trajectories (before freeing models) ─────────────────────
+    print("\n── Collecting atrial zTL trajectories ──")
+    traj_a = _collect_and_cache_zTL(
+        args.atrial_model_dir, model_a, loaders_a, device,
+    )
+    print("\n── Collecting ventricular zTL trajectories ──")
+    traj_v = _collect_and_cache_zTL(
+        args.ventricular_model_dir, model_v, loaders_v, device,
+    )
+
+    # Merge valid+test for trajectory eval split
+    zTL_ev_a, uids_ev_a = traj_a.get('valid', (np.empty((0,)), []))
+    zTL_te_a, uids_te_a = traj_a.get('test',  (np.empty((0,)), []))
+    zTL_ev_v, uids_ev_v = traj_v.get('valid', (np.empty((0,)), []))
+    zTL_te_v, uids_te_v = traj_v.get('test',  (np.empty((0,)), []))
+
+    def _merge_traj(z1, u1, z2, u2):
+        if z1.ndim < 3 or z2.ndim < 3:
+            return z1 if z2.ndim < 3 else z2, u1 + u2
+        q = z1.shape[2]
+        T = max(z1.shape[1], z2.shape[1])
+        merged = np.zeros((len(u1) + len(u2), T, q), dtype=z1.dtype)
+        merged[:len(u1), :z1.shape[1], :] = z1
+        merged[len(u1):, :z2.shape[1], :] = z2
+        return merged, u1 + u2
+
+    zTL_eval_a, uids_eval_a = _merge_traj(zTL_ev_a, uids_ev_a, zTL_te_a, uids_te_a)
+    zTL_eval_v, uids_eval_v = _merge_traj(zTL_ev_v, uids_ev_v, zTL_te_v, uids_te_v)
+    traj_a['eval'] = (zTL_eval_a, uids_eval_a)
+    traj_v['eval'] = (zTL_eval_v, uids_eval_v)
+
     # Free GPU memory before running probes
     del model_a, model_v
     if device.type == 'cuda':
@@ -402,39 +591,27 @@ def main() -> None:
     )
     print(f"\n  Eval set: atrial={len(ev_meta_a)}  ventricular={len(ev_meta_v)}")
 
-    # Build z0_m combined key if m is present (NODE/MoNODE only; SimCLR/BYOL have no m)
-    for lat in (tr_lat_a, ev_lat_a, tr_lat_v, ev_lat_v):
-        if 'm' in lat and 'z0_m' not in lat:
-            lat['z0_m'] = np.concatenate([lat['z0'], lat['m']], axis=1)
-
-    # Validate latent key — fall back to z0 if the requested key is unavailable
-    available_keys = set(tr_lat_a) & set(tr_lat_v)
-    if args.latent_key not in available_keys:
-        fallback = 'z0'
-        print(f"  [warn] latent_key='{args.latent_key}' not in {available_keys}; "
-              f"falling back to '{fallback}'")
-        args.latent_key = fallback
-
-    # ── Match patients and concatenate across models ──────────────────────────
+    # ── Match patients and concatenate ALL latent keys ────────────────────────
     print(f"\n── Matching train splits (atrial × ventricular) ──")
-    tr_combined, tr_meta = _match_and_combine(
+    tr_combined, tr_meta = _match_and_combine_all(
         tr_lat_a, tr_meta_a, tr_lat_v, tr_meta_v,
-        latent_key=args.latent_key,
         prefer_labels=args.prefer_labels,
     )
 
     print(f"\n── Matching eval splits (valid+test, atrial × ventricular) ──")
-    ev_combined, ev_meta = _match_and_combine(
+    ev_combined, ev_meta = _match_and_combine_all(
         ev_lat_a, ev_meta_a, ev_lat_v, ev_meta_v,
-        latent_key=args.latent_key,
         prefer_labels=args.prefer_labels,
     )
 
-    d_a = tr_lat_a[args.latent_key].shape[1]
-    d_v = tr_lat_v[args.latent_key].shape[1]
-    print(f"\n  Combined latent dim : {d_a} (atrial) + {d_v} (ventricular) = {d_a + d_v}")
-    print(f"  Train samples       : {tr_combined[args.latent_key].shape[0]}")
-    print(f"  Eval  samples       : {ev_combined[args.latent_key].shape[0]}")
+    combined_keys = sorted(tr_combined.keys())
+    n_train = next(iter(tr_combined.values())).shape[0]
+    n_eval  = next(iter(ev_combined.values())).shape[0]
+    print(f"\n  Combined latent keys : {combined_keys}")
+    for key in combined_keys:
+        print(f"    {key:8s}: dim={tr_combined[key].shape[1]}")
+    print(f"  Train samples        : {n_train}")
+    print(f"  Eval  samples        : {n_eval}")
 
     # ── Save combined latents for inspection ─────────────────────────────────
     latents_out_dir = os.path.join(args.output_dir, 'latents')
@@ -447,16 +624,18 @@ def main() -> None:
         json.dump(ev_meta, f, indent=2)
     print(f"\n  Saved combined latents → {latents_out_dir}")
 
-    # ── Mutual information between the two latent spaces (train) ─────────────
-    print(f"\n── Computing mutual information (atrial vs ventricular, train) ──")
-    X_comb_tr = tr_combined[args.latent_key]
+    # ── Mutual information (z0 key, train set) ────────────────────────────────
+    mi_key = args.latent_key if args.latent_key in tr_combined else combined_keys[0]
+    d_a = tr_lat_a['z0'].shape[1] if 'z0' in tr_lat_a else tr_lat_a[mi_key].shape[1]
+    print(f"\n── Computing mutual information (atrial vs ventricular, key={mi_key}) ──")
+    X_comb_tr = tr_combined[mi_key]
     mi_results = compute_mutual_information(
         X_comb_tr[:, :d_a], X_comb_tr[:, d_a:],
         pca_dim=args.pca_dim, n_cca=args.n_cca,
     )
     mi_results.update({
         'model': args.model, 'dataset': args.dataset,
-        'latent_key': args.latent_key,
+        'latent_key': mi_key,
         'model1_segment': 'atrial', 'model2_segment': 'ventricular',
     })
     print_mi_summary(mi_results)
@@ -470,26 +649,36 @@ def main() -> None:
         with open(os.path.join(args.summary_output_dir, f'mi_{args.model}_{slug}.json'), 'w') as f:
             json.dump(mi_results, f, indent=2)
 
-    # ── Run probes ────────────────────────────────────────────────────────────
-    probe_out_root = os.path.join(
-        args.output_dir, 'final_finetune_results', 'combined', args.latent_key,
-    )
-    os.makedirs(probe_out_root, exist_ok=True)
-
+    # ── Run probes for each combined key ──────────────────────────────────────
+    probe_out_parent = os.path.join(args.output_dir, 'final_finetune_results', 'combined')
     _skip = set(args.skip_params or []) | {'patient_id'}
-    print(f"\n── Running linear probes (OLS only) ──")
-    print(f"  Train: {tr_combined[args.latent_key].shape[0]}  "
-          f"Eval: {ev_combined[args.latent_key].shape[0]}")
-    run_linear_probes(
-        train_latents=tr_combined,
-        train_metadata=tr_meta,
-        test_latents=ev_combined,
-        test_metadata=ev_meta,
-        latent_key=args.latent_key,
-        out_root=probe_out_root,
-        skip_params=_skip,
-        methods={'ols'},
-        balance_sinus=args.balance_sinus,
+    for key in combined_keys:
+        probe_out_root = os.path.join(probe_out_parent, key)
+        os.makedirs(probe_out_root, exist_ok=True)
+        print(f"\n── Running linear probes (OLS)  [{key}] ──")
+        print(f"  Train: {n_train}  Eval: {n_eval}")
+        run_linear_probes(
+            train_latents=tr_combined,
+            train_metadata=tr_meta,
+            test_latents=ev_combined,
+            test_metadata=ev_meta,
+            latent_key=key,
+            out_root=probe_out_root,
+            skip_params=_skip,
+            methods={'ols'},
+            balance_sinus=args.balance_sinus,
+        )
+
+    # ── Latent trajectory analysis (combined atrial + ventricular zTL) ────────
+    print(f"\n── Running combined trajectory analysis ──")
+    matched_uids = [m['uid'] for m in ev_meta]
+    run_trajectory_analysis_combined(
+        traj_a=traj_a,
+        traj_v=traj_v,
+        matched_uids=matched_uids,
+        eval_meta=ev_meta,
+        out_root=os.path.join(args.output_dir, 'final_finetune_results', 'combined'),
+        dataset=args.dataset,
     )
 
     # ── training_metrics.json placeholder ─────────────────────────────────────
@@ -498,10 +687,10 @@ def main() -> None:
             'note':           'No ODE training MSE for combined latent model.',
             'model1_segment': 'atrial',
             'model2_segment': 'ventricular',
-            'latent_key':     args.latent_key,
-            'latent_dim':     d_a + d_v,
-            'n_train':        int(tr_combined[args.latent_key].shape[0]),
-            'n_eval':         int(ev_combined[args.latent_key].shape[0]),
+            'combined_keys':  combined_keys,
+            'latent_dims':    {k: int(tr_combined[k].shape[1]) for k in combined_keys},
+            'n_train':        int(n_train),
+            'n_eval':         int(n_eval),
             'eval_note':      'valid + test combined',
         }, f, indent=2)
 
