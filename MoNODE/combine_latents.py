@@ -297,64 +297,68 @@ def _print_ptbxl_statistics(stats: dict) -> None:
 
 # ─── matching helpers ─────────────────────────────────────────────────────────
 
-def _group_by_patient(latents: dict, metadata: list, latent_key: str):
-    """Group latent vectors by patient_id, return mean per patient.
+def _group_by_patient_all(latents: dict, metadata: list):
+    """Group ALL latent keys by patient_id in a single pass, return per-patient means.
+
+    Handles base keys (z0, m, …) present in `latents` and synthesises z0_m from
+    z0 + m if both exist but z0_m is not explicitly stored.
 
     Returns:
-        patient_ids : sorted list of patient_ids
-        latent_mean : np.ndarray [N_patients, D]
-        labels_by_pid : {patient_id: merged labels dict}
+        sorted_pids   : sorted list of patient_ids
+        arrs          : {key: np.ndarray [N_patients, D]} for every available key
+        labels_by_pid : {patient_id: labels dict}
     """
     from collections import defaultdict
 
-    pid_latents: dict = defaultdict(list)
-    pid_labels:  dict = {}
+    base_keys = list(latents.keys())
+    synth_z0m = ('z0' in latents and 'm' in latents and 'z0_m' not in latents)
+    all_keys  = base_keys + (['z0_m'] if synth_z0m else [])
 
-    if latent_key in latents:
-        key_arr = latents[latent_key]
-    elif latent_key == 'z0_m' and 'z0' in latents and 'm' in latents:
-        key_arr = np.concatenate([latents['z0'], latents['m']], axis=1)
-    else:
-        available = list(latents.keys())
-        raise KeyError(
-            f"Latent key '{latent_key}' not found. Available keys: {available}"
-        )
+    pid_latents: dict = {k: defaultdict(list) for k in all_keys}
+    pid_labels:  dict = {}
 
     for i, entry in enumerate(metadata):
         pid = str(entry.get('uid'))
-        pid_latents[pid].append(key_arr[i])
-        # Last labels for this pid win (same patient → same demographics)
         pid_labels[pid] = dict(entry.get('labels', {}))
+        for k in base_keys:
+            pid_latents[k][pid].append(latents[k][i])
+        if synth_z0m:
+            pid_latents['z0_m'][pid].append(
+                np.concatenate([latents['z0'][i], latents['m'][i]])
+            )
 
-    sorted_pids = sorted(pid_latents.keys())
-    stacked     = np.stack([np.mean(pid_latents[pid], axis=0) for pid in sorted_pids])
+    sorted_pids = sorted(pid_labels.keys())
+    arrs = {
+        k: np.stack([np.mean(pid_latents[k][pid], axis=0) for pid in sorted_pids])
+        for k in all_keys
+    }
+    return sorted_pids, arrs, {pid: pid_labels[pid] for pid in sorted_pids}
 
-    return sorted_pids, stacked, {pid: pid_labels[pid] for pid in sorted_pids}
 
-
-def _match_and_combine(
+def _match_and_combine_all(
     lat1: dict, meta1: list,
     lat2: dict, meta2: list,
-    latent_key: str,
     prefer_labels: int = 1,
 ) -> tuple[dict, list]:
-    """Match patients across two models and concatenate their latents.
+    """Match patients across two models and concatenate ALL shared latent keys.
 
-    Parameters
-    ----------
-    prefer_labels : 1 or 2 — which model's labels take precedence when both have a key.
+    Produces combined arrays for every key that exists in both models, plus z0_m
+    synthesised from z0+m when needed.
 
     Returns
     -------
-    combined_latents : {latent_key: np.ndarray [N_matched, D1+D2]}
+    combined_latents : {key: np.ndarray [N_matched, D1+D2]}  for each shared key
     combined_metadata : list of N_matched dicts with 'patient_id' and 'labels'
     """
-    pids1, arr1, labels1 = _group_by_patient(lat1, meta1, latent_key)
-    pids2, arr2, labels2 = _group_by_patient(lat2, meta2, latent_key)
+    pids1, arrs1, labels1 = _group_by_patient_all(lat1, meta1)
+    pids2, arrs2, labels2 = _group_by_patient_all(lat2, meta2)
 
-    set1, set2   = set(pids1), set(pids2)
-    common       = sorted(set1 & set2)
+    shared_keys = sorted(set(arrs1) & set(arrs2))
+    if not shared_keys:
+        raise ValueError("No common latent keys between the two models.")
 
+    set1, set2 = set(pids1), set(pids2)
+    common     = sorted(set1 & set2)
     if not common:
         raise ValueError(
             f"No common patient_ids between the two latent sets "
@@ -370,20 +374,22 @@ def _match_and_combine(
     idx1 = {pid: i for i, pid in enumerate(pids1)}
     idx2 = {pid: i for i, pid in enumerate(pids2)}
 
-    rows1 = np.stack([arr1[idx1[pid]] for pid in common])
-    rows2 = np.stack([arr2[idx2[pid]] for pid in common])
-    combined_arr = np.concatenate([rows1, rows2], axis=1)  # [N, D1+D2]
+    combined_latents: dict = {}
+    for key in shared_keys:
+        rows1 = np.stack([arrs1[key][idx1[pid]] for pid in common])
+        rows2 = np.stack([arrs2[key][idx2[pid]] for pid in common])
+        combined_latents[key] = np.concatenate([rows1, rows2], axis=1)
 
     combined_metadata = []
     for pid in common:
-        # Merge labels: start with non-preferred model, override with preferred
         if prefer_labels == 1:
             merged = {**labels2[pid], **labels1[pid]}
         else:
             merged = {**labels1[pid], **labels2[pid]}
         combined_metadata.append({'patient_id': pid, 'uid': pid, 'labels': merged})
 
-    return {latent_key: combined_arr}, combined_metadata
+    return combined_latents, combined_metadata
+
 
 
 # ─── main ─────────────────────────────────────────────────────────────────────
@@ -400,7 +406,8 @@ def main() -> None:
     parser.add_argument('--model2_latents_dir', required=True,
                         help='Directory with latent files for model 2')
     parser.add_argument('--latent_key', default='z0',
-                        help='Latent key to concatenate (e.g. z0, m, z0_sample)')
+                        help='Latent key used for MI analysis (probes run for all '
+                             'available keys: z0, m, z0_m)')
     parser.add_argument('--model1_segment', default='atrial',
                         help='Segment type of model 1 (for logging)')
     parser.add_argument('--model2_segment', default='ventricular',
@@ -470,40 +477,43 @@ def main() -> None:
     ev_meta1 = va_meta1 + te_meta1
     ev_meta2 = va_meta2 + te_meta2
 
-    # ── Match and concatenate ─────────────────────────────────────────────────
+    # ── Match and concatenate ALL latent keys ────────────────────────────────
     print(f"\n── Matching train splits ──")
-    tr_combined, tr_meta = _match_and_combine(
+    tr_combined, tr_meta = _match_and_combine_all(
         tr_lat1, tr_meta1, tr_lat2, tr_meta2,
-        latent_key=args.latent_key,
         prefer_labels=args.prefer_labels,
     )
     print(f"\n── Matching eval splits (valid + test) ──")
-    te_combined, te_meta = _match_and_combine(
+    te_combined, te_meta = _match_and_combine_all(
         ev_lat1, ev_meta1, ev_lat2, ev_meta2,
-        latent_key=args.latent_key,
         prefer_labels=args.prefer_labels,
     )
 
-    def _key_dim(lat: dict, key: str) -> int:
+    combined_keys = sorted(tr_combined.keys())
+    n_train = next(iter(tr_combined.values())).shape[0]
+    n_eval  = next(iter(te_combined.values())).shape[0]
+    print(f"\n  Combined latent keys : {combined_keys}")
+    for key in combined_keys:
+        print(f"    {key:8s}: dim={tr_combined[key].shape[1]}")
+    print(f"  Train samples        : {n_train}")
+    print(f"  Eval  samples        : {n_eval}"
+          f"  (valid={len(va_meta1 + va_meta2) // 2}, test={len(te_meta1 + te_meta2) // 2})")
+
+    # ── Mutual information between the two latent spaces ─────────────────────
+    # Use args.latent_key (default z0) — most interpretable for MI
+    mi_key = args.latent_key if args.latent_key in tr_combined else combined_keys[0]
+
+    def _key_dim_single(lat: dict, key: str) -> int:
         if key in lat:
             return lat[key].shape[1]
         if key == 'z0_m' and 'z0' in lat and 'm' in lat:
             return lat['z0'].shape[1] + lat['m'].shape[1]
         raise KeyError(f"Latent key '{key}' not found. Available: {list(lat.keys())}")
 
-    d1 = _key_dim(tr_lat1, args.latent_key)
-    d2 = _key_dim(tr_lat2, args.latent_key)
-    print(f"\n  Combined latent dim : {d1} + {d2} = {d1 + d2}")
-    print(f"  Train samples       : {tr_combined[args.latent_key].shape[0]}")
-    print(f"  Eval  samples       : {te_combined[args.latent_key].shape[0]}"
-          f"  (valid={len(va_meta1 + va_meta2) // 2}, test={len(te_meta1 + te_meta2) // 2})")
+    d1 = _key_dim_single(tr_lat1, mi_key)
 
-    # ── Mutual information between the two latent spaces ─────────────────────
-    # Computed on the TRAIN split (more samples → better estimates)
-    print(f"\n── Computing mutual information ──")
-    # Extract per-model arrays from the already-matched combined train set
-    # (rows1 and rows2 are not in scope here — recompute from combined)
-    X_combined_tr = tr_combined[args.latent_key]   # [N, D1+D2]
+    print(f"\n── Computing mutual information (key: {mi_key}) ──")
+    X_combined_tr = tr_combined[mi_key]   # [N, D1+D2]
     X1_tr = X_combined_tr[:, :d1]
     X2_tr = X_combined_tr[:, d1:]
 
@@ -514,7 +524,7 @@ def main() -> None:
     )
     mi_results['model']          = args.model
     mi_results['dataset']        = args.dataset
-    mi_results['latent_key']     = args.latent_key
+    mi_results['latent_key']     = mi_key
     mi_results['model1_segment'] = args.model1_segment
     mi_results['model2_segment'] = args.model2_segment
     print_mi_summary(mi_results)
@@ -540,41 +550,21 @@ def main() -> None:
     # ── Dataset flags ─────────────────────────────────────────────────────────
     dataset_lower = args.dataset.lower()
     is_medalcare  = 'medalcare' in dataset_lower
-    is_ptbxl      = 'ptb' in dataset_lower or 'ptb' in dataset_lower
+    is_ptbxl      = 'ptb' in dataset_lower
     is_ukbb       = 'uk' in dataset_lower and 'biobank' in dataset_lower
 
-    # ── Run probes ───────────────────────────────────────────────────────────
+    # ── Run probes for each combined latent key ───────────────────────────────
     # probe_out_parent: {output_dir}/final_finetune_results/combined/
-    # OVR functions append /{latent_key}/ themselves; run_linear_probes gets
-    # the full path including latent_key.
+    # PTB-XL OVR functions append /{latent_key}/ themselves.
+    # run_linear_probes receives the full path including latent_key.
     probe_out_parent = os.path.join(
         args.output_dir, 'final_finetune_results', 'combined')
-    probe_out_root = os.path.join(probe_out_parent, args.latent_key)
-    os.makedirs(probe_out_root, exist_ok=True)
+    os.makedirs(probe_out_parent, exist_ok=True)
 
     _skip = set(args.skip_params or []) | {'patient_id'}
 
     if is_ptbxl:
-        print(f"\n── Running PTB-XL multi-label OVR probes ──")
-        run_ptbxl_multilabel_probes(
-            tr_latents=tr_combined,
-            tr_metadata=tr_meta,
-            eval_latents=te_combined,
-            eval_metadata=te_meta,
-            latent_key=args.latent_key,
-            out_root=probe_out_parent,
-        )
-        print(f"\n── Running PTB-XL label efficiency OVR probes ──")
-        run_ptbxl_label_efficiency_probes(
-            tr_latents=tr_combined,
-            tr_metadata=tr_meta,
-            eval_latents=te_combined,
-            eval_metadata=te_meta,
-            latent_key=args.latent_key,
-            out_root=probe_out_parent,
-            fractions=[0.01, 0.10, 0.50, 1.00],
-        )
-
+        # PTB-XL data statistics (computed once — same patients for all keys)
         print(f"\n── PTB-XL data statistics ──")
         ptbxl_stats = _compute_ptbxl_statistics(
             tr_meta1, tr_meta2, tr_meta,
@@ -585,30 +575,54 @@ def main() -> None:
         with open(stats_path, 'w') as f:
             json.dump(ptbxl_stats, f, indent=2)
         print(f"  Saved: {stats_path}")
+
+        for key in combined_keys:
+            print(f"\n── Running PTB-XL multi-label OVR probes  [{key}] ──")
+            run_ptbxl_multilabel_probes(
+                tr_latents=tr_combined,
+                tr_metadata=tr_meta,
+                eval_latents=te_combined,
+                eval_metadata=te_meta,
+                latent_key=key,
+                out_root=probe_out_parent,
+            )
+            print(f"\n── Running PTB-XL label efficiency OVR probes  [{key}] ──")
+            run_ptbxl_label_efficiency_probes(
+                tr_latents=tr_combined,
+                tr_metadata=tr_meta,
+                eval_latents=te_combined,
+                eval_metadata=te_meta,
+                latent_key=key,
+                out_root=probe_out_parent,
+                fractions=[0.01, 0.10, 0.50, 1.00],
+            )
     else:
-        print(f"\n── Running linear probes ──")
-        run_linear_probes(
-            train_latents=tr_combined,
-            train_metadata=tr_meta,
-            test_latents=te_combined,
-            test_metadata=te_meta,
-            latent_key=args.latent_key,
-            out_root=probe_out_root,
-            skip_params=_skip,
-            methods={'ols'},
-            balance_sinus=(is_medalcare and args.balance_sinus),
-            use_target_scaling=is_ukbb,
-        )
+        for key in combined_keys:
+            print(f"\n── Running linear probes  [{key}] ──")
+            probe_out_root = os.path.join(probe_out_parent, key)
+            os.makedirs(probe_out_root, exist_ok=True)
+            run_linear_probes(
+                train_latents=tr_combined,
+                train_metadata=tr_meta,
+                test_latents=te_combined,
+                test_metadata=te_meta,
+                latent_key=key,
+                out_root=probe_out_root,
+                skip_params=_skip,
+                methods={'ols'},
+                balance_sinus=(is_medalcare and args.balance_sinus),
+                use_target_scaling=is_ukbb,
+            )
 
     # ── Write placeholder training_metrics.json ───────────────────────────────
     training_stub = {
         'note': 'No ODE training MSE for combined latent model.',
         'model1_segment': args.model1_segment,
         'model2_segment': args.model2_segment,
-        'latent_key':     args.latent_key,
-        'latent_dim':     d1 + d2,
-        'n_train':        int(tr_combined[args.latent_key].shape[0]),
-        'n_eval':         int(te_combined[args.latent_key].shape[0]),
+        'combined_keys':  combined_keys,
+        'latent_dims':    {k: int(tr_combined[k].shape[1]) for k in combined_keys},
+        'n_train':        int(n_train),
+        'n_eval':         int(n_eval),
         'eval_note':      'valid + test combined',
     }
     with open(os.path.join(args.output_dir, 'training_metrics.json'), 'w') as f:
