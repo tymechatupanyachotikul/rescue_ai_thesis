@@ -41,6 +41,9 @@ import os
 import sys
 from pathlib import Path
 
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import mutual_info_regression
@@ -278,6 +281,81 @@ def _compute_ptbxl_statistics(
     }
 
 
+def plot_pca_explained_variance(
+    latents: dict,
+    out_dir: str,
+    max_components: int | None = None,
+    keys_to_plot: list[str] | None = None,
+) -> None:
+    """Plot cumulative PCA explained variance vs number of components.
+
+    Plots z0 and m (and z0_m if present) on the same axes.
+    Saves:
+      pca_explained_variance.npz  — cumvar + evr arrays per key
+      pca_explained_variance.png  — single figure, one curve per key
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    plot_keys = keys_to_plot or [k for k in ('z0', 'm', 'z0_m') if k in latents]
+    if not plot_keys:
+        print("  PCA explained variance: no latent keys found, skipping.")
+        return
+
+    _style: dict[str, dict] = {
+        'z0':   {'color': '#1F77B4', 'ls': '-',  'label': 'z₀'},
+        'm':    {'color': '#FF7F0E', 'ls': '--', 'label': 'm'},
+        'z0_m': {'color': '#2CA02C', 'ls': ':',  'label': 'z₀ + m'},
+    }
+
+    npz_data: dict[str, np.ndarray] = {}
+    fig, ax = plt.subplots(figsize=(8, 5))
+    max_n = 0
+
+    for key in plot_keys:
+        X = latents[key].astype(np.float64)
+        n_comp = min(X.shape[0] - 1, X.shape[1])
+        if max_components is not None:
+            n_comp = min(n_comp, max_components)
+        if n_comp < 1:
+            continue
+
+        pca = PCA(n_components=n_comp)
+        pca.fit(StandardScaler().fit_transform(X))
+
+        evr    = pca.explained_variance_ratio_
+        cumvar = np.cumsum(evr)
+        comp   = np.arange(1, len(cumvar) + 1)
+        max_n  = max(max_n, len(cumvar))
+
+        st = _style.get(key, {'color': 'gray', 'ls': '-', 'label': key})
+        ax.plot(comp, cumvar, color=st['color'], ls=st['ls'], lw=2, label=st['label'])
+
+        npz_data[f'{key}_cumvar']       = cumvar
+        npz_data[f'{key}_evr']          = evr
+        npz_data[f'{key}_n_components'] = comp
+
+    for thresh in (0.90, 0.95):
+        ax.axhline(thresh, color='gray', lw=0.8, ls=':', alpha=0.7)
+        ax.text(max_n * 0.02, thresh + 0.006, f'{thresh:.0%}',
+                fontsize=8, color='gray', va='bottom')
+
+    ax.set_xlabel('Number of principal components')
+    ax.set_ylabel('Cumulative explained variance')
+    ax.set_title('PCA explained variance — combined latents')
+    ax.set_ylim(0, 1.05)
+    ax.legend(framealpha=0.7)
+    fig.tight_layout()
+
+    png_path = os.path.join(out_dir, 'pca_explained_variance.png')
+    fig.savefig(png_path, dpi=150)
+    plt.close(fig)
+    print(f"  PCA explained variance plot → {png_path}")
+
+    npz_path = os.path.join(out_dir, 'pca_explained_variance.npz')
+    np.savez(npz_path, **npz_data)
+    print(f"  PCA explained variance data → {npz_path}")
+
+
 def _print_ptbxl_statistics(stats: dict) -> None:
     for split in ('train', 'eval'):
         s = stats[split]
@@ -498,6 +576,10 @@ def main() -> None:
     print(f"  Train samples        : {n_train}")
     print(f"  Eval  samples        : {n_eval}"
           f"  (valid={len(va_meta1 + va_meta2) // 2}, test={len(te_meta1 + te_meta2) // 2})")
+
+    # ── PCA explained variance ────────────────────────────────────────────────
+    print(f"\n── PCA explained variance ──")
+    plot_pca_explained_variance(tr_combined, os.path.join(args.output_dir, 'pca'))
 
     # ── Mutual information between the two latent spaces ─────────────────────
     # Use args.latent_key (default z0) — most interpretable for MI
