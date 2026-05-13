@@ -425,6 +425,283 @@ def _concat_splits(
     )
 
 
+# ─── PCA visualisation ────────────────────────────────────────────────────────
+
+def plot_pca_latents(
+    latents: dict,
+    metadata: list,
+    out_dir: str,
+) -> None:
+    """Fit PCA on each latent key and scatter-plot the first 2 components.
+
+    For each key the function saves:
+        {out_dir}/pca_{key}.png  — scatter coloured by class, annotated with patient_id
+        {out_dir}/pca_{key}.npz  — coords [N,2], patient_ids, classes,
+                                   explained_variance_ratio
+    """
+    from sklearn.decomposition import PCA
+    import matplotlib
+    import matplotlib.cm as _mpl_cm
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    os.makedirs(out_dir, exist_ok=True)
+    plot_keys = sorted(latents.keys())
+
+    patient_ids = [str(m.get('uid', i)) for i, m in enumerate(metadata)]
+    classes = [
+        str(m['labels']['class'])
+        if isinstance(m.get('labels'), dict) and 'class' in m['labels']
+        else 'unknown'
+        for m in metadata
+    ]
+
+    unique_classes = sorted(set(classes))
+    cmap = _mpl_cm.get_cmap('tab10', max(len(unique_classes), 1))
+    cls_colour = {c: cmap(i) for i, c in enumerate(unique_classes)}
+
+    for key in plot_keys:
+        X = latents.get(key)
+        if X is None:
+            continue
+
+        pca    = PCA(n_components=2)
+        coords = pca.fit_transform(X.astype(np.float64))  # [N, 2]
+        ev     = pca.explained_variance_ratio_
+
+        np.savez(
+            os.path.join(out_dir, f'pca_{key}.npz'),
+            coords=coords,
+            patient_ids=np.array(patient_ids),
+            classes=np.array(classes),
+            explained_variance_ratio=ev,
+        )
+
+        fig, ax = plt.subplots(figsize=(11, 8))
+        cls_arr = np.array(classes)
+        for cls in unique_classes:
+            mask = cls_arr == cls
+            ax.scatter(
+                coords[mask, 0], coords[mask, 1],
+                color=cls_colour[cls],
+                label=cls,
+                alpha=0.75,
+                s=40,
+                linewidths=0,
+            )
+
+        for i, pid in enumerate(patient_ids):
+            ax.annotate(
+                pid,
+                (coords[i, 0], coords[i, 1]),
+                fontsize=4,
+                alpha=0.55,
+                ha='center',
+                va='bottom',
+                xytext=(0, 2),
+                textcoords='offset points',
+            )
+
+        ax.set_xlabel(f'PC1 ({ev[0]:.1%})')
+        ax.set_ylabel(f'PC2 ({ev[1]:.1%})')
+        ax.set_title(f'PCA — {key}  (total var: {ev[0] + ev[1]:.1%})')
+        ax.legend(loc='best', fontsize=7, markerscale=1.4, framealpha=0.7)
+        fig.tight_layout()
+        save_path = os.path.join(out_dir, f'pca_{key}.png')
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+        print(f"  PCA [{key}]  PC1={ev[0]:.1%}  PC2={ev[1]:.1%}  → {save_path}")
+
+
+# ─── k-NN patient identification ─────────────────────────────────────────────
+
+def run_knn_identification(
+    latents: dict,
+    metadata: list,
+    out_dir: str,
+    k_values: tuple = (1, 5, 10),
+    ref_ratio: float = 0.8,
+) -> dict:
+    """k-NN patient identification on latent embeddings using cosine similarity.
+
+    Each patient's samples are split 4:1 (reference : query) in order.
+    For every query sample the k nearest reference samples (cosine similarity)
+    are retrieved; the predicted patient is chosen by majority vote.
+
+    Saves {out_dir}/knn_results.json.
+    Returns the full results dict.
+    """
+    from collections import defaultdict, Counter
+
+    os.makedirs(out_dir, exist_ok=True)
+    plot_keys = sorted(latents.keys())
+
+    # ── build per-patient index lists ────────────────────────────────────────
+    pid_indices: dict = defaultdict(list)
+    for i, m in enumerate(metadata):
+        pid = str(m.get('uid', i))
+        pid_indices[pid].append(i)
+
+    ref_idx_list, q_idx_list = [], []
+    ref_pids_list, q_pids_list = [], []
+    for pid, indices in sorted(pid_indices.items()):
+        n     = len(indices)
+        n_ref = max(1, round(n * ref_ratio))
+        ref_idx_list.extend(indices[:n_ref])
+        ref_pids_list.extend([pid] * n_ref)
+        if n_ref < n:
+            q_idx_list.extend(indices[n_ref:])
+            q_pids_list.extend([pid] * (n - n_ref))
+
+    ref_idx  = np.array(ref_idx_list)
+    q_idx    = np.array(q_idx_list)
+    ref_pids = np.array(ref_pids_list)
+    q_pids   = np.array(q_pids_list)
+
+    n_patients = len(pid_indices)
+    n_ref_tot  = len(ref_idx)
+    n_q_tot    = len(q_idx)
+
+    if n_q_tot == 0:
+        print("  [knn] No query samples (all patients have only 1 sample) — skipping.")
+        return {}
+
+    print(f"  Patients: {n_patients}  Reference: {n_ref_tot}  Query: {n_q_tot}")
+
+    all_results: dict = {}
+
+    for key in plot_keys:
+        X = latents.get(key)
+        if X is None:
+            continue
+
+        X_ref = X[ref_idx].astype(np.float64)
+        X_q   = X[q_idx].astype(np.float64)
+
+        # L2-normalise for cosine similarity
+        X_ref_n = X_ref / (np.linalg.norm(X_ref, axis=1, keepdims=True) + 1e-10)
+        X_q_n   = X_q   / (np.linalg.norm(X_q,   axis=1, keepdims=True) + 1e-10)
+
+        sim       = X_q_n @ X_ref_n.T                        # [N_q, N_ref]
+        max_k     = max(k_values)
+        top_k_ref = np.argsort(-sim, axis=1)[:, :max_k]      # [N_q, max_k]
+
+        key_results: dict = {
+            'n_reference': int(n_ref_tot),
+            'n_query':     int(n_q_tot),
+            'n_patients':  int(n_patients),
+        }
+
+        lines = [f"\n── k-NN identification [{key}] ──"]
+        lines.append(
+            f"  Reference: {n_ref_tot}  Query: {n_q_tot}  Patients: {n_patients}"
+        )
+
+        for k in sorted(k_values):
+            neighbors = ref_pids[top_k_ref[:, :k]]          # [N_q, k]
+
+            # Majority-vote prediction
+            preds = np.array([
+                Counter(row).most_common(1)[0][0] for row in neighbors
+            ])
+
+            top1_acc  = float(np.mean(preds == q_pids))
+            recall_at_k = float(np.mean(
+                np.any(neighbors == q_pids[:, None], axis=1)
+            ))
+
+            key_results[f'k{k}'] = {
+                'top1_accuracy': top1_acc,
+                'recall_at_k':   recall_at_k,
+            }
+            lines.append(
+                f"  k={k:<3d}  top-1: {top1_acc:.1%}   recall@{k}: {recall_at_k:.1%}"
+            )
+
+        print('\n'.join(lines))
+        all_results[key] = key_results
+
+    out_path = os.path.join(out_dir, 'knn_results.json')
+    with open(out_path, 'w') as f:
+        json.dump(all_results, f, indent=2)
+    print(f"\n  Saved k-NN results → {out_path}")
+    return all_results
+
+
+# ─── intra-patient variance ───────────────────────────────────────────────────
+
+def compute_intra_patient_variance(
+    latents: dict,
+    metadata: list,
+    out_dir: str,
+) -> dict:
+    """For each latent key, group samples by patient_id and compute intra-patient variance.
+
+    Per patient: variance across their samples for each latent dimension, then
+    averaged over dimensions → one scalar per patient.
+
+    Saves {out_dir}/intra_patient_variance.json.
+    Returns the full results dict.
+    """
+    from collections import defaultdict
+
+    os.makedirs(out_dir, exist_ok=True)
+    plot_keys = sorted(latents.keys())
+
+    pid_indices: dict = defaultdict(list)
+    for i, m in enumerate(metadata):
+        pid = str(m.get('uid', i))
+        pid_indices[pid].append(i)
+
+    all_results: dict = {}
+
+    for key in plot_keys:
+        X = latents.get(key)
+        if X is None:
+            continue
+
+        per_patient: dict = {}
+        for pid, indices in sorted(pid_indices.items()):
+            rows = X[np.array(indices)].astype(np.float64)   # [n, d]
+            # var over samples, mean over dims → scalar
+            per_patient[pid] = float(np.var(rows, axis=0).mean())
+
+        variances  = np.array(list(per_patient.values()))
+        mean_var   = float(variances.mean())
+        std_var    = float(variances.std())
+        n_single   = sum(1 for idx in pid_indices.values() if len(idx) == 1)
+
+        all_results[key] = {
+            'mean_variance':               mean_var,
+            'std_variance':                std_var,
+            'n_patients':                  len(per_patient),
+            'n_patients_single_sample':    n_single,
+            'per_patient':                 per_patient,
+        }
+
+        # ── print summary ────────────────────────────────────────────────────
+        sorted_by_var = sorted(per_patient.items(), key=lambda x: x[1], reverse=True)
+        print(f"\n── Intra-patient variance [{key}] ──")
+        print(f"  Patients: {len(per_patient)}  "
+              f"(single-sample: {n_single})")
+        print(f"  Mean variance : {mean_var:.6f}  ±{std_var:.6f}")
+        print(f"  Top-5 highest variance patients:")
+        for pid, v in sorted_by_var[:5]:
+            n = len(pid_indices[pid])
+            print(f"    {pid:<20s}  var={v:.6f}  (n={n})")
+        print(f"  Top-5 lowest variance patients (≥2 samples):")
+        multi = [(p, v) for p, v in sorted_by_var if len(pid_indices[p]) > 1]
+        for pid, v in multi[-5:]:
+            n = len(pid_indices[pid])
+            print(f"    {pid:<20s}  var={v:.6f}  (n={n})")
+
+    out_path = os.path.join(out_dir, 'intra_patient_variance.json')
+    with open(out_path, 'w') as f:
+        json.dump(all_results, f, indent=2)
+    print(f"\n  Saved intra-patient variance → {out_path}")
+    return all_results
+
+
 # ─── main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -461,8 +738,6 @@ def main() -> None:
                              'Set to 8 if 4 leads were excluded from output during training.')
 
     # ── Probe config ──────────────────────────────────────────────────────────
-    parser.add_argument('--latent_key',    default='z0',
-                        help='Latent key to concatenate (z0, m, z0_m)')
     parser.add_argument('--prefer_labels', type=int, default=1, choices=[1, 2])
     parser.add_argument('--balance_sinus', type=eval, default=False,
                         help='Resample sinus class in eval set')
@@ -624,30 +899,66 @@ def main() -> None:
         json.dump(ev_meta, f, indent=2)
     print(f"\n  Saved combined latents → {latents_out_dir}")
 
-    # ── Mutual information (z0 key, train set) ────────────────────────────────
-    mi_key = args.latent_key if args.latent_key in tr_combined else combined_keys[0]
-    d_a = tr_lat_a['z0'].shape[1] if 'z0' in tr_lat_a else tr_lat_a[mi_key].shape[1]
-    print(f"\n── Computing mutual information (atrial vs ventricular, key={mi_key}) ──")
-    X_comb_tr = tr_combined[mi_key]
-    mi_results = compute_mutual_information(
-        X_comb_tr[:, :d_a], X_comb_tr[:, d_a:],
-        pca_dim=args.pca_dim, n_cca=args.n_cca,
+    # ── PCA visualisation ─────────────────────────────────────────────────────
+    print("\n── PCA visualisation ──")
+    plot_pca_latents(
+        latents=ev_combined,
+        metadata=ev_meta,
+        out_dir=os.path.join(args.output_dir, 'pca'),
     )
-    mi_results.update({
-        'model': args.model, 'dataset': args.dataset,
-        'latent_key': mi_key,
-        'model1_segment': 'atrial', 'model2_segment': 'ventricular',
-    })
-    print_mi_summary(mi_results)
+
+    # ── k-NN patient identification ───────────────────────────────────────────
+    print("\n── k-NN patient identification ──")
+    run_knn_identification(
+        latents=ev_combined,
+        metadata=ev_meta,
+        out_dir=os.path.join(args.output_dir, 'knn'),
+        k_values=(1, 5, 10),
+    )
+
+    # ── Intra-patient variance ────────────────────────────────────────────────
+    print("\n── Intra-patient variance ──")
+    compute_intra_patient_variance(
+        latents=ev_combined,
+        metadata=ev_meta,
+        out_dir=os.path.join(args.output_dir, 'intra_patient_variance'),
+    )
+
+    # ── Mutual information (all keys, train set) ─────────────────────────────
+    def _d_atrial(key: str) -> int:
+        if key in tr_lat_a:
+            return tr_lat_a[key].shape[1]
+        # z0_m synthesised by _group_by_patient_all — sum z0 + m dims
+        return tr_lat_a['z0'].shape[1] + (
+            tr_lat_a['m'].shape[1] if 'm' in tr_lat_a else 0
+        )
+
+    mi_all: dict = {}
+    for mi_key in combined_keys:
+        d_a = _d_atrial(mi_key)
+        print(f"\n── Computing mutual information (atrial vs ventricular, key={mi_key}) ──")
+        X_comb_tr = tr_combined[mi_key]
+        mi_results = compute_mutual_information(
+            X_comb_tr[:, :d_a], X_comb_tr[:, d_a:],
+            pca_dim=args.pca_dim, n_cca=args.n_cca,
+        )
+        mi_results.update({
+            'model': args.model, 'dataset': args.dataset,
+            'latent_key': mi_key,
+            'model1_segment': 'atrial', 'model2_segment': 'ventricular',
+        })
+        print_mi_summary(mi_results)
+        mi_all[mi_key] = mi_results
+
     mi_local = os.path.join(args.output_dir, 'mi_analysis.json')
     with open(mi_local, 'w') as f:
-        json.dump(mi_results, f, indent=2)
+        json.dump(mi_all, f, indent=2)
 
     if args.summary_output_dir:
         os.makedirs(args.summary_output_dir, exist_ok=True)
         slug = args.dataset.lower().replace('-', '_').replace(' ', '_')
         with open(os.path.join(args.summary_output_dir, f'mi_{args.model}_{slug}.json'), 'w') as f:
-            json.dump(mi_results, f, indent=2)
+            json.dump(mi_all, f, indent=2)
 
     # ── Run probes for each combined key ──────────────────────────────────────
     probe_out_parent = os.path.join(args.output_dir, 'final_finetune_results', 'combined')
