@@ -448,7 +448,10 @@ def plot_pca_latents(
     os.makedirs(out_dir, exist_ok=True)
     plot_keys = sorted(latents.keys())
 
-    patient_ids = [str(m.get('uid', i)) for i, m in enumerate(metadata)]
+    patient_ids = [
+        str(m.get('labels', {}).get('patient_id') or m.get('uid', i))
+        for i, m in enumerate(metadata)
+    ]
     classes = [
         str(m['labels']['class'])
         if isinstance(m.get('labels'), dict) and 'class' in m['labels']
@@ -539,7 +542,7 @@ def run_knn_identification(
     # ── build per-patient index lists ────────────────────────────────────────
     pid_indices: dict = defaultdict(list)
     for i, m in enumerate(metadata):
-        pid = str(m.get('uid', i))
+        pid = str(m.get('labels', {}).get('patient_id') or m.get('uid', i))
         pid_indices[pid].append(i)
 
     ref_idx_list, q_idx_list = [], []
@@ -650,7 +653,7 @@ def compute_intra_patient_variance(
 
     pid_indices: dict = defaultdict(list)
     for i, m in enumerate(metadata):
-        pid = str(m.get('uid', i))
+        pid = str(m.get('labels', {}).get('patient_id') or m.get('uid', i))
         pid_indices[pid].append(i)
 
     all_results: dict = {}
