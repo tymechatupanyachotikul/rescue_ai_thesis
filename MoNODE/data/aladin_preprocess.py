@@ -15,6 +15,7 @@ from aladin.core import Record
 
 import matplotlib.pyplot as plt
 from collections import defaultdict
+from scipy.signal import butter, filtfilt, medfilt
 
 FS = 500  # All ECG records are written/read at 500 Hz
 
@@ -490,6 +491,275 @@ def plot_ecg(ecg: np.ndarray, out_path: str, f: int = 500):
 
 
 # ---------------------------------------------------------------------------
+# Demo pipeline: filtering helpers
+# ---------------------------------------------------------------------------
+
+def _butterworth_lowpass(signal: np.ndarray, fs: int = FS, cutoff: float = 40.0, order: int = 4) -> np.ndarray:
+    nyq = 0.5 * fs
+    b, a = butter(order, cutoff / nyq, btype='low', analog=False)
+    return filtfilt(b, a, signal, axis=0)
+
+
+def _median_baseline_removal(signal: np.ndarray, fs: int = FS, w1_ms: int = 200, w2_ms: int = 600) -> np.ndarray:
+    w1 = int(w1_ms * fs / 1000)
+    w2 = int(w2_ms * fs / 1000)
+    w1 += (w1 % 2 == 0)  # enforce odd kernel size
+    w2 += (w2 % 2 == 0)
+    baseline = np.empty_like(signal)
+    for col in range(signal.shape[1]):
+        baseline[:, col] = medfilt(medfilt(signal[:, col], w1), w2)
+    return signal - baseline
+
+
+def _demo_filter(signal: np.ndarray, fs: int = FS) -> np.ndarray:
+    """Replicate the pipeline filter: Butterworth LP → double median baseline removal."""
+    return _median_baseline_removal(_butterworth_lowpass(signal, fs), fs)
+
+
+# ---------------------------------------------------------------------------
+# Demo pipeline: figure helpers
+# ---------------------------------------------------------------------------
+
+_12LEAD_GRID = [
+    ['I',   'aVR', 'V1', 'V4'],
+    ['II',  'aVL', 'V2', 'V5'],
+    ['III', 'aVF', 'V3', 'V6'],
+]
+
+_WAVE_FILL  = {'P': '#cce4f7', 'QRS': '#fde8e8', 'T': '#d5f5e3'}
+_WAVE_EDGE  = {'P': '#4a90d9', 'QRS': '#e74c3c', 'T': '#27ae60'}
+_SEG_COLOR  = {'atrial': '#4a90d9', 'ventricular': '#e74c3c'}
+_SEG_TITLE  = {'atrial': 'Atrial segment (P-wave)', 'ventricular': 'Ventricular segment (QRST)'}
+
+
+def _lead_map(leads: list) -> dict:
+    return {l.upper(): i for i, l in enumerate(leads)}
+
+
+def _plot_12lead_grid(
+    signal: np.ndarray,
+    leads: list,
+    fs: int,
+    out_path: str,
+    title: str = '',
+    wave_regions: dict | None = None,
+    time_unit: str = 's',
+):
+    """Publication-quality 12-lead ECG in standard 3×4 clinical grid.
+
+    wave_regions: {'P': (onset_samp, offset_samp), 'QRS': ..., 'T': ...}
+    """
+    lidx = _lead_map(leads)
+    T    = signal.shape[0]
+    scale = 1000.0 if time_unit == 'ms' else 1.0
+    t    = np.arange(T) / fs * scale
+
+    fig, axes = plt.subplots(
+        3, 4, figsize=(14, 5.5), sharex=True,
+        gridspec_kw={'hspace': 0.42, 'wspace': 0.38},
+    )
+    fig.patch.set_facecolor('white')
+    if title:
+        fig.suptitle(title, fontsize=12, fontweight='bold', y=1.02)
+
+    for row, row_leads in enumerate(_12LEAD_GRID):
+        for col, lead_name in enumerate(row_leads):
+            ax = axes[row, col]
+            ax.set_facecolor('white')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+
+            if lead_name not in lidx:
+                ax.set_visible(False)
+                continue
+
+            sig = signal[:, lidx[lead_name]]
+
+            if wave_regions:
+                for wave, (onset, offset) in wave_regions.items():
+                    if onset is not None and offset is not None:
+                        ax.axvspan(onset / fs * scale, offset / fs * scale,
+                                   alpha=0.30, color=_WAVE_FILL[wave], lw=0,
+                                   label=wave if (row == 0 and col == 0) else '_')
+
+            ax.plot(t, sig, linewidth=0.75, color='#1a1a2e')
+            ax.set_title(lead_name, fontsize=9, pad=3, fontweight='semibold')
+            ax.tick_params(labelsize=7)
+
+            if col == 0:
+                ax.set_ylabel('mV', fontsize=7)
+            if row == 2:
+                ax.set_xlabel(time_unit, fontsize=7)
+
+    # Legend for wave shading (attach to first axis)
+    if wave_regions:
+        from matplotlib.patches import Patch
+        handles = [Patch(facecolor=_WAVE_FILL[w], edgecolor=_WAVE_EDGE[w],
+                         alpha=0.6, label=w)
+                   for w in wave_regions if wave_regions[w][0] is not None]
+        if handles:
+            axes[0, 0].legend(handles=handles, fontsize=7, loc='upper left',
+                              frameon=False)
+
+    plt.savefig(out_path, dpi=180, bbox_inches='tight')
+    plt.close(fig)
+
+
+def _plot_segment_pair(
+    segments: dict,
+    leads: list,
+    fs: int,
+    out_path: str,
+):
+    """All 12 leads stacked, atrial and ventricular side by side."""
+    seg_types = [k for k in ('atrial', 'ventricular') if k in segments]
+    n_seg  = len(seg_types)
+    n_lead = segments[seg_types[0]].shape[1] if seg_types else 12
+    n_lead = min(n_lead, len(leads))
+
+    fig, axes = plt.subplots(
+        n_lead, n_seg,
+        figsize=(4.5 * n_seg, n_lead * 0.65),
+        squeeze=False,
+        gridspec_kw={'wspace': 0.45},
+    )
+    fig.patch.set_facecolor('white')
+    fig.suptitle('Phase 4: Segments (z-score normalised)', fontsize=12,
+                 fontweight='bold', y=1.01)
+
+    for col, seg_type in enumerate(seg_types):
+        sig = segments[seg_type]   # [T, n_leads]
+        T   = sig.shape[0]
+        t   = np.arange(T) / fs * 1000  # ms
+        axes[0, col].set_title(_SEG_TITLE[seg_type], fontsize=10,
+                                fontweight='bold', pad=6)
+
+        for row in range(n_lead):
+            ax = axes[row, col]
+            ax.set_facecolor('white')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.plot(t, sig[:, row], linewidth=0.9, color=_SEG_COLOR[seg_type])
+            ax.tick_params(labelsize=6, left=False, labelleft=False)
+            if col == 0:
+                lead_label = leads[row] if row < len(leads) else f'L{row}'
+                ax.set_ylabel(lead_label, rotation=0, labelpad=28,
+                              va='center', fontsize=8)
+            if row == n_lead - 1:
+                ax.set_xlabel('ms', fontsize=7)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=180, bbox_inches='tight')
+    plt.close(fig)
+
+
+def save_demo_pipeline(
+    record,
+    orig_signal: np.ndarray,
+    filtered_signal: np.ndarray,
+    segment_type: str,
+    uid: str,
+    save_dir: str,
+    leads: list,
+    fs: int = FS,
+):
+    """Save figures + .npy data for each preprocessing pipeline phase.
+
+    Outputs (all under save_dir/):
+      phase1_original.{npy,png}
+      phase2_filtered.{npy,png}
+      phase3_median_beat.{npy,png}, phase3_delineations.json
+      phase4_{atrial,ventricular}.npy, phase4_segments.png, phase4_segment_meta.json
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    px = os.path.join(save_dir, uid)
+
+    # ── Phase 1: Original ECG ─────────────────────────────────────────────────
+    np.save(f'{px}_phase1_original.npy', orig_signal)
+    _plot_12lead_grid(orig_signal, leads, fs,
+                      f'{px}_phase1_original.png',
+                      title='Phase 1: Original ECG', time_unit='s')
+    print(f"  [demo] Phase 1 → {uid}_phase1_original.{{npy,png}}")
+
+    # ── Phase 2: Filtered ECG ─────────────────────────────────────────────────
+    np.save(f'{px}_phase2_filtered.npy', filtered_signal)
+    _plot_12lead_grid(filtered_signal, leads, fs,
+                      f'{px}_phase2_filtered.png',
+                      title='Phase 2: Filtered ECG  (Butterworth 40 Hz LP + Median Baseline Removal)',
+                      time_unit='s')
+    print(f"  [demo] Phase 2 → {uid}_phase2_filtered.{{npy,png}}")
+
+    # ── Phases 3–4 require a median beat ──────────────────────────────────────
+    if getattr(record, 'median_beat', None) is None:
+        print(f"  [demo] Phases 3–4 skipped (no median beat) for {uid}")
+        return
+
+    median_ecg = record.median_beat.ecg.T  # [T, n_leads]
+    delin      = record.median_beat.delineations
+
+    def _safe(obj, attr):
+        v = getattr(obj, attr, None) if obj is not None else None
+        return float(v) if _is_valid(v) else None
+
+    p_wav = getattr(delin, 'p',   None)
+    qrs   = getattr(delin, 'qrs', None)
+    t_wav = getattr(delin, 't',   None)
+
+    delineations = {
+        'p_onset':    _safe(p_wav, 'onset'),
+        'p_offset':   _safe(p_wav, 'offset'),
+        'qrs_onset':  _safe(qrs,   'onset'),
+        'qrs_offset': _safe(qrs,   'offset'),
+        't_onset':    _safe(t_wav, 'onset'),
+        't_offset':   _safe(t_wav, 'offset'),
+    }
+
+    # ── Phase 3: Median beat + delineations ───────────────────────────────────
+    np.save(f'{px}_phase3_median_beat.npy', median_ecg)
+    with open(f'{px}_phase3_delineations.json', 'w') as fh:
+        json.dump(delineations, fh, indent=2)
+
+    wave_regions = {
+        'P':   (delineations['p_onset'],   delineations['p_offset']),
+        'QRS': (delineations['qrs_onset'], delineations['qrs_offset']),
+        'T':   (delineations['t_onset'],   delineations['t_offset']),
+    }
+    _plot_12lead_grid(median_ecg, leads, fs,
+                      f'{px}_phase3_median_beat.png',
+                      title='Phase 3: Median Beat with Delineations',
+                      wave_regions=wave_regions, time_unit='ms')
+    print(f"  [demo] Phase 3 → {uid}_phase3_median_beat.{{npy,png,json}}")
+
+    # ── Phase 4: Segments ─────────────────────────────────────────────────────
+    segments: dict = {}
+    seg_meta: dict = {}
+
+    for seg_t in ('atrial', 'ventricular'):
+        try:
+            segs, _ = get_ecg_segments_idx(record, seg_t, 'median')
+        except Exception:
+            segs = []
+        if not segs:
+            continue
+        s, e   = segs[0]
+        raw    = median_ecg[s:e, :]
+        mu     = raw.mean(axis=0, keepdims=True)
+        sigma  = raw.std(axis=0,  keepdims=True)
+        norm   = (raw - mu) / (sigma + 1e-8)
+        np.save(f'{px}_phase4_{seg_t}.npy', norm)
+        segments[seg_t] = norm
+        seg_meta[seg_t] = {'start': int(s), 'end': int(e),
+                            'duration_ms': round((e - s) / fs * 1000, 1)}
+
+    with open(f'{px}_phase4_segment_meta.json', 'w') as fh:
+        json.dump(seg_meta, fh, indent=2)
+
+    if segments:
+        _plot_segment_pair(segments, leads, fs, f'{px}_phase4_segments.png')
+        print(f"  [demo] Phase 4 → {uid}_phase4_{{atrial,ventricular}}.{{npy,png}}")
+
+
+# ---------------------------------------------------------------------------
 # JSON serialisation helper
 # ---------------------------------------------------------------------------
 
@@ -763,6 +1033,20 @@ if __name__ == "__main__":
                     if is_mc and hasattr(record, 'groundtruth'):
                         ed['class_distribution'][record.groundtruth] += 1
                     print(f"  [median beat error] {record.recordname}: {e}")
+
+            # Demo pipeline figures — one set of phase plots per record
+            if args.demo:
+                demo_dir = os.path.join(args.plot_dir, 'pipeline_demo')
+                os.makedirs(demo_dir, exist_ok=True)
+                for record, orig in zip(records, original_records):
+                    uid      = get_unique_id(record, dataset)
+                    orig_sig = orig.p_signal                            # [T, n_leads]
+                    filt_sig = _demo_filter(orig_sig, FS)
+                    _leads   = list(orig.sig_name) if hasattr(orig, 'sig_name') else UK_BB_LEADS
+                    save_demo_pipeline(
+                        record, orig_sig, filt_sig, segment_type,
+                        uid, demo_dir, _leads,
+                    )
 
         if args.plot_only:
             os.makedirs(args.plot_dir, exist_ok=True)
