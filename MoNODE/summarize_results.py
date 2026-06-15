@@ -122,7 +122,11 @@ def _flatten_probe_summary(probe_results: dict) -> dict:
 
                     entry: dict = {}
                     for k in ('accuracy', 'balanced_accuracy', 'f1', 'f1_binary',
-                              'f1_macro', 'auroc', 'auroc_macro', 'recall_macro'):
+                              'f1_macro', 'auroc', 'auroc_macro', 'recall_macro',
+                              'accuracy_ci', 'balanced_accuracy_ci', 'f1_ci',
+                              'f1_binary_ci', 'f1_macro_ci', 'auroc_ci',
+                              'auroc_macro_ci', 'recall_macro_ci',
+                              'ci_alpha', 'n_bootstrap'):
                         if k in metrics:
                             entry[k] = metrics[k]
                     if pca:

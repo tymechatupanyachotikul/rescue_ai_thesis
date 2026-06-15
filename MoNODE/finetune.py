@@ -289,18 +289,14 @@ def _bootstrap_ci_classification(
     alpha: float = 0.05,
     seed: int = 0,
 ) -> dict:
-    """Bootstrap CIs for classification metrics by resampling (y_true, y_prob) pairs.
-
-    Primary metric CI: auroc (all cases where y_prob available), plus
-      binary imbalanced → f1_binary_ci
-      binary balanced   → accuracy_ci
-      multi-class       → f1_macro_ci
-    """
+    """Bootstrap CIs for ALL classification metrics by resampling (y_true, y_prob) pairs."""
     rng = np.random.default_rng(seed)
     n   = len(y_true)
 
-    boot_primary = []
-    boot_auroc   = []
+    boot: dict = {k: [] for k in (
+        'accuracy', 'balanced_accuracy', 'f1', 'f1_macro', 'recall_macro',
+        'f1_binary', 'auroc', 'auroc_macro',
+    )}
 
     for _ in range(n_bootstrap):
         idx = rng.integers(0, n, size=n)
@@ -309,36 +305,33 @@ def _bootstrap_ci_classification(
         yh  = yp.argmax(axis=1)
 
         with np.errstate(all='ignore'):
+            boot['accuracy'].append(float(accuracy_score(yt, yh)))
+            boot['balanced_accuracy'].append(float(balanced_accuracy_score(yt, yh)))
+            boot['f1'].append(float(f1_score(yt, yh, average='weighted', zero_division=0)))
+            boot['f1_macro'].append(float(f1_score(yt, yh, average='macro', zero_division=0)))
+            boot['recall_macro'].append(float(recall_score(yt, yh, average='macro', zero_division=0)))
             if binary and imbalanced:
-                boot_primary.append(float(f1_score(yt, yh, pos_label=1,
-                                                    average='binary', zero_division=0)))
-            elif binary:
-                boot_primary.append(float(accuracy_score(yt, yh)))
-            else:
-                boot_primary.append(float(f1_score(yt, yh, average='macro', zero_division=0)))
-
+                boot['f1_binary'].append(float(f1_score(yt, yh, pos_label=1,
+                                                          average='binary', zero_division=0)))
             try:
                 auc = (roc_auc_score(yt, yp[:, 1])
                        if binary
-                       else roc_auc_score(yt, yp, multi_class='ovr', average='macro'))
-                boot_auroc.append(float(auc))
+                       else roc_auc_score(yt, yp, multi_class='ovr', average='weighted'))
+                boot['auroc'].append(float(auc))
+            except ValueError:
+                pass
+            try:
+                auc_macro = roc_auc_score(yt, yp, multi_class='ovr', average='macro')
+                boot['auroc_macro'].append(float(auc_macro))
             except ValueError:
                 pass
 
     lo, hi = alpha / 2, 1.0 - alpha / 2
     result: dict = {'ci_alpha': alpha, 'n_bootstrap': n_bootstrap}
-
-    if boot_primary:
-        key = ('f1_binary_ci' if (binary and imbalanced)
-               else 'accuracy_ci' if binary
-               else 'f1_macro_ci')
-        result[key] = [float(np.quantile(boot_primary, lo)),
-                       float(np.quantile(boot_primary, hi))]
-
-    if boot_auroc:
-        result['auroc_ci'] = [float(np.quantile(boot_auroc, lo)),
-                              float(np.quantile(boot_auroc, hi))]
-
+    for key, values in boot.items():
+        if values:
+            result[f'{key}_ci'] = [float(np.quantile(values, lo)),
+                                   float(np.quantile(values, hi))]
     return result
 
 
