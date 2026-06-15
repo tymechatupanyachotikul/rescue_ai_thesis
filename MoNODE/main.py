@@ -178,6 +178,53 @@ parser.add_argument('--latent_dir', type=str, default=None,
                     help="Directory name for latents")
 
 
+def _save_test_extremes(model, testset, out_channels, device, save_dir, n=5):
+    """Run inference over testset; save n lowest/highest MSE samples to test_extremes.pt.
+
+    Saved file contains a dict with keys 'lowest_mse' and 'highest_mse', each a list
+    of dicts: {'eid': str, 'original': Tensor[T,D], 'reconstructed': Tensor[T,D], 'mse': float}.
+    """
+    model.eval()
+    samples = []
+
+    with torch.no_grad():
+        for batch, y, mask in testset:
+            batch = batch.to(device)
+            Xrec, _, _, _, _, _, _ = model(batch, 1, batch.shape[1], mask=mask.to(device) if mask is not None else None)
+            Xrec_n = Xrec[0]  # (N, T, D_out) — drop MC dim
+
+            data_out = batch[:, :, out_channels] if out_channels is not None else batch
+
+            for i in range(batch.shape[0]):
+                se = (Xrec_n[i] - data_out[i]) ** 2  # (T, D)
+                if mask is not None:
+                    mse_val = se[mask[i]].mean().item()
+                else:
+                    mse_val = se.mean().item()
+                _, eid = y[i]
+                samples.append({
+                    'eid':           eid,
+                    'original':      data_out[i].cpu(),
+                    'reconstructed': Xrec_n[i].cpu(),
+                    'mse':           mse_val,
+                })
+
+    samples.sort(key=lambda s: s['mse'])
+    result = {
+        'lowest_mse':  samples[:n],
+        'highest_mse': samples[-n:][::-1],
+    }
+
+    out_path = os.path.join(save_dir, 'test_extremes.pt')
+    torch.save(result, out_path)
+    print(f'  Test extremes → {out_path}')
+    low_str  = ', '.join(f'{s["eid"]}={s["mse"]:.4f}' for s in result['lowest_mse'])
+    high_str = ', '.join(f'{s["eid"]}={s["mse"]:.4f}' for s in result['highest_mse'])
+    print(f'  5 lowest  MSE: {low_str}')
+    print(f'  5 highest MSE: {high_str}')
+    return result
+
+
 if __name__ == '__main__':
     args = parser.parse_args()
     ######### setup output directory and logger ###########
@@ -308,6 +355,16 @@ if __name__ == '__main__':
         if args.Nepoch > 0:
             train_model(args, model, plotter, trainset, validset, testset, logger, params[args.task], run)
             fname = os.path.join(args.save, 'model.pth')
+
+        # ── Test-set MSE extremes (always runs after training) ────────────────
+        _out_channels = None
+        if args.task == 'ecg':
+            _lead_idx = {'I': 0, 'II': 1, 'III': 2, 'aVR': 3, 'aVL': 4, 'aVF': 5,
+                         'V1': 6, 'V2': 7, 'V3': 8, 'V4': 9, 'V5': 10, 'V6': 11}
+            _excl = params[args.task].get('exclude_leads_out', [])
+            if _excl:
+                _out_channels = [_lead_idx[l] for l in _lead_idx if l not in _excl]
+        _save_test_extremes(model, testset, _out_channels, device, args.save)
 
         if args.task == 'ecg':
             run_post_training_probes(args, model, device, trainset, testset, params[args.task], run,
