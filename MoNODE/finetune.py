@@ -13,6 +13,7 @@ import torch
 from scipy.stats import (
     skew as sp_skew, kurtosis as sp_kurtosis, norm as sp_norm,
     kruskal as sp_kruskal, chi2_contingency as sp_chi2,
+    entropy as sp_entropy,
 )
 from tqdm import tqdm
 from scipy.stats import kurtosis as scipy_kurtosis
@@ -279,6 +280,68 @@ def _bootstrap_ci(
     }
 
 
+def _bootstrap_ci_classification(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    binary: bool,
+    imbalanced: bool,
+    n_bootstrap: int = 1000,
+    alpha: float = 0.05,
+    seed: int = 0,
+) -> dict:
+    """Bootstrap CIs for classification metrics by resampling (y_true, y_prob) pairs.
+
+    Primary metric CI: auroc (all cases where y_prob available), plus
+      binary imbalanced → f1_binary_ci
+      binary balanced   → accuracy_ci
+      multi-class       → f1_macro_ci
+    """
+    rng = np.random.default_rng(seed)
+    n   = len(y_true)
+
+    boot_primary = []
+    boot_auroc   = []
+
+    for _ in range(n_bootstrap):
+        idx = rng.integers(0, n, size=n)
+        yt  = y_true[idx]
+        yp  = y_prob[idx]
+        yh  = yp.argmax(axis=1)
+
+        with np.errstate(all='ignore'):
+            if binary and imbalanced:
+                boot_primary.append(float(f1_score(yt, yh, pos_label=1,
+                                                    average='binary', zero_division=0)))
+            elif binary:
+                boot_primary.append(float(accuracy_score(yt, yh)))
+            else:
+                boot_primary.append(float(f1_score(yt, yh, average='macro', zero_division=0)))
+
+            try:
+                auc = (roc_auc_score(yt, yp[:, 1])
+                       if binary
+                       else roc_auc_score(yt, yp, multi_class='ovr', average='macro'))
+                boot_auroc.append(float(auc))
+            except ValueError:
+                pass
+
+    lo, hi = alpha / 2, 1.0 - alpha / 2
+    result: dict = {'ci_alpha': alpha, 'n_bootstrap': n_bootstrap}
+
+    if boot_primary:
+        key = ('f1_binary_ci' if (binary and imbalanced)
+               else 'accuracy_ci' if binary
+               else 'f1_macro_ci')
+        result[key] = [float(np.quantile(boot_primary, lo)),
+                       float(np.quantile(boot_primary, hi))]
+
+    if boot_auroc:
+        result['auroc_ci'] = [float(np.quantile(boot_auroc, lo)),
+                              float(np.quantile(boot_auroc, hi))]
+
+    return result
+
+
 def _eval_regression(model, X_tr, y_tr, X_te, y_te, n_bootstrap: int = 1000):
     y_tr_arr = np.array(y_tr, dtype=float)
     y_te_arr = np.array(y_te, dtype=float)
@@ -352,12 +415,40 @@ def _eval_classification(model, X_tr, y_tr, X_te, y_te, le, imbalanced: bool = F
             except ValueError:
                 pass
 
+    # ── Prediction entropy & confidence ──────────────────────────────────────
+    uncertainty: dict = {}
+    if y_prob is not None:
+        with np.errstate(all='ignore'):
+            H          = sp_entropy(y_prob.T)               # per-sample entropy (nats)
+            confidence = y_prob.max(axis=1)                  # max class probability
+        per_class_entropy = {}
+        for ci, cls in enumerate(le.classes_):
+            mask = y_te_enc == ci
+            if mask.sum() > 0:
+                per_class_entropy[str(cls)] = float(H[mask].mean())
+        uncertainty = {
+            'mean_entropy':        float(H.mean()),
+            'std_entropy':         float(H.std()),
+            'mean_max_confidence': float(confidence.mean()),
+            'std_max_confidence':  float(confidence.std()),
+            'per_class_entropy':   per_class_entropy,
+        }
+
+    # ── Bootstrap CIs ────────────────────────────────────────────────────────
+    if y_prob is not None:
+        with np.errstate(all='ignore'):
+            ci_dict = _bootstrap_ci_classification(
+                y_te_enc, y_prob, binary, imbalanced,
+            )
+        metrics.update(ci_dict)
+
     return {
-        'model':   model,
-        'y_pred':  y_pred,
-        'y_prob':  y_prob,
-        'y_true':  y_te_enc,
-        'metrics': metrics,
+        'model':       model,
+        'y_pred':      y_pred,
+        'y_prob':      y_prob,
+        'y_true':      y_te_enc,
+        'metrics':     metrics,
+        'uncertainty': uncertainty,
     }
 
 
@@ -697,12 +788,21 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
                           f"bal_acc={m.get('balanced_accuracy', float('nan')):.3f}  "
                           f"[imbalanced={majority_frac:.0%}]")
                 else:
+                    _nan = float('nan')
+                    auroc_val = m.get('auroc', m.get('auroc_macro', _nan))
+                    ci_str = ''
+                    if 'auroc_ci' in m:
+                        lo, hi = m['auroc_ci']
+                        ci_str = f"  auroc 95% CI=[{lo:.3f}, {hi:.3f}]"
+                    u = param_results[name].get('uncertainty', {})
+                    ent_str = (f"  entropy={u['mean_entropy']:.3f}±{u['std_entropy']:.3f}"
+                               f"  conf={u['mean_max_confidence']:.3f}"
+                               if u else '')
                     print(f"  [{param}][{name}]  "
-                          f"acc={m.get('accuracy', float('nan')):.3f}  "
-                          f"f1={m.get('f1', float('nan')):.3f}  "
-                          f"auroc={m.get('auroc', float('nan')):.3f}  "
-                          f"f1_macro={m.get('f1_macro', float('nan')):.3f}  "
-                          f"auroc_macro={m.get('auroc_macro', float('nan')):.3f}")
+                          f"acc={m.get('accuracy', _nan):.3f}  "
+                          f"f1={m.get('f1', _nan):.3f}  "
+                          f"auroc={auroc_val:.3f}"
+                          f"{ci_str}{ent_str}")
 
             clf_results[param] = param_results
 
@@ -718,7 +818,11 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
                     continue
                 param_results[name] = _eval_regression(mdl, X_tr, y_tr, X_te, y_te)
                 m = param_results[name]['metrics']
-                print(f"  [{param}][{name}]  R²={m['r2']:.3f}")
+                ci_str = ''
+                if 'r2_ci' in m:
+                    lo, hi = m['r2_ci']
+                    ci_str = f"  95% CI=[{lo:.3f}, {hi:.3f}]"
+                print(f"  [{param}][{name}]  R²={m['r2']:.3f}{ci_str}")
 
             reg_results[param] = param_results
 
@@ -734,10 +838,12 @@ def run_linear_probes(train_latents, train_metadata, test_latents, test_metadata
             sdir = os.path.join(out_root, 'regression', '_summary')
             os.makedirs(sdir, exist_ok=True)
             _plot_summary_regression(reg_results, sdir)
+            _save_regression_summary_json(reg_results, sdir)
         if clf_results:
             sdir = os.path.join(out_root, 'classification', '_summary')
             os.makedirs(sdir, exist_ok=True)
             _plot_summary_classification(clf_results, sdir)
+            _save_classification_summary_json(clf_results, sdir)
 
     return {'regression': reg_results, 'classification': clf_results,
             'dataset_stats': all_dataset_stats}
@@ -1584,6 +1690,60 @@ def _save_metrics_json(param_results, out_dir):
     serialisable = {name: res['metrics'] for name, res in param_results.items()}
     with open(os.path.join(out_dir, 'metrics.json'), 'w') as f:
         json.dump(serialisable, f, indent=2)
+
+
+def _save_regression_summary_json(reg_results: dict, out_dir: str) -> None:
+    """Save a flat summary JSON of all regression metrics including bootstrap CIs.
+
+    Structure: {param: {model: {r2, mae, r2_ci, mae_ci, n_bootstrap, ci_alpha}}}
+    Written to {out_dir}/regression_summary.json.
+    """
+    summary: dict = {}
+    for param, model_results in sorted(reg_results.items()):
+        summary[param] = {}
+        for model_name, res in model_results.items():
+            m = res['metrics']
+            entry: dict = {
+                'r2':  m.get('r2'),
+                'mae': m.get('mae'),
+            }
+            if 'r2_ci' in m:
+                entry['r2_ci']       = m['r2_ci']
+                entry['mae_ci']      = m['mae_ci']
+                entry['n_bootstrap'] = m.get('n_bootstrap')
+                entry['ci_alpha']    = m.get('ci_alpha')
+            summary[param][model_name] = entry
+    path = os.path.join(out_dir, 'regression_summary.json')
+    with open(path, 'w') as f:
+        json.dump(summary, f, indent=2)
+    print(f"  Regression summary (with bootstrap CIs) → {path}")
+
+
+def _save_classification_summary_json(clf_results: dict, out_dir: str) -> None:
+    """Save a flat summary JSON of all classification metrics including bootstrap CIs
+    and prediction uncertainty.
+
+    Structure: {param: {model: {metrics..., uncertainty...}}}
+    Written to {out_dir}/classification_summary.json.
+    """
+    summary: dict = {}
+    for param, model_results in sorted(clf_results.items()):
+        summary[param] = {}
+        for model_name, res in model_results.items():
+            m = res['metrics']
+            u = res.get('uncertainty', {})
+            entry: dict = {k: v for k, v in m.items()}   # all metrics + CIs
+            if u:
+                entry['mean_entropy']        = u.get('mean_entropy')
+                entry['std_entropy']         = u.get('std_entropy')
+                entry['mean_max_confidence'] = u.get('mean_max_confidence')
+                entry['std_max_confidence']  = u.get('std_max_confidence')
+                entry['per_class_entropy']   = u.get('per_class_entropy', {})
+            summary[param][model_name] = entry
+    path = os.path.join(out_dir, 'classification_summary.json')
+    with open(path, 'w') as f:
+        json.dump(summary, f, indent=2)
+    print(f"  Classification summary (with bootstrap CIs + uncertainty) → {path}")
 
 
 _ATRIAL_CLASSES      = {'avblock', 'fam', 'iab', 'lae'}
